@@ -39,7 +39,7 @@ controller_manager:
     # them except map_yes) behave exactly as before and use this number.
     t_clip_min: 1.2 #0.7->1.0->1.2->1.4
     t_clip_max: 8.0 #8.0
-    m_l1: 0.55 #0.47 -> 0.67 -> 0.55
+    m_l1: 0.62 #0.47 -> 0.67 -> 0.62
     q_l1: 0.0 # -0.2
     speed_lookahead: 0.25 #0.25
     lat_err_coeff: 1.0
