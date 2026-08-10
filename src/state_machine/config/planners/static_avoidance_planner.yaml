@@ -32,3 +32,21 @@ on_spline_front_horizon_thres_m: 0.5
 # not to this threshold.
 on_spline_min_dist_thres_m: 1.5
 is_closed: False
+
+# --- speed on the avoidance path -------------------------------------------
+# The path inherited the raceline's speed: spline_node copies vx_mps from the
+# line underneath it, and the state machine then replans the profile with a
+# safety factor of 1.0. So the car swerved around an obstacle at the speed it
+# uses on the clean line.
+#
+# [-] Scales what the motor may accelerate and brake at. It does NOT bound
+# cornering speed - that comes from ggv against the path's curvature - so it
+# makes the profile gentler rather than slower outright.
+vel_planner_safety_factor: 0.6
+
+# [m/s] Hard ceiling on the avoidance path, which is the knob that actually
+# answers "too fast". The static branch only arms below 3.0 m/s anyway, and
+# this corridor is a metre wide with 16 cm of clearance either side of the
+# obstacle. Raise it once the manoeuvre looks calm:
+#   ros2 param set /state_machine static_avoidance_planner.max_speed_mps 2.0
+max_speed_mps: 1.5

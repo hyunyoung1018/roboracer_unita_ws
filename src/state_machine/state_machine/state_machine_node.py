@@ -86,6 +86,7 @@ class WaypointData:
         # advances. Used to hold one blended-recovery path while trailing on it, so the
         # controller target stops jumping every frame (see _hold_recovery_freeze).
         self.frozen = False
+        self.max_speed_mps = None
         self.update_param()
 
     def update_param(self):
@@ -99,6 +100,15 @@ class WaypointData:
         self.on_spline_min_dist_thres_m = get(self.name, "on_spline_min_dist_thres_m")
         self.hyst_timer_sec = get(self.name, "hyst_timer_sec")
         self.killing_timer_sec = get(self.name, "killing_timer_sec")
+
+        # Speed limits for this planner's path. Both optional: only overridden
+        # when the planner's yaml carries the key, so recovery keeps the 0.5
+        # safety factor it is given in code and every other planner keeps 1.0.
+        sf = get(self.name, "vel_planner_safety_factor")
+        if sf is not None:
+            self.vel_planner_safety_factor = float(sf)
+        ms = get(self.name, "max_speed_mps")
+        self.max_speed_mps = float(ms) if ms is not None and float(ms) > 0.0 else None
 
     def initialize_traj(self, wpnt):
         if len(wpnt.wpnts) != 0:
@@ -654,12 +664,14 @@ class StateMachine(Node):
 
     def avoidance_cb(self, data: OTWpntArray):
         if len(data.wpnts) != 0:
-            self.update_velocity(data, self.cur_avoidance_wpnts.vel_planner_safety_factor)
+            self.update_velocity(data, self.cur_avoidance_wpnts.vel_planner_safety_factor,
+                                 self.cur_avoidance_wpnts.max_speed_mps)
         self.avoidance_wpnts = data
 
     def static_avoidance_cb(self, data: OTWpntArray):
         if len(data.wpnts) != 0:
-            self.update_velocity(data, self.cur_static_avoidance_wpnts.vel_planner_safety_factor)
+            self.update_velocity(data, self.cur_static_avoidance_wpnts.vel_planner_safety_factor,
+                                 self.cur_static_avoidance_wpnts.max_speed_mps)
         self.static_avoidance_wpnts = data
 
     def start_wpnts_cb(self, data: OTWpntArray):
@@ -1150,7 +1162,7 @@ class StateMachine(Node):
     ################
     # HELPER FUNCS #
     ################
-    def update_velocity(self, wpnts_msg, safety_factor=1.0):
+    def update_velocity(self, wpnts_msg, safety_factor=1.0, max_speed=None):
         if self.ggv is None or self.gb_wpnts is None:
             return  # velocity replanning unavailable (no veh dyn info / no gb wpnts yet)
         wpnts = wpnts_msg.wpnts
@@ -1198,6 +1210,15 @@ class StateMachine(Node):
             v_start=self.cur_vs,
             v_end=v_end,
         )
+
+        # Cap before ax is derived from the profile, so the accelerations stay
+        # consistent with the speeds actually commanded. safety_factor only
+        # scales what the motor may do; it does not bound cornering speed,
+        # which comes from ggv and the path's curvature. On an evasion swerve
+        # through a metre-wide corridor that limit is still far too quick, so
+        # the planner gets to state a ceiling outright.
+        if max_speed is not None:
+            vx_profile = np.minimum(vx_profile, float(max_speed))
 
         for i in range(len(vx_profile)):
             wpnts_msg.wpnts[i].vx_mps = vx_profile[i]
