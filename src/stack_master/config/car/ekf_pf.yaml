@@ -27,7 +27,11 @@
 
 ekf_localization:
   ros__parameters:
-    frequency: 100.0
+    # Match the fastest input, do not exceed it. /vesc/odom arrives at 50 Hz
+    # (vesc_driver's 20 ms state timer) and /pf/pose/odom at about 41; at 100
+    # half the iterations predicted forward with nothing new to correct
+    # against, and this node was already missing its deadline.
+    frequency: 50.0
     sensor_timeout: 0.1
     two_d_mode: true
 
