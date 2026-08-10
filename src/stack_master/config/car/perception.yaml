@@ -3,8 +3,24 @@ detect:
   # this file and silently falls back to its code defaults - no error, no
   # warning, and editing anything here does nothing.
   ros__parameters:
-    # Detection frequency
-    rate_detect: 40.0
+    # [Hz] Detection frequency. Halved from 40.
+    #
+    # The rewrite put L-shape rectangle fitting into python and runs it on
+    # every tick. UNIST does the same work in C++. On this jetson the whole
+    # stack is already tight - the particle filter sits at 41 Hz against a
+    # possible 80, the ekf misses its own deadlines - and /tf was arriving at
+    # the detector a full second late, which put every obstacle a metre or two
+    # behind where it really was.
+    #
+    # 20 Hz is 50 ms between updates on obstacles that do not move, approached
+    # at under 3 m/s. That is 15 cm of travel. Nothing is lost and half the
+    # work goes away.
+    #
+    # To see whether detection is in fact the bottleneck:
+    #   ros2 param set /detect measure true
+    #   ros2 topic echo /detect/latency
+    # Anything near the tick period means the timer cannot keep up.
+    rate_detect: 20.0
 
     # Minimum number of LiDAR points in a cluster
     min_size_n: 4
