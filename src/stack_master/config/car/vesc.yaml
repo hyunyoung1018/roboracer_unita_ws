@@ -88,8 +88,10 @@
     # from the stop. A corner holds the limit for as long as the corner lasts,
     # and a servo held against its stop is a servo stalling.
     #
-    # These give delta_max 0.2955 rad (16.9 deg). racecar_f110.ini's curvlim
-    # is derived from it: tan(delta_max) / wheelbase.
+    # These give delta_max 0.2954 rad (16.9 deg) - (0.445 - 0.12)/1.1, rounded
+    # DOWN, because a steering limit rounded up is over the servo limit and
+    # gets clipped on every full-lock command. racecar_f110.ini's curvlim is
+    # derived from it: tan(delta_max) / wheelbase.
     servo_min: 0.12
     servo_max: 0.77
 
