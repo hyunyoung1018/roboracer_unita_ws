@@ -249,10 +249,18 @@ class SplineNode(Node):
             base = reference[waypoint_idx]
             available = base.d_left if d_m >= 0.0 else base.d_right
             if abs(d_m) > max(0.0, available - self.boundary_margin):
+                # Where along the spline it fails matters more than that it
+                # does. Near the apex means the obstacle sits too close to a
+                # wall. Well past it means the path is still offset while the
+                # track narrows underneath it - the excursion is too long for
+                # this track, not too wide.
+                past_apex = (s_m - apex_s + max_s / 2.0) % max_s - max_s / 2.0
                 return self._bail(
                     out,
-                    f"path leaves the track at s={s_m:.2f}: needs d={d_m:.2f} m, "
-                    f"bound {available:.2f} m less {self.boundary_margin:.2f} margin")
+                    f"path leaves the track at s={s_m:.3f} "
+                    f"({past_apex:+.2f} m from the apex at s={apex_s:.2f}): "
+                    f"needs d={d_m:.3f} m, bound {available:.3f} m "
+                    f"less {self.boundary_margin:.2f} margin")
             out.wpnts.append(Wpnt(
                 id=idx, s_m=float(s_m), d_m=float(d_m),
                 x_m=float(xy[0, idx]), y_m=float(xy[1, idx]),
