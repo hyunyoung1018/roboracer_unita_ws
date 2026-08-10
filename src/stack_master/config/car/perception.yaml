@@ -3,23 +3,25 @@ detect:
   # this file and silently falls back to its code defaults - no error, no
   # warning, and editing anything here does nothing.
   ros__parameters:
-    # [Hz] Detection frequency. Halved from 40.
+    # [Hz] Detection frequency.
     #
-    # The rewrite put L-shape rectangle fitting into python and runs it on
-    # every tick. UNIST does the same work in C++. On this jetson the whole
-    # stack is already tight - the particle filter sits at 41 Hz against a
-    # possible 80, the ekf misses its own deadlines - and /tf was arriving at
-    # the detector a full second late, which put every obstacle a metre or two
-    # behind where it really was.
+    # 20 because the python detector could not hold 40: it did L-shape
+    # rectangle fitting in python on every tick, the jetson saturated, and /tf
+    # reached the detector a full second late, which put every obstacle a metre
+    # or two behind where it really was.
     #
-    # 20 Hz is 50 ms between updates on obstacles that do not move, approached
-    # at under 3 m/s. That is 15 cm of travel. Nothing is lost and half the
-    # work goes away.
+    # The detector is C++ now and that constraint is probably gone, but it has
+    # not been measured. 20 Hz is 50 ms between updates on obstacles that do
+    # not move, approached at under 3 m/s - 15 cm of travel - so there is no
+    # symptom pushing this up. Before raising it, measure:
     #
-    # To see whether detection is in fact the bottleneck:
     #   ros2 param set /detect measure true
     #   ros2 topic echo /detect/latency
-    # Anything near the tick period means the timer cannot keep up.
+    #
+    # That is now seconds per tick, not a rate. Anything near the tick period
+    # means the timer cannot keep up. Watch for the "placing obstacles with a
+    # X s old transform" warning at the same time - that is the symptom that
+    # made this 20 in the first place.
     rate_detect: 20.0
 
     # Minimum number of LiDAR points in a cluster
@@ -46,10 +48,6 @@ detect:
     # UNITA-specific detection FOV
     # Full Hokuyo scan remains available for localization.
     detect_fov_deg: 220.0
-
-    # Optional cluster-inside-track check.
-    # 0.0 = center-only boundary check.
-    min_inside_ratio: 0.0
 
     # Profiling
     measure: false
