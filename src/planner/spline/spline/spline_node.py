@@ -173,6 +173,33 @@ class SplineNode(Node):
         sample_s = sample_unwrapped % max_s
         xy = self.converter.get_cartesian(sample_s, sample_d)
 
+        # Heading and curvature OF THE SPLINE, not of the raceline underneath
+        # it. Copying base.psi_rad / base.kappa_radpm told the controller the
+        # evasion path was as straight as the line it departs from, and the
+        # controller acts on both: curvature sets the L1 lookahead and scales
+        # the speed down for a bend, and psi is what the heading-error speed
+        # cut compares the car against. An evasion swerve read as straight is
+        # taken too fast, with too long a lookahead.
+        #
+        # Both come from the cartesian samples, so they describe the path the
+        # car will actually drive. psi is atan2(dy, dx), which is the same
+        # convention the waypoints already carry - the raceline generator adds
+        # pi/2 to tph's y-axis heading for exactly this (raceline/map_processing
+        # conv_psi). Curvature is (x'y'' - y'x'') / (x'^2 + y'^2)^1.5, which is
+        # invariant to the sample spacing, so the gradients need no scaling.
+        px = np.asarray(xy[0], dtype=float)
+        py = np.asarray(xy[1], dtype=float)
+        if px.size >= 3:
+            dx, dy = np.gradient(px), np.gradient(py)
+            ddx, ddy = np.gradient(dx), np.gradient(dy)
+            psi_path = np.arctan2(dy, dx)
+            denom = np.power(dx * dx + dy * dy, 1.5)
+            kappa_path = np.divide(dx * ddy - dy * ddx, denom,
+                                   out=np.zeros_like(denom), where=denom > 1e-9)
+        else:
+            psi_path = np.zeros(px.size)
+            kappa_path = np.zeros(px.size)
+
         for idx, (s_m, d_m) in enumerate(zip(sample_s, sample_d)):
             waypoint_idx = int(np.argmin(np.abs(s_values - s_m)))
             base = reference[waypoint_idx]
@@ -185,7 +212,7 @@ class SplineNode(Node):
             out.wpnts.append(Wpnt(
                 id=idx, s_m=float(s_m), d_m=float(d_m),
                 x_m=float(xy[0, idx]), y_m=float(xy[1, idx]),
-                psi_rad=base.psi_rad, kappa_radpm=base.kappa_radpm,
+                psi_rad=float(psi_path[idx]), kappa_radpm=float(kappa_path[idx]),
                 vx_mps=base.vx_mps, ax_mps2=base.ax_mps2,
                 d_left=base.d_left, d_right=base.d_right,
             ))

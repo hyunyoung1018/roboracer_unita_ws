@@ -86,8 +86,16 @@ class TrackingNode(Node):
         output = ObstacleArray()
         output.header = msg.header
         publish_static = bool(self.get_parameter('publish_static').value)
+        # `missed <= max_missed`, not `missed == 0`. Publishing only what is
+        # seen this instant made max_missed_frames do nothing downstream: one
+        # dropped lidar frame and the obstacle vanished from /tracking/obstacles
+        # entirely, so the state machine saw present/absent/present and its
+        # avoidance hysteresis had nothing stable to hold on to. A track the
+        # tracker still believes in is still reported; is_visible says whether
+        # it was seen this frame, which is what that field is for.
         for track in self.tracks:
-            if track.missed == 0 and (publish_static or not track.obstacle.is_static):
+            if track.missed <= max_missed and (publish_static or not track.obstacle.is_static):
+                track.obstacle.is_visible = bool(track.missed == 0)
                 output.obstacles.append(track.obstacle)
         self.obstacle_pub.publish(output)
         self.raw_pub.publish(msg)
