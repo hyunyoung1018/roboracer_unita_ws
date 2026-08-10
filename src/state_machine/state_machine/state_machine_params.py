@@ -37,6 +37,7 @@ class StateMachineParams:
         "interest_horizon_m",
         "overtaking_horizon_m",
         "overtake_min_closing_mps",
+        "static_overtake_max_speed_mps",
     }
 
     def __init__(self, node: "StateMachine") -> None:
@@ -136,6 +137,21 @@ class StateMachineParams:
             ParameterDescriptor(type=ParameterType.PARAMETER_DOUBLE),
         )
         self.overtaking_horizon_m: float = node.get_parameter("overtaking_horizon_m").value
+
+        self._declare(
+            "static_overtake_max_speed_mps", 3.0,
+            ParameterDescriptor(
+                description=(
+                    "Above this the car will not arm static avoidance and trails "
+                    "instead [m/s]. Must exceed the raceline's top speed after "
+                    "speed_scaling, or avoidance cannot arm where the car is fast "
+                    "- which is exactly where an obstacle appears late."
+                ),
+                type=ParameterType.PARAMETER_DOUBLE,
+            ),
+        )
+        self.static_overtake_max_speed_mps: float = node.get_parameter(
+            "static_overtake_max_speed_mps").value
 
         self._declare("emergency_break_horizon", 0.5)
         self.emergency_break_horizon: float = node.get_parameter("emergency_break_horizon").value

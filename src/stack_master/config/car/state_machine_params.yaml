@@ -14,6 +14,21 @@ state_machine:
     interest_horizon_m: 20.0
     overtaking_horizon_m: 6.9
     emergency_break_horizon: 0.5
+    # [m/s] Above this the car trails a static obstacle instead of arming
+    # avoidance. Was hardcoded at 3.0, which the raceline exceeds for 30% of
+    # the lap once speed_scaling reaches 0.5 - and it exceeds it in the fast
+    # sections, which is where an obstacle appears late. Coming out of a
+    # corner onto one, the car could not arm, so it trailed, braked, and by
+    # the time it was under 3.0 it was too close to swerve. It then sat in
+    # front of the obstacle, because a stopped car and a stationary obstacle
+    # do not change anything about the situation.
+    #
+    # 6.0 clears the raceline's top speed at any scaling we would run
+    # (5.33 m/s at 0.7), so in practice the gate is off for static obstacles.
+    # It is still a gate: it exists so the car does not swerve at a speed the
+    # swerve cannot be driven at, and if that ever becomes the failure this
+    # is where to bring it back down.
+    static_overtake_max_speed_mps: 6.0
     # safety
     volt_threshold: 11.0
     # dynamic (replaces dyn_statemachine_tuner.cfg)

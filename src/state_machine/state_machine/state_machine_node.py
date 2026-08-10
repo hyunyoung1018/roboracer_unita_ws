@@ -221,6 +221,7 @@ class StateMachine(Node):
         self.lateral_width_gb_m = self.params.lateral_width_gb_m
         self.gb_horizon_m = self.params.gb_horizon_m
         self.interest_horizon_m = self.params.interest_horizon_m
+        self.static_overtake_max_speed_mps = self.params.static_overtake_max_speed_mps
         self.overtake_min_closing_mps = self.params.overtake_min_closing_mps
 
         self.last_recovery_update_time = None
@@ -1127,7 +1128,16 @@ class StateMachine(Node):
         # Evaluated separately rather than short-circuited so a refusal can say
         # which condition refused. All four have to hold, and from outside the
         # car they look identical: it trails the obstacle and never pulls out.
-        slow_enough = self.cur_vs < 3.0
+        #
+        # The speed gate was a hardcoded 3.0, below the raceline's own top
+        # speed once speed_scaling reached 0.5 - so for 30% of the lap, the
+        # fast 30%, avoidance could not arm at all. That is precisely where an
+        # obstacle appears late: coming out of a corner the car is at its
+        # quickest and the obstacle was occluded until a metre or two ago. It
+        # would trail, brake, and by the time it was under 3.0 it was too close
+        # to swerve - and a stopped car in front of a stationary obstacle is a
+        # fixed point, so it simply sat there.
+        slow_enough = self.cur_vs < self.static_overtake_max_speed_mps
         closing = self._check_getting_closer(threshold_m=7.0)
         have_path = self._check_latest_wpnts(
             self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)

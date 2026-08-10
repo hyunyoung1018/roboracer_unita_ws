@@ -4,9 +4,21 @@ max_horizon: 10.0
 # before the state machine calls it free. Together with gb_ego_width_m (0.4)
 # this sets a floor on evasion_distance of 0.2 + this, and at 0.1 that floor
 # was 0.30 against a planner ceiling of 0.33 - a 3 cm window on this track.
-# 0.05 opens it to 8 cm. gb_ego_width_m is already 0.4 against a car that
-# measures 0.28, so the conservatism lost here is still there.
-lateral_width_m: 0.05
+# 0.05 opened it to 8 cm.
+#
+# 0.05 -> 0.02, to pass closer. That floor is what stops evasion_distance
+# going below 0.25, and 0.25 puts the car 11 cm from the obstacle once its
+# own half width of 0.14 is taken off. At 0.02 the floor is 0.22 and
+# evasion_distance 0.24 leaves 10 cm, with 2 cm of slack left in this check.
+#
+# The other way to buy room is gb_ego_width_m, which is 0.4 against a car
+# that measures 0.28. Deliberately not touched: _check_close_to_raceline
+# reads it too, so lowering it also changes when the car counts as back on
+# the raceline. This parameter is read here and nowhere else.
+#
+# The requirement is scaled by distance (free_scaling_reference_distance_m),
+# so it is strictest far out and relaxes on approach.
+lateral_width_m: 0.02
 free_scaling_reference_distance_m: 2.0
 # [s] How old the planner's path may be. It replans at 20 Hz, so 0.1 was two
 # cycles of slack and the jetson lost that regularly - "path is 0.171 s old"

@@ -101,11 +101,18 @@ spline_node:
     # still clears the state machine's floor, which is
     # gb_ego_width_m/2 + lateral_width_m = 0.20 + 0.05 = 0.25.
     #
-    # That floor and boundary_margin below are where this stops. There is no
-    # more room to find in the parameters: test_213's corridor is about a metre
-    # wide against a car 0.28 m across, and an obstacle in it leaves margins
-    # this thin whatever the numbers say. The competition track is 22x8 m.
-    evasion_distance: 0.27
+    # 0.27 -> 0.24. The obstacle's reported width is honest now - it comes
+    # from projecting the fitted box rather than squaring off its longest
+    # dimension - so the margin that used to be absorbing that error is free
+    # to spend. static_avoidance_planner.yaml drops lateral_width_m to 0.02
+    # at the same time, which moves the state machine's floor from 0.25 to
+    # 0.22 and leaves 2 cm of slack under this value.
+    #
+    # Real clearance to the obstacle is this less the car's half width of
+    # 0.14, so 10 cm. Do not go under 0.22 without lowering that floor again,
+    # and do not lower it to zero: the free check would then have no margin
+    # for the centimetre or two of noise in the obstacle's measured edge.
+    evasion_distance: 0.24
 
     trajectory_threshold: 0.6
 
