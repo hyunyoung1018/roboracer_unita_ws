@@ -1666,6 +1666,47 @@ class DetectNode(Node):
             return None
 
         # ============================================================
+        # Cluster extents in Frenet
+        #
+        # The whole cluster is converted once, and serves two purposes:
+        # the optional inside-ratio filter below, and the per-axis bounds
+        # published on the message.
+        # ============================================================
+        frenet = (
+            self.converter.get_frenet(
+                cluster[:, 0],
+                cluster[:, 1],
+            )
+        )
+
+        s_values = np.mod(
+            np.asarray(
+                frenet[0],
+                dtype=float,
+            ),
+            self.track_length,
+        )
+
+        d_values = np.asarray(
+            frenet[1],
+            dtype=float,
+        )
+
+        if (
+            not np.all(
+                np.isfinite(
+                    s_values
+                )
+            )
+            or not np.all(
+                np.isfinite(
+                    d_values
+                )
+            )
+        ):
+            return None
+
+        # ============================================================
         # Optional cluster-inside-ratio filter
         #
         # default = 0.0
@@ -1682,40 +1723,6 @@ class DetectNode(Node):
             min_inside_ratio
             > 0.0
         ):
-
-            frenet = (
-                self.converter.get_frenet(
-                    cluster[:, 0],
-                    cluster[:, 1],
-                )
-            )
-
-            s_values = np.mod(
-                np.asarray(
-                    frenet[0],
-                    dtype=float,
-                ),
-                self.track_length,
-            )
-
-            d_values = np.asarray(
-                frenet[1],
-                dtype=float,
-            )
-
-            if (
-                not np.all(
-                    np.isfinite(
-                        s_values
-                    )
-                )
-                or not np.all(
-                    np.isfinite(
-                        d_values
-                    )
-                )
-            ):
-                return None
 
             inside_count = 0
 
@@ -1781,11 +1788,92 @@ class DetectNode(Node):
         # ============================================================
         # Existing /detect/raw_obstacles message
         #
-        # UNIST fitted-square semantics 사용.
+        # `size` keeps UNIST's fitted-square meaning - the side of the
+        # square that bounds the cluster, i.e. max(width, height) of the
+        # fitted rectangle. The per-axis bounds do NOT, and this is the
+        # difference that matters:
+        #
+        # d_left/d_right used to be center_d +/- size/2, which models every
+        # obstacle as a square whose side is its LONGEST dimension. A cone
+        # is seen by the lidar as a shallow arc - wider across the beam
+        # than it is deep - so a 0.15 m cone read as a 0.5 m square, and
+        # both the spline planner and the state machine subtract that width
+        # from the room either side of it. On a corridor barely a metre
+        # across it ate the entire gap: the planner refused with "left
+        # 0.09 m, right 0.03 m, need 0.20" on an obstacle that physically
+        # leaves 30 cm clear on both sides. It also made the state
+        # machine's _lateral_half_width a no-op, since (d_left - d_right)/2
+        # of a square is just size/2 again - the very thing it exists to
+        # avoid computing.
+        #
+        # Measure each axis separately instead. Floored at min_size_m/2:
+        # the lidar only ever sees the near surface, so the extent along
+        # the viewing direction is always an underestimate, and the floor
+        # keeps a partially observed obstacle from being reported smaller
+        # than the detector's own resolution. The real standoff is
+        # evasion_distance (0.27) less the car's half width (0.14).
         # ============================================================
-        half = (
-            size
+        min_size_m = float(
+            self.get_parameter(
+                'min_size_m'
+            ).value
+        )
+
+        half_floor = (
+            min_size_m
             / 2.0
+        )
+
+        # Signed offsets from the centre, so the extent survives an
+        # obstacle straddling the s=0 wrap.
+        s_offsets = (
+            (
+                s_values
+                - center_s
+                + self.track_length
+                / 2.0
+            )
+            % self.track_length
+            - self.track_length
+            / 2.0
+        )
+
+        half_back = max(
+            -float(
+                np.min(
+                    s_offsets
+                )
+            ),
+            half_floor,
+        )
+
+        half_front = max(
+            float(
+                np.max(
+                    s_offsets
+                )
+            ),
+            half_floor,
+        )
+
+        half_right = max(
+            center_d
+            - float(
+                np.min(
+                    d_values
+                )
+            ),
+            half_floor,
+        )
+
+        half_left = max(
+            float(
+                np.max(
+                    d_values
+                )
+            )
+            - center_d,
+            half_floor,
         )
 
         return Obstacle(
@@ -1794,7 +1882,7 @@ class DetectNode(Node):
             s_start=float(
                 (
                     center_s
-                    - half
+                    - half_back
                 )
                 % self.track_length
             ),
@@ -1802,19 +1890,19 @@ class DetectNode(Node):
             s_end=float(
                 (
                     center_s
-                    + half
+                    + half_front
                 )
                 % self.track_length
             ),
 
             d_right=float(
                 center_d
-                - half
+                - half_right
             ),
 
             d_left=float(
                 center_d
-                + half
+                + half_left
             ),
 
             s_center=float(

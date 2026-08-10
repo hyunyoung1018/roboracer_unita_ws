@@ -53,12 +53,16 @@ class SplineNode(Node):
         self.scaled_msg = None
         self.converter = None
 
+        self.last_path = None
+
         defaults = {
             'lookahead': 5.0,
             'evasion_distance': 0.4,
             'trajectory_threshold': 0.6,
             'boundary_margin': 0.20,
             'spline_resolution': 0.10,
+            'rate_hz': 10.0,
+            'path_hold_s': 0.3,
             'measure': False,
         }
         for name, value in defaults.items():
@@ -73,7 +77,11 @@ class SplineNode(Node):
         self.path_pub = self.create_publisher(OTWpntArray, '/planner/avoidance/otwpnts', 10)
         self.marker_pub = self.create_publisher(MarkerArray, '/planner/avoidance/markers', 10)
         self.latency_pub = self.create_publisher(Float32, '/planner/avoidance/latency', 10)
-        self.create_timer(0.05, self._loop)
+        # Rate is fixed at construction: a timer period cannot be changed at
+        # runtime, and this one competes for the jetson with the detector and
+        # the particle filter. 20 Hz replanned a static obstacle every 5 cm of
+        # travel, for nothing.
+        self.create_timer(1.0 / max(1.0, float(self.get_parameter('rate_hz').value)), self._loop)
 
     def _load_parameters(self):
         self.lookahead = float(self.get_parameter('lookahead').value)
@@ -81,6 +89,7 @@ class SplineNode(Node):
         self.trajectory_threshold = float(self.get_parameter('trajectory_threshold').value)
         self.boundary_margin = float(self.get_parameter('boundary_margin').value)
         self.resolution = float(self.get_parameter('spline_resolution').value)
+        self.path_hold_s = float(self.get_parameter('path_hold_s').value)
         self.measure = bool(self.get_parameter('measure').value)
 
     def _parameter_cb(self, params):
@@ -90,6 +99,7 @@ class SplineNode(Node):
             'trajectory_threshold': 'trajectory_threshold',
             'boundary_margin': 'boundary_margin',
             'spline_resolution': 'resolution',
+            'path_hold_s': 'path_hold_s',
             'measure': 'measure',
         }
         for parameter in params:
@@ -122,10 +132,39 @@ class SplineNode(Node):
             return
         started = time.perf_counter()
         result = self._plan()
+
+        # Hold the last good path across a dropped frame.
+        #
+        # Every bail publishes an empty path, and the state machine caches
+        # whatever arrived last - so one bad frame in two erased the good one
+        # before it could be acted on. Measured on test_213: the planner
+        # alternated between a valid path and "no room" on the SAME stationary
+        # obstacle, several times a second, and static avoidance never once
+        # latched because have_path was false at almost every check.
+        #
+        # The held path keeps its ORIGINAL stamp. That is the point: it is not
+        # claimed to be fresh, and the state machine's own latest_threshold
+        # (0.25 s) still decides whether it is too old to use. This only stops
+        # a gap from being filled with a positive assertion that there is
+        # nothing there.
+        if result.wpnts:
+            self.last_path = result
+        elif self.last_path is not None:
+            age = self._age(self.last_path)
+            if age <= self.path_hold_s:
+                result = self.last_path
+            else:
+                self.last_path = None
+
         self.path_pub.publish(result)
         self.marker_pub.publish(self._markers(result))
         if self.measure:
             self.latency_pub.publish(Float32(data=float(time.perf_counter() - started)))
+
+    def _age(self, msg):
+        stamp = msg.header.stamp
+        return (self.get_clock().now().nanoseconds * 1e-9
+                - (stamp.sec + stamp.nanosec * 1e-9))
 
     def _bail(self, out, reason):
         """Return an empty path, but say why.
@@ -203,7 +242,10 @@ class SplineNode(Node):
                 f"no room either side of obstacle at s={apex_s:.2f}: "
                 f"left {left_room:.2f} m, right {right_room:.2f} m, "
                 f"need {self.boundary_margin:.2f} "
-                f"(evasion_distance {self.evasion_distance:.2f})")
+                f"(obstacle {obstacle.d_left - obstacle.d_right:.2f} m wide "
+                f"at d {obstacle.d_center:+.2f}, track "
+                f"{ref.d_left + ref.d_right:.2f} m, "
+                f"evasion_distance {self.evasion_distance:.2f})")
 
         speed = max(1.0, abs(self.odom.twist.twist.linear.x))
         scale = np.clip(1.0 + speed / max(1.0, max(w.vx_mps for w in reference)), 1.0, 1.5)

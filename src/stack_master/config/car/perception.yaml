@@ -68,6 +68,17 @@ tracking:
 
 spline_node:
   ros__parameters:
+    # [Hz] Was 20, hardcoded. A static obstacle does not need replanning
+    # every 5 cm, and this node shares a jetson with the detector, the
+    # tracker and a particle filter that is already scan-limited.
+    rate_hz: 10.0
+
+    # [s] How long a good path survives a frame the planner could not solve.
+    # See the comment in spline_node._loop - the state machine's
+    # latest_threshold still decides usability, this only stops a dropout
+    # from being published as "there is nothing here".
+    path_hold_s: 0.3
+
     lookahead: 10.0
 
     # [m] How far the path passes the obstacle's edge. Squeezed from both
