@@ -28,9 +28,9 @@ class SplineNode(Node):
         self.converter = None
 
         defaults = {
-            'lookahead': 10.0,
-            'evasion_distance': 0.65,
-            'trajectory_threshold': 1.0,
+            'lookahead': 5.0,
+            'evasion_distance': 0.2,
+            'trajectory_threshold': 0.6,
             'boundary_margin': 0.20,
             'spline_resolution': 0.10,
             'measure': False,
