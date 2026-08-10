@@ -14,8 +14,24 @@ controller_manager:
     # 0.2955 asks for servo 0.11995 against a servo_min of 0.12 - clipped on
     # every full-lock command. A limit rounded the wrong way is not a limit.
     steer_max: 0.2954
-    # scale 0.3 -> t_clip_min 0.7, scale 0.4 -> t_clip_min 1.0, scale 0.5 -> t_clip_min 1.2, scale 0.6 -> t_clip_min 1.4, scale 0.7 -> t_clip_min 1.6
-    t_clip_min: 1.0
+    # [m] Lower clip on the L1 lookahead, and in practice the lookahead itself:
+    # the raceline is slow enough that the unclipped value sits under this for
+    # about three quarters of the lap, so the car drives a near-constant
+    # lookahead. That is what makes it steady, and it is why this has to move
+    # with speed_scaling - leaving it at 0.7 while the scaling went 0.3 -> 0.4
+    # unpinned it and the car started weaving.
+    #
+    # Paired with the scaling in the map's speed_scaling.yaml. Each row keeps
+    # the lookahead pinned for ~75-80% of the lap on test_213:
+    #
+    #   scale 0.3 -> 0.7    scale 0.4 -> 1.0    scale 0.5 -> 1.2
+    #   scale 0.6 -> 1.4    scale 0.7 -> 1.6
+    #
+    # This does not hold indefinitely. The curvature term goes as v^2, so the
+    # lookahead's swing over a lap grows anyway: 0.16 m at scale 0.3, 0.37 m at
+    # 0.5, 0.67 m at 0.7. Past about 0.5, weaving is curvature_factor's to fix,
+    # not this one's.
+    t_clip_min: 1.2
     t_clip_max: 8.0
     m_l1: 0.47
     q_l1: -0.2
