@@ -349,7 +349,10 @@ class Controller:
         # limit change of steering angle
         threshold = 0.4
         if abs(steering_angle - self.curr_steering_angle) > threshold:
-            self.logger_info("steering angle clipped")
+            # Throttled: this fires from the 50 Hz control loop, and unthrottled
+            # it buries every other line in the launch - the same way the vesc
+            # driver's clip message did before its throttle was fixed.
+            self.logger_info("steering angle clipped", throttle_duration_sec=2.0)
         steering_angle = np.clip(steering_angle, self.curr_steering_angle - threshold, self.curr_steering_angle + threshold)
         # The car's own limit, not UNIST's 0.53. Steering past it does not
         # bend the car any further - vesc_driver clips the servo command - but
