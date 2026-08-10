@@ -1073,16 +1073,26 @@ class StateMachine(Node):
             return False
 
     def _check_static_overtaking_mode(self) -> bool:
-        if (
-            self.cur_vs < 3.0
-            and self._check_getting_closer(threshold_m=7.0)
-            and self._check_latest_wpnts(self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)
-            and self._check_free_frenet(self.cur_static_avoidance_wpnts)
-        ):
+        # Evaluated separately rather than short-circuited so a refusal can say
+        # which condition refused. All four have to hold, and from outside the
+        # car they look identical: it trails the obstacle and never pulls out.
+        slow_enough = self.cur_vs < 3.0
+        closing = self._check_getting_closer(threshold_m=7.0)
+        have_path = self._check_latest_wpnts(
+            self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)
+        path_free = self._check_free_frenet(self.cur_static_avoidance_wpnts)
+
+        if slow_enough and closing and have_path and path_free:
             self.static_overtaking_mode = True
             return True
-        else:
-            return False
+
+        if len(self.cur_obstacles_in_interest) != 0:
+            self.get_logger().info(
+                "static avoidance refused: "
+                f"slow_enough={slow_enough} (vs {self.cur_vs:.2f} < 3.0), "
+                f"closing={closing}, have_path={have_path}, path_free={path_free}",
+                throttle_duration_sec=2.0)
+        return False
 
     def _check_overtaking_mode_sustainability(self) -> bool:
         if self.static_overtaking_mode:
