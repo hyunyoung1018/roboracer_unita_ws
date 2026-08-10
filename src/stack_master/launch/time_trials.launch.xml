@@ -34,6 +34,13 @@
   under 3 m/s and closing, and it reads /planner/avoidance/static_otwpnts. In
   time trials every obstacle is static, so that is what these waypoints are.
 
+  Two things to expect when watching it work. The state reads OVERTAKE either
+  way - static and dynamic avoidance enter the same state and differ only in
+  which waypoints they follow - so watch /planner/avoidance/static_otwpnts to
+  tell them apart. And avoidance only arms below 3 m/s, so approaching an
+  obstacle fast gives TRAILING first: the car closes, slows, and swings out
+  once it is under the threshold and still closing. That order is deliberate.
+
   Not started, and not needed here: the dynamic planner in spline_planner
   (it waits on /ot_section_check, which an empty ot_sectors.yaml never grants)
   and everything under prediction. Both belong to head-to-head.
