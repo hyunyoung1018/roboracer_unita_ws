@@ -97,13 +97,6 @@
        description="Bring up localisation too. false if it is already running."/>
   <arg name="obstacles" default="false"
        description="Static obstacle avoidance: perception + the spline planner"/>
-  <arg name="detector_cpp" default="false"
-       description="Run the C++ detector instead of the python one. Both
-                    publish /detect/raw_obstacles, so only one may run. They
-                    do NOT agree: the C++ one rejects lidar returns that fall
-                    outside the track before clustering, the python one only
-                    rejects a cluster whose fitted centre landed outside.
-                    Untested on the car as of this branch."/>
 
   <arg name="joy_max_speed" default="5.0"
        description="[m/s] full stick on the manual override. The controller is
@@ -174,15 +167,7 @@
 
   <!-- ===== static obstacle avoidance ===== -->
   <group if="$(var obstacles)">
-    <!-- Same node name either way, so the config block and every `ros2 param
-         set /detect ...` keep working whichever one is running. -->
-    <node pkg="perception" exec="detect" name="detect" output="screen"
-          unless="$(var detector_cpp)">
-      <param from="$(var config_dir)/perception.yaml"/>
-      <param name="use_sim_time" value="$(var use_sim_time)"/>
-    </node>
-    <node pkg="perception" exec="detect_cpp" name="detect" output="screen"
-          if="$(var detector_cpp)">
+    <node pkg="perception" exec="detect" name="detect" output="screen">
       <param from="$(var config_dir)/perception.yaml"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
     </node>

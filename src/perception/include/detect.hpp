@@ -13,14 +13,17 @@
 //     declares that function with no definition left anywhere - this file is
 //     where it comes back.
 //   - The check is per point, before clustering, which is where UNIST applies
-//     theirs. Our python detector applies it to the cluster mean instead, so a
-//     wall only gets rejected when its fitted centre happens to fall off the
-//     track. That is the main behavioural difference between the two nodes and
-//     the reason both are kept runnable on this branch.
+//     theirs. The python detector this replaced applied it to the cluster mean
+//     instead, so a wall was only rejected when its fitted centre happened to
+//     land off the track - which is how a stationary car came to report
+//     anywhere between one and six obstacles from one frame to the next.
 //   - Obstacles report their real per-axis extent rather than a square whose
 //     side is the cluster's longest dimension.
-//   - detect_fov_deg and max_viewing_distance are honoured, matching the
-//     python node.
+//   - detect_fov_deg and max_viewing_distance are honoured.
+//
+// The python detector is in the history up to the merge of the perception-cpp
+// branch, where both were installed and selectable so that the two could be
+// compared on the same track.
 
 #include <rclcpp/rclcpp.hpp>
 

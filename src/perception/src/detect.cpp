@@ -488,9 +488,9 @@ std::vector<Obstacle> Detect::fittingLShape(const std::vector<Cluster> & cluster
 
     // Real per-axis extents, from the points themselves.
     //
-    // Publishing center +/- size/2 on both axes - which is what UNIST does and
-    // what our python detector did until this week - models every obstacle as
-    // a square whose side is its LONGEST dimension. A cone is seen as a
+    // Publishing center +/- size/2 on both axes - which is what UNIST does,
+    // and what the python detector did until it was replaced - models every
+    // obstacle as a square whose side is its LONGEST dimension. A cone is a
     // shallow arc, wider across the beam than deep, so a 0.15 m cone was
     // published half a metre wide, and both the spline planner and the state
     // machine subtract that width from the room either side of it. On a
@@ -556,7 +556,7 @@ void Detect::publishObstaclesMessage()
     obstacle_msg.d_right = obstacle.d_center - obstacle.d_right;
     obstacle_msg.size = obstacle.size;
     // The message carries the cartesian pose too, and the state machine's
-    // _check_free_cartesian measures the recovery path against it. Our python
+    // _check_free_cartesian measures the recovery path against it. The python
     // detector never sets these, so that check has been computing distances to
     // the map origin - latent only because the recovery planner is not
     // running. Set them; they cost nothing here.
