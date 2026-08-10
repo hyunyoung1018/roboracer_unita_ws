@@ -14,7 +14,8 @@ controller_manager:
     # 0.2955 asks for servo 0.11995 against a servo_min of 0.12 - clipped on
     # every full-lock command. A limit rounded the wrong way is not a limit.
     steer_max: 0.2954
-    t_clip_min: 0.7
+    # scale 0.3 -> t_clip_min 0.7, scale 0.4 -> t_clip_min 1.0, scale 0.5 -> t_clip_min 1.2, scale 0.6 -> t_clip_min 1.4, scale 0.7 -> t_clip_min 1.6
+    t_clip_min: 1.0
     t_clip_max: 8.0
     m_l1: 0.47
     q_l1: -0.2
