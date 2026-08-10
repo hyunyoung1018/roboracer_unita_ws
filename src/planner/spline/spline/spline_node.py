@@ -175,10 +175,28 @@ class SplineNode(Node):
         right_apex = obstacle.d_right - self.evasion_distance
         left_room = ref.d_left - left_apex
         right_room = ref.d_right + right_apex
+        # A negative left_apex (or positive right_apex) means the obstacle's
+        # near edge is already further from the raceline than evasion_distance
+        # - the line clears it as it is. Clamping that to 0.0 published the
+        # raceline itself as an "avoidance path", which the state machine then
+        # measured against the obstacle and refused, over and over. Say so and
+        # publish nothing instead: there is nothing to avoid.
         if left_room >= self.boundary_margin and left_room >= right_room:
-            side, apex_d = 'left', max(0.0, left_apex)
+            if left_apex <= 0.0:
+                return self._bail(
+                    out,
+                    f"raceline already clears the obstacle at s={apex_s:.2f} on the "
+                    f"left (its edge is {-obstacle.d_left:.2f} m to the right of the "
+                    f"line, evasion_distance {self.evasion_distance:.2f})")
+            side, apex_d = 'left', left_apex
         elif right_room >= self.boundary_margin:
-            side, apex_d = 'right', min(0.0, right_apex)
+            if right_apex >= 0.0:
+                return self._bail(
+                    out,
+                    f"raceline already clears the obstacle at s={apex_s:.2f} on the "
+                    f"right (its edge is {obstacle.d_right:.2f} m to the left of the "
+                    f"line, evasion_distance {self.evasion_distance:.2f})")
+            side, apex_d = 'right', right_apex
         else:
             return self._bail(
                 out,

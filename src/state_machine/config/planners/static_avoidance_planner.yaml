@@ -11,5 +11,18 @@ latest_threshold: 0.25
 hyst_timer_sec: 4.0
 killing_timer_sec: 10.0
 on_spline_front_horizon_thres_m: 0.5
-on_spline_min_dist_thres_m: 0.5
+# [m] How close the car must be to the avoidance path for it to count as
+# usable. 0.5 was unreachable in practice: this planner draws the spline from
+# 6 m BEFORE the obstacle, so a path for an obstacle 10 m away starts 4 m
+# ahead of the car, and the measured refusals were at 1.46 m. The path only
+# became usable in the last half second before the car reached its start.
+#
+# 1.5 accepts a path that begins a couple of metres ahead while still rejecting
+# one on the far side of the track - the track half-widths measured here are
+# 0.4 to 0.9 m, so anything genuinely off-line is further than this.
+#
+# The real fix is for the spline to start at the car rather than ahead of it,
+# which is what ETH's spliner does. That is a change to the planner's geometry,
+# not to this threshold.
+on_spline_min_dist_thres_m: 1.5
 is_closed: False
