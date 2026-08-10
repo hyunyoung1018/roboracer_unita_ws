@@ -86,7 +86,17 @@ spline_node:
     #
     # 0.30 sits inside both. Real clearance to the obstacle is 0.30 minus the
     # car's own half-width of 0.14, so 16 cm.
-    evasion_distance: 0.30
+    # 0.30 -> 0.27. With the transform lag fixed the refusals are trustworthy,
+    # and they are short by 1 to 4 cm: "left 0.19 m, need 0.20" and "needs
+    # d=0.31 m, bound 0.47 less 0.20 margin". 0.27 buys 3 cm on both tests and
+    # still clears the state machine's floor, which is
+    # gb_ego_width_m/2 + lateral_width_m = 0.20 + 0.05 = 0.25.
+    #
+    # That floor and boundary_margin below are where this stops. There is no
+    # more room to find in the parameters: test_213's corridor is about a metre
+    # wide against a car 0.28 m across, and an obstacle in it leaves margins
+    # this thin whatever the numbers say. The competition track is 22x8 m.
+    evasion_distance: 0.27
 
     trajectory_threshold: 0.6
 
