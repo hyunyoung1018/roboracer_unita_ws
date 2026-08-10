@@ -140,9 +140,17 @@ class DetectNode(Node):
             cache_time=Duration(seconds=5.0)
         )
 
+        # spin_thread=True: the listener gets its own thread, so /tf keeps
+        # arriving while the detection timer is busy. Without it the listener's
+        # subscription shares this node's executor with the 40 Hz timer, and a
+        # blocking lookup inside that timer starves the very topic it is
+        # waiting on - the buffer never fills, so the lookup times out, so the
+        # timer blocks again. That deadlock is why "map does not exist"
+        # repeated forever instead of resolving after the first few scans.
         self.tf_listener = TransformListener(
             self.tf_buffer,
             self,
+            spin_thread=True,
         )
 
         # ============================================================
@@ -379,14 +387,14 @@ class DetectNode(Node):
 
         try:
 
+            # No timeout on either lookup. The listener thread above keeps
+            # the buffer current, so waiting inside the timer buys nothing and
+            # costs the timer its period - two 50 ms waits on a 25 ms tick.
             transform = (
                 self.tf_buffer.lookup_transform(
                     'map',
                     frame_id,
                     scan_time,
-                    timeout=Duration(
-                        seconds=0.05
-                    ),
                 )
             )
 
@@ -399,9 +407,6 @@ class DetectNode(Node):
                         'map',
                         frame_id,
                         Time(),
-                        timeout=Duration(
-                            seconds=0.05
-                        ),
                     )
                 )
 
