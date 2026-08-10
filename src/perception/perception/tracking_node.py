@@ -128,7 +128,14 @@ class TrackingNode(Node):
         track.d_history = track.d_history[-20:]
         min_samples = int(self.get_parameter('static_min_samples').value)
         speed_limit = float(self.get_parameter('static_speed_threshold').value)
-        updated.is_static = len(track.s_history) >= min_samples and np.hypot(updated.vs, updated.vd) < speed_limit
+        # bool(), and it is load-bearing. `a and b` returns b when a is truthy,
+        # and b here is a numpy comparison, so the result is numpy.bool_ - which
+        # is not a subclass of bool, and rosidl asserts on the field's type. The
+        # node died the moment any track collected static_min_samples of
+        # history, which is a few frames after the first obstacle appears.
+        updated.is_static = bool(
+            len(track.s_history) >= min_samples
+            and np.hypot(updated.vs, updated.vd) < speed_limit)
         updated.is_visible = True
 
     @staticmethod
