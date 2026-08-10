@@ -1,5 +1,8 @@
 detect:
-  rosparameters:
+  # ros__parameters, two underscores. With one, the node matches nothing in
+  # this file and silently falls back to its code defaults - no error, no
+  # warning, and editing anything here does nothing.
+  ros__parameters:
     # Detection frequency
     rate_detect: 40.0
 

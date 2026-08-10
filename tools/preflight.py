@@ -12,6 +12,9 @@ each of these has cost a round trip to the Jetson and back:
   * two workspace packages that depend on each other, which colcon refuses to
     order at all - it does not build a subset, it builds nothing
   * a launch file using $(var x) that no <arg> or <let> declares
+  * a node section in a params file keyed `rosparameters` or similar instead
+    of `ros__parameters` - the node matches nothing, takes its code defaults,
+    and says nothing about it
   * a python file that does not compile - a rebase can apply two patches
     cleanly and still leave a duplicated keyword or an orphaned name behind
   * a yaml or xacro that stopped parsing
@@ -70,6 +73,33 @@ def check_dependency_cycles():
             if name in graph[dep][0]:
                 if name < dep:  # report each pair once
                     fail(f, f"{name} and {dep} depend on each other")
+
+
+def check_params_files():
+    """Every node section in a params file must key ros__parameters.
+
+    One underscore, or any other spelling, and the node simply finds no
+    parameters for itself. There is no error and no warning - the file just
+    stops having any effect, which is indistinguishable from it working.
+    """
+    for f in sorted(glob.glob("src/**/config/**/*.yaml", recursive=True)):
+        try:
+            doc = yaml.safe_load(open(f))
+        except Exception:
+            continue  # check_parses reports it
+        if not isinstance(doc, dict):
+            continue
+        for node, body in doc.items():
+            if not isinstance(body, dict):
+                continue
+            keys = set(body)
+            if "ros__parameters" in keys:
+                continue
+            # Only complain about things shaped like a node section: a mapping
+            # whose single key looks like a misspelling of ros__parameters.
+            suspects = [k for k in keys if k.replace("_", "") == "rosparameters"]
+            if suspects:
+                fail(f, f"{node}: '{suspects[0]}' should be 'ros__parameters'")
 
 
 def check_launch_vars():
@@ -133,6 +163,7 @@ def check_parses():
 def main():
     check_package_xml()
     check_python()
+    check_params_files()
     check_dependency_cycles()
     check_launch_vars()
     check_parses()
