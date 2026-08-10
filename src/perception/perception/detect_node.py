@@ -77,6 +77,17 @@ class DetectNode(Node):
             # Detection range
             ('max_viewing_distance', 9.0),
 
+            # [deg] TOTAL field of view this node considers, centred on
+            # straight ahead. The UST-10LX sweeps 270, and the rearmost of that
+            # sees the car's own body, which then clusters into an obstacle
+            # sitting permanently behind us.
+            #
+            # Applied HERE and not to /scan: the particle filter reads the same
+            # topic and uses the full sweep to localise. Rear returns are noise
+            # for detection and information for localisation, and narrowing the
+            # driver would take them from both.
+            ('detect_fov_deg', 220.0),
+
             # Track boundary
             ('boundary_inflation', 0.10),
 
@@ -316,6 +327,10 @@ class DetectNode(Node):
             float(scan.range_max),
             max_viewing_distance,
         )
+
+        fov = float(self.get_parameter('detect_fov_deg').value)
+        if 0.0 < fov < 360.0:
+            valid &= np.abs(angles) <= np.deg2rad(fov) / 2.0
 
         # ------------------------------------------------------------
         # Laser frame Cartesian coordinates
