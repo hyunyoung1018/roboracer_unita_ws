@@ -14,10 +14,29 @@
       controller_manager that -> /vesc/high_level/ackermann_cmd
       simple_mux        arbitrates controller vs joystick -> /vesc/ackermann_cmd
 
-  timetrials_only:=true is what makes the perception and planner packages
-  unnecessary: with it set the state machine ignores /tracking/obstacles
-  entirely and stays in RACELINE, so nothing needs to publish obstacles,
-  avoidance splines or recovery waypoints. Turn it off only once those exist.
+  obstacles:=true adds static obstacle avoidance:
+
+      detect       /scan            -> /detect/raw_obstacles
+      tracking     those            -> /tracking/obstacles     (sets is_static)
+      spline_node  those            -> /planner/avoidance/static_otwpnts
+
+  It also flips timetrials_only off, which is the switch that makes the state
+  machine look at obstacles at all - with it on, obstacle_perception_cb returns
+  immediately and the car stays in RACELINE no matter what is in the way. The
+  two always move together, so obstacles is the only argument.
+
+  THE REMAP IS THE POINT. spline_node publishes /planner/avoidance/otwpnts, the
+  overtaking topic, and the state machine only reaches that through
+  _check_ot_sector - which needs overtaking sectors in the map's
+  ot_sectors.yaml, and a map that has none can never leave TRAILING. It would
+  slow down behind an obstacle and sit there. The static path
+  (_check_static_overtaking_mode) asks for no sector, only that the car is
+  under 3 m/s and closing, and it reads /planner/avoidance/static_otwpnts. In
+  time trials every obstacle is static, so that is what these waypoints are.
+
+  Not started, and not needed here: the dynamic planner in spline_planner
+  (it waits on /ot_section_check, which an empty ot_sectors.yaml never grants)
+  and everything under prediction. Both belong to head-to-head.
 
   RACELINE is what UNIST calls GB_TRACK; see state_machine/states_types.py.
 
@@ -69,14 +88,20 @@
   <arg name="map" description="Map name (folder under stack_master/maps/)"/>
   <arg name="localization" default="true"
        description="Bring up localisation too. false if it is already running."/>
-  <arg name="timetrials_only" default="true"
-       description="Ignore obstacles. false needs perception and the planners."/>
+  <arg name="obstacles" default="false"
+       description="Static obstacle avoidance: perception + the spline planner"/>
+
   <arg name="joy_max_speed" default="5.0"
        description="[m/s] full stick on the manual override. The controller is
                     capped separately, by global_limit in speed_scaling.yaml."/>
   <arg name="use_sim_time" default="false"/>
   <arg name="rviz" default="true"/>
   <arg name="foxglove" default="false"/>
+
+  <!-- Derived, not a second switch: looking at obstacles and having something
+       to publish them are the same decision. -->
+  <let name="timetrials_only" value="true"  unless="$(var obstacles)"/>
+  <let name="timetrials_only" value="false" if="$(var obstacles)"/>
 
   <let name="config_dir" value="$(find-pkg-share stack_master)/config/car"/>
 
@@ -137,6 +162,25 @@
     <!-- The VESC's IMU, under the name the controller expects. -->
     <remap from="/imu/data" to="/vesc/sensors/imu/raw"/>
   </node>
+
+  <!-- ===== static obstacle avoidance ===== -->
+  <group if="$(var obstacles)">
+    <node pkg="perception" exec="detect" name="detect" output="screen">
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+    <node pkg="perception" exec="tracking_node" name="tracking" output="screen">
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+
+    <!-- spline, not spline_planner's dynamic_avoidance_node: that one only
+         plans while /ot_section_check says yes, and nothing says yes on a map
+         without overtaking sectors. Both publish the same topic, so only one
+         may run. -->
+    <node pkg="spline" exec="spline_node" name="spline_node" output="screen">
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+      <remap from="/planner/avoidance/otwpnts" to="/planner/avoidance/static_otwpnts"/>
+    </node>
+  </group>
 
   <!-- ===== command arbitration ===== -->
   <!-- The only thing that reaches the VESC. Holding LB gives the stick control,

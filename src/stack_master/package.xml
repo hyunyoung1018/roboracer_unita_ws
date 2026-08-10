@@ -51,6 +51,9 @@
        exec, and catkin_pkg rejects the package outright for the redundancy. -->
   <exec_depend>controller</exec_depend>
   <exec_depend>state_machine</exec_depend>
+  <!-- time_trials.launch.xml obstacles:=true -->
+  <exec_depend>perception</exec_depend>
+  <exec_depend>spline</exec_depend>
 
   <!-- base_system.launch.xml -->
   <exec_depend>raceline</exec_depend>
