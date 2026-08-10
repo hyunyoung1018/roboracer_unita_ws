@@ -14,7 +14,13 @@ class FrenetOdomRepublisher(Node):
     def __init__(self):
         super().__init__('frenet_odom_republisher')
         self.has_global_trajectory = False
-        self.frenet_odom_publisher_ = self.create_publisher(Odometry, '/car_state/frenet/odom', 10)
+        # /car_state/odom_frenet, not race_stack's /car_state/frenet/odom. Seven
+        # nodes subscribe to the first name and one to the second, so the
+        # producer moves rather than every consumer being remapped in the
+        # launch - a remap that has to be repeated per node is a remap that
+        # gets forgotten, and forgetting it here made the spline planner sit
+        # silently on a None odom and never plan anything.
+        self.frenet_odom_publisher_ = self.create_publisher(Odometry, '/car_state/odom_frenet', 10)
         self.frenet_pose_publisher_ = self.create_publisher(PoseStamped, '/car_state/frenet/pose', 10)
 
         self.global_trajectory_sub_ = self.create_subscription(

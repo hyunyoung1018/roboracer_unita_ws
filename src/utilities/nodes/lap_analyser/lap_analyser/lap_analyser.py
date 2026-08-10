@@ -53,7 +53,7 @@ class LapAnalyser(Node):
         # while self.global_lateral_waypoints is None:
         #     print("[Lap Analyzer] Waiting for global lateral waypoints")
         #     time.sleep(0.1)
-        self.odom_frenet_sub = self.create_subscription(Odometry, '/car_state/frenet/odom', self.frenet_odom_cb, 10) # car odom in frenet frame
+        self.odom_frenet_sub = self.create_subscription(Odometry, '/car_state/odom_frenet', self.frenet_odom_cb, 10) # car odom in frenet frame
 
         self.lap_analy_sub = self.create_subscription(Empty, '/lap_analyser/start', self.start_log_cb, 10)
 

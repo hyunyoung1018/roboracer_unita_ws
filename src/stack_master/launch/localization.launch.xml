@@ -12,7 +12,7 @@
       map_server        serves maps/<map>/<map>.yaml
       particle_filter   /scan against that map      -> /pf/pose/odom
       ekf_localization  that + /vesc/odom           -> /car_state/odom + TF
-      frenet_odom_republisher                       -> /car_state/frenet/*
+      frenet_odom_republisher                       -> /car_state/odom_frenet
       raceline_publisher                            -> /global_waypoints
 
   Structure follows UNIST's localization launch. The two-source EKF is the part

@@ -153,10 +153,6 @@
     <param name="sim" value="$(var use_sim_time)"/>
     <param name="map" value="$(var map)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
-    <!-- Our frenet republisher publishes /car_state/frenet/odom; UNIST's nodes
-         expect /car_state/odom_frenet. Remapped rather than renamed so the
-         republisher keeps the name race_stack gave it. -->
-    <remap from="/car_state/odom_frenet" to="/car_state/frenet/odom"/>
   </node>
 
   <!-- ===== the controller ===== -->
@@ -165,7 +161,6 @@
     <param name="save_yaml_path" value="$(var config_dir)/controller.yaml"/>
     <param name="sim" value="$(var use_sim_time)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
-    <remap from="/car_state/odom_frenet" to="/car_state/frenet/odom"/>
     <!-- The VESC's IMU, under the name the controller expects. -->
     <remap from="/imu/data" to="/vesc/sensors/imu/raw"/>
   </node>
