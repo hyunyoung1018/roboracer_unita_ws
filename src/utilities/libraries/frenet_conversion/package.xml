@@ -3,18 +3,26 @@
 <package format="3">
   <name>frenet_conversion</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Frenet coordinate conversion, for python and C++ consumers</description>
   <maintainer email="kuehnej@ethz.ch">kuehnej</maintainer>
-  <license>TODO: License declaration</license>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>f110_msgs</depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
 
-  <exec_depend>rclpy</exec_depend>
-
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

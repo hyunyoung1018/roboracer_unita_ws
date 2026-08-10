@@ -49,6 +49,12 @@ detect:
 
     # Optional cluster-inside-track check.
     # 0.0 = center-only boundary check.
+    #
+    # PYTHON DETECTOR ONLY. The C++ one (detector_cpp:=true) tests every lidar
+    # return against the track boundaries before clustering, so every point of
+    # every cluster is on-track by construction and a ratio would always be 1.
+    # An undeclared parameter in a params file is ignored, not an error, so
+    # this line is simply inert when the C++ node is running.
     min_inside_ratio: 0.0
 
     # Profiling
