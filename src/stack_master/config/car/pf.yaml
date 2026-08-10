@@ -30,10 +30,27 @@ particle_filter:
     viz: 1
     max_viz_particles: 60
 
-    # Ray casting. 'rm' and 'cddt' are CPU; 'rmgpu' needs range_libc built with
-    # CUDA and is much faster - worth doing on the Jetson if the filter cannot
-    # keep up. Check with: ros2 topic hz /pf/pose/odom
-    range_method: 'rm'
+    # Ray casting, and the filter's whole cost: 1081/angle_step beams times
+    # max_particles times the scan rate, which is about 5 million casts a
+    # second here.
+    #
+    # 'rm' marches each ray a cell at a time and is the slowest of these.
+    # 'pcddt' precomputes a compressed directional distance transform at
+    # startup and then answers each query in near-constant time. The
+    # precompute scales with the map, and ours are tiny - test_2 is 167x274
+    # cells and a 22x8 m competition track is 160x440, so it costs a moment at
+    # startup and is repaid every scan after.
+    #
+    # 'glt' is faster still and trades memory for it: theta_discretization
+    # times the cell count, about 31 MB at competition size. Affordable, if
+    # pcddt turns out not to be enough.
+    #
+    # 'rmgpu' needs range_libc rebuilt WITH_CUDA=ON. Keep it as the last
+    # resort - it is a rebuild with its own JetPack risks, for a win the CPU
+    # methods above already give on maps this small.
+    #
+    # Check the rate it achieves with: ros2 topic hz /pf/pose/odom
+    range_method: 'pcddt'
     theta_discretization: 112
 
     # Matches the UST-10LX's guaranteed range.
