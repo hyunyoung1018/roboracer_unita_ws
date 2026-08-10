@@ -198,7 +198,7 @@
     <param name="joy_max_speed" value="$(var joy_max_speed)"/>
     <!-- [rad] the car's measured steering limit. The mux default is 0.4,
          which asks for more than the car has. -->
-    <param name="joy_max_steer" value="0.2955"/>
+    <param name="joy_max_steer" value="0.2954"/>
     <!-- The mux carries its own copy of the servo calibration for its steering
          clip. Point it at the real numbers so the two cannot drift apart;
          config/car/vesc.yaml is where they are kept. -->

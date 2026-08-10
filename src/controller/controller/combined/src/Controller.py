@@ -62,7 +62,7 @@ class Controller:
 
                 converter,
 
-                steer_max=0.2955,
+                steer_max=0.2954,
                 predict_pub=None,
                 logger_info=logging.info,
                 logger_warn=logging.warning,

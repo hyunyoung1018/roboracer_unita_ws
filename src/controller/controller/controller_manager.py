@@ -92,7 +92,7 @@ class ControllerManager(Node):
 
         self.use_sim = self._get_param('sim', False)
         self.wheelbase = self._get_param('wheelbase', 0.321)
-        self.steer_max = self._get_param('steer_max', 0.2955)
+        self.steer_max = self._get_param('steer_max', 0.2954)
         self.measuring = self._get_param('measure', False)
         self.state_machine_rate = self._get_param('state_machine_rate', 40)
 

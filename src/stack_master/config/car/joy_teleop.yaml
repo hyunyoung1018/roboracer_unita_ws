@@ -56,7 +56,7 @@ joy_teleop:
           # [rad] at full stick. The car's measured limit - full stick now
           # reaches the servo limit exactly instead of being clipped short of
           # it, which is what made the last fifth of stick travel dead.
-          scale: 0.2955
+          scale: 0.2954
           offset: 0.0
 
     # RB is reserved as the autonomous-handover button. It publishes nowhere
