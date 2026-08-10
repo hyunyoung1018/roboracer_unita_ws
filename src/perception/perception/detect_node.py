@@ -540,6 +540,22 @@ class DetectNode(Node):
         # ------------------------------------------------------------
         # Laser -> map
         # ------------------------------------------------------------
+        # How old is the pose we are about to place these points with? Every
+        # scan point gets stamped into the map through this one transform, so
+        # if it lags, every obstacle lands where the car was, not where it is -
+        # at 2 m/s a second of lag is two metres of error, which reads as
+        # boxes in the wrong place and detection that seems to trail reality.
+        # Using the latest transform is the right fallback, but doing it
+        # silently hides how far behind it is.
+        tf_age = (
+            self.get_clock().now() - Time.from_msg(transform.header.stamp)
+        ).nanoseconds / 1e9
+        if tf_age > 0.15:
+            self.get_logger().warning(
+                f'placing obstacles with a {tf_age:.2f} s old map->{frame_id} '
+                f'transform; they will sit where the car was that long ago',
+                throttle_duration_sec=5.0)
+
         rotated = _rotate(
             local,
             transform.transform.rotation,
