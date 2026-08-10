@@ -20,7 +20,7 @@ tracking:
 
 spline_node:
   ros__parameters:
-    lookahead: 5.0
+    lookahead: 10.0
     evasion_distance: 0.4
     trajectory_threshold: 0.6
     boundary_margin: 0.20
