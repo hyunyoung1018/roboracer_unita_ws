@@ -94,9 +94,8 @@ class TrackingNode(Node):
         # tracker still believes in is still reported; is_visible says whether
         # it was seen this frame, which is what that field is for.
         for track in self.tracks:
-            if track.missed <= max_missed and (publish_static or not track.obstacle.is_static):
-                track.obstacle.is_visible = bool(track.missed == 0)
-                output.obstacles.append(track.obstacle)
+            if publish_static or not track.obstacle.is_static:
+                output.obstacles.append(self._obstacle_for_output(track, stamp))
         self.obstacle_pub.publish(output)
         self.raw_pub.publish(msg)
         self.marker_pub.publish(self._markers(output))
@@ -155,6 +154,30 @@ class TrackingNode(Node):
         ):
             setattr(target, field, getattr(source, field))
         return target
+
+    def _obstacle_for_output(self, track, stamp):
+        """Publish retained tracks through short detector dropouts.
+
+        A missed track is no longer a current LiDAR observation, so expose that
+        distinction through is_visible.  Dynamic tracks are propagated from the
+        last measurement with their filtered constant velocity; static tracks
+        remain at their last measured position.
+        """
+        obstacle = self._copy_obstacle(track.obstacle)
+        obstacle.is_visible = track.missed == 0
+        if track.missed == 0 or obstacle.is_static:
+            return obstacle
+
+        dt = max(0.0, stamp - track.stamp)
+        ds = obstacle.vs * dt
+        dd = obstacle.vd * dt
+        obstacle.s_center = float((obstacle.s_center + ds) % self.track_length)
+        obstacle.s_start = float((obstacle.s_start + ds) % self.track_length)
+        obstacle.s_end = float((obstacle.s_end + ds) % self.track_length)
+        obstacle.d_center = float(obstacle.d_center + dd)
+        obstacle.d_right = float(obstacle.d_right + dd)
+        obstacle.d_left = float(obstacle.d_left + dd)
+        return obstacle
 
     def _markers(self, obstacles):
         array = MarkerArray()

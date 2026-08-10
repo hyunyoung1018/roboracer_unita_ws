@@ -168,9 +168,11 @@
   <!-- ===== static obstacle avoidance ===== -->
   <group if="$(var obstacles)">
     <node pkg="perception" exec="detect" name="detect" output="screen">
+      <param from="$(var config_dir)/perception.yaml"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
     </node>
     <node pkg="perception" exec="tracking_node" name="tracking" output="screen">
+      <param from="$(var config_dir)/perception.yaml"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
     </node>
 
@@ -179,6 +181,7 @@
          without overtaking sectors. Both publish the same topic, so only one
          may run. -->
     <node pkg="spline" exec="spline_node" name="spline_node" output="screen">
+      <param from="$(var config_dir)/perception.yaml"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
       <remap from="/planner/avoidance/otwpnts" to="/planner/avoidance/static_otwpnts"/>
     </node>

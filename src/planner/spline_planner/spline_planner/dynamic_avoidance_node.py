@@ -14,6 +14,32 @@ from visualization_msgs.msg import Marker, MarkerArray
 from frenet_conversion.frenet_converter import FrenetConverter
 
 
+def _path_heading_and_curvature(x, y):
+    """Return heading and signed curvature for a sampled Cartesian path."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size < 2:
+        return np.zeros_like(x), np.zeros_like(x)
+
+    edge_order = 2 if x.size >= 3 else 1
+    dx = np.gradient(x, edge_order=edge_order)
+    dy = np.gradient(y, edge_order=edge_order)
+    heading = np.arctan2(dy, dx)
+    if x.size < 3:
+        return heading, np.zeros_like(x)
+
+    ddx = np.gradient(dx, edge_order=edge_order)
+    ddy = np.gradient(dy, edge_order=edge_order)
+    denominator = np.power(dx * dx + dy * dy, 1.5)
+    curvature = np.divide(
+        dx * ddy - dy * ddx,
+        denominator,
+        out=np.zeros_like(denominator),
+        where=denominator > 1e-9,
+    )
+    return heading, curvature
+
+
 class DynamicAvoidanceNode(Node):
     def __init__(self):
         super().__init__('dynamic_avoidance_node')
@@ -141,6 +167,7 @@ class DynamicAvoidanceNode(Node):
                 sample_d = savgol_filter(sample_d, window, 2)
         sample_s = sample_unwrapped % max_s
         xy = self.converter.get_cartesian(sample_s, sample_d)
+        path_psi, path_kappa = _path_heading_and_curvature(xy[0], xy[1])
 
         for i, (s_m, d_m) in enumerate(zip(sample_s, sample_d)):
             idx = int(np.argmin(np.abs(ref_s - s_m)))
@@ -153,7 +180,7 @@ class DynamicAvoidanceNode(Node):
                 id=i, s_m=float(s_m), d_m=float(d_m),
                 x_m=float(xy[0, i]), y_m=float(xy[1, i]),
                 d_left=base.d_left, d_right=base.d_right,
-                psi_rad=base.psi_rad, kappa_radpm=base.kappa_radpm,
+                psi_rad=float(path_psi[i]), kappa_radpm=float(path_kappa[i]),
                 vx_mps=base.vx_mps, ax_mps2=base.ax_mps2,
             ))
         result.ot_side = max(set(side_votes), key=side_votes.count)

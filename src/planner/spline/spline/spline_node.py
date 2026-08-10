@@ -16,6 +16,32 @@ from visualization_msgs.msg import Marker, MarkerArray
 from frenet_conversion.frenet_converter import FrenetConverter
 
 
+def _path_heading_and_curvature(x, y):
+    """Return heading and signed curvature for a sampled Cartesian path."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size < 2:
+        return np.zeros_like(x), np.zeros_like(x)
+
+    edge_order = 2 if x.size >= 3 else 1
+    dx = np.gradient(x, edge_order=edge_order)
+    dy = np.gradient(y, edge_order=edge_order)
+    heading = np.arctan2(dy, dx)
+    if x.size < 3:
+        return heading, np.zeros_like(x)
+
+    ddx = np.gradient(dx, edge_order=edge_order)
+    ddy = np.gradient(dy, edge_order=edge_order)
+    denominator = np.power(dx * dx + dy * dy, 1.5)
+    curvature = np.divide(
+        dx * ddy - dy * ddx,
+        denominator,
+        out=np.zeros_like(denominator),
+        where=denominator > 1e-9,
+    )
+    return heading, curvature
+
+
 class SplineNode(Node):
     """Generate a local overtaking line around the nearest relevant obstacle."""
 
@@ -212,6 +238,7 @@ class SplineNode(Node):
             out.wpnts.append(Wpnt(
                 id=idx, s_m=float(s_m), d_m=float(d_m),
                 x_m=float(xy[0, idx]), y_m=float(xy[1, idx]),
+                psi_rad=float(path_psi[idx]), kappa_radpm=float(path_kappa[idx]),
                 psi_rad=float(psi_path[idx]), kappa_radpm=float(kappa_path[idx]),
                 vx_mps=base.vx_mps, ax_mps2=base.ax_mps2,
                 d_left=base.d_left, d_right=base.d_right,
