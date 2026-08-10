@@ -238,7 +238,6 @@ class SplineNode(Node):
             out.wpnts.append(Wpnt(
                 id=idx, s_m=float(s_m), d_m=float(d_m),
                 x_m=float(xy[0, idx]), y_m=float(xy[1, idx]),
-                psi_rad=float(path_psi[idx]), kappa_radpm=float(path_kappa[idx]),
                 psi_rad=float(psi_path[idx]), kappa_radpm=float(kappa_path[idx]),
                 vx_mps=base.vx_mps, ax_mps2=base.ax_mps2,
                 d_left=base.d_left, d_right=base.d_right,

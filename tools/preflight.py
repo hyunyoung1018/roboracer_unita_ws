@@ -12,6 +12,8 @@ each of these has cost a round trip to the Jetson and back:
   * two workspace packages that depend on each other, which colcon refuses to
     order at all - it does not build a subset, it builds nothing
   * a launch file using $(var x) that no <arg> or <let> declares
+  * a python file that does not compile - a rebase can apply two patches
+    cleanly and still leave a duplicated keyword or an orphaned name behind
   * a yaml or xacro that stopped parsing
 
 Not a substitute for building. It just makes the trip worth taking.
@@ -78,6 +80,43 @@ def check_launch_vars():
             fail(f, f"$(var {used}) has no <arg> or <let>")
 
 
+# Vendored or third-party trees we do not own and do not lint.
+SKIP = ("global_racetrajectory_optimization", "f1tenth_gym", "/deprecated/")
+
+
+def check_python():
+    """Compile every python file we maintain.
+
+    Only syntax, but syntax is what a clean-looking rebase breaks: two patches
+    that both edit the same call can each apply and leave the keyword twice.
+    pyflakes catches more (an orphaned name from the same merge, for one), so
+    use it when it happens to be installed.
+    """
+    try:
+        from pyflakes.api import checkPath
+        from pyflakes.reporter import Reporter
+        import io
+        have_pyflakes = True
+    except ImportError:
+        have_pyflakes = False
+
+    for f in sorted(glob.glob("src/**/*.py", recursive=True)):
+        if any(skip in f for skip in SKIP):
+            continue
+        src = open(f, encoding="utf-8", errors="replace").read()
+        try:
+            compile(src, f, "exec")
+        except SyntaxError as e:
+            fail(f, f"line {e.lineno}: {e.msg}")
+            continue
+        if have_pyflakes:
+            out, err = io.StringIO(), io.StringIO()
+            if checkPath(f, Reporter(out, err)):
+                for line in out.getvalue().splitlines():
+                    if "undefined name" in line or "redefinition" in line:
+                        fail(f, line.split(":", 1)[-1].strip())
+
+
 def check_parses():
     for f in glob.glob("src/**/*.xml", recursive=True) + glob.glob("src/**/*.xacro", recursive=True):
         try:
@@ -93,6 +132,7 @@ def check_parses():
 
 def main():
     check_package_xml()
+    check_python()
     check_dependency_cycles()
     check_launch_vars()
     check_parses()
