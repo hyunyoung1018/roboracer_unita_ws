@@ -1,6 +1,12 @@
 min_horizon: 0.0
 max_horizon: 10.0
-lateral_width_m: 0.1
+# [m] Clearance the avoidance path must have beyond half the car's width
+# before the state machine calls it free. Together with gb_ego_width_m (0.4)
+# this sets a floor on evasion_distance of 0.2 + this, and at 0.1 that floor
+# was 0.30 against a planner ceiling of 0.33 - a 3 cm window on this track.
+# 0.05 opens it to 8 cm. gb_ego_width_m is already 0.4 against a car that
+# measures 0.28, so the conservatism lost here is still there.
+lateral_width_m: 0.05
 free_scaling_reference_distance_m: 2.0
 # [s] How old the planner's path may be. It replans at 20 Hz, so 0.1 was two
 # cycles of slack and the jetson lost that regularly - "path is 0.171 s old"

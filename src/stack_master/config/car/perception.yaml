@@ -21,8 +21,30 @@ tracking:
 spline_node:
   ros__parameters:
     lookahead: 10.0
-    evasion_distance: 0.4
+
+    # [m] How far the path passes the obstacle's edge. Squeezed from both
+    # sides, and on test_213 the window is only 0.03 m wide.
+    #
+    # Upper bound, the planner: evasion + boundary_margin has to fit between
+    # the obstacle and the track edge. Worked back from the refusals - "right
+    # 0.13 m, need 0.20, evasion_distance 0.40" - the tightest obstacle allows
+    # 0.33. This track's half-widths measure 0.38 to 0.54 m, so the corridor is
+    # barely a metre across and the geometry really is that tight.
+    #
+    # Lower bound, the state machine: it judges the path free only if
+    # evasion - gb_ego_width_m/2 clears lateral_width_m. At 0.4 and 0.1 that
+    # needs 0.30, which left no window at all; static_avoidance_planner.yaml
+    # drops lateral_width_m to 0.05 so 0.25 suffices.
+    #
+    # 0.30 sits inside both. Real clearance to the obstacle is 0.30 minus the
+    # car's own half-width of 0.14, so 16 cm.
+    evasion_distance: 0.30
+
     trajectory_threshold: 0.6
+
+    # [m] How close the path's centreline may come to the track edge. NOT
+    # reducible below the car's half width of 0.14 - at 0.20 the car passes
+    # 6 cm from the wall, and 0.15 would put it 1 cm away.
     boundary_margin: 0.20
     spline_resolution: 0.10
     measure: false
