@@ -861,6 +861,25 @@ class StateMachine(Node):
                 return True
         return False
 
+    @staticmethod
+    def _lateral_half_width(obs) -> float:
+        """Half the obstacle's LATERAL extent, in metres.
+
+        Not size/2. UNIST's detector models every obstacle as a square of side
+        `size` and fills d_left/d_right from that same number, so there size/2
+        is the lateral half-width. Ours measures the real Frenet extents per
+        axis and reports `size` as the diameter of the circle that bounds the
+        cluster - the longest span in any direction. For anything elongated
+        along the track that is far wider than the obstacle actually is
+        sideways, and this is the clearance test, so the path gets judged
+        blocked when it is not. Measured on the car: size ran about 0.58 m
+        larger than the lateral extent.
+
+        Falls back to size/2 for a producer that leaves the d bounds at zero.
+        """
+        lateral = float(obs.d_left) - float(obs.d_right)
+        return lateral / 2.0 if lateral > 1e-6 else float(obs.size) / 2.0
+
     def _check_free_frenet(self, wpnts_data) -> bool:
         is_free = True
         closest_obs = None
@@ -908,7 +927,7 @@ class StateMachine(Node):
                             avoid_wpnt_idx = np.argmin(abs(wpnts_data.array[:, 2] - obs_s))
                             ot_d = wpnts_data.list[avoid_wpnt_idx].d_m
                         min_dist = abs(ot_d - obs_d)
-                        free_dist = min_dist - obs.size / 2 - self.gb_ego_width_m / 2
+                        free_dist = min_dist - self._lateral_half_width(obs) - self.gb_ego_width_m / 2
                         scaling_factor = np.clip(gap / free_scaling_reference_distance_m, 0.0, 1.0)
                         rec["branch"] = "static/geom"
                         rec["free_dist"] = round(float(free_dist), 3)
@@ -939,7 +958,7 @@ class StateMachine(Node):
                             wpnt_idx = np.argmin(abs(wpnts_data.array[:, 2] - obs_pred.pred_s))
                             wpnt_d = wpnts_data.list[wpnt_idx].d_m
                             min_dist = abs(wpnt_d - obs_pred.pred_d)
-                            free_dist = min_dist - obs.size / 2 - self.gb_ego_width_m / 2
+                            free_dist = min_dist - self._lateral_half_width(obs) - self.gb_ego_width_m / 2
                             scaling_factor = np.clip(gap / free_scaling_reference_distance_m, 0.0, 1.0)
                             if worst_fd is None or free_dist < worst_fd:
                                 worst_fd = free_dist
@@ -975,7 +994,7 @@ class StateMachine(Node):
                                 avoid_wpnt_idx = np.argmin(abs(wpnts_data.array[:, 2] - obs.s_center))
                                 ot_d = wpnts_data.list[avoid_wpnt_idx].d_m
                             min_dist = abs(ot_d - obs.d_center)
-                            free_dist = min_dist - obs.size / 2 - self.gb_ego_width_m / 2
+                            free_dist = min_dist - self._lateral_half_width(obs) - self.gb_ego_width_m / 2
                             scaling_factor = np.clip(gap / free_scaling_reference_distance_m, 0.0, 1.0)
                             rec["free_dist"] = round(float(free_dist), 3)
                             if free_dist < lateral_width_m * scaling_factor:
@@ -1017,7 +1036,7 @@ class StateMachine(Node):
                 if gap < max_horizon or min_horizon < (gap - self.max_s):
                     dists = np.linalg.norm(wpnts_data.array[:, 0:2] - np.array([obs.x_m, obs.y_m]), axis=1)
                     min_dist = np.min(dists)
-                    free_dist = min_dist - obs.size / 2 - self.gb_ego_width_m / 2
+                    free_dist = min_dist - self._lateral_half_width(obs) - self.gb_ego_width_m / 2
                     scaling_factor = np.clip(gap / free_scaling_reference_distance_m, 0.0, 1.0)
                     if free_dist < lateral_width_m * scaling_factor:
                         is_free = False

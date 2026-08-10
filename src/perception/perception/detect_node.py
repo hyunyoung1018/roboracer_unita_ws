@@ -139,6 +139,11 @@ class DetectNode(Node):
 
     def _to_obstacle(self, cluster, obstacle_id):
         center = np.mean(cluster, axis=0)
+        # Diameter of the circle bounding the cluster - the longest span in any
+        # direction. Used for the min_size/max_size filters, which is what it
+        # suits: it answers "how big is this thing". It is NOT the lateral
+        # width, and consumers wanting clearance should take that from
+        # d_left/d_right below, which are the real per-axis extents.
         size = float(np.max(np.linalg.norm(cluster - center, axis=1)) * 2.0)
         if not float(self.get_parameter('min_size').value) <= size <= float(self.get_parameter('max_size').value):
             return None
