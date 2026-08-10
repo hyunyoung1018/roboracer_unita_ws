@@ -237,34 +237,45 @@ class DetectNode(Node):
         )
 
         # ------------------------------------------------------------
-        # LaserScan timestamp 기반 TF
+        # TF at the scan's own timestamp, falling back to the latest
         # ------------------------------------------------------------
-        scan_time = Time.from_msg(
-            scan.header.stamp
-        )
-
-        # stamp가 0이면 latest TF 사용
+        # Asking for the transform AT the scan's stamp is the correct thing:
+        # it compensates for the car having moved between the sweep and now.
+        # But it only succeeds while tf holds data bracketing that instant, and
+        # on this jetson - scan at 40 Hz, the ekf already missing its own
+        # deadlines - it frequently does not inside a 50 ms timeout. Returning
+        # in that case stops detection completely, silently, because the
+        # warning latches after one print. That is what "no obstacles at all"
+        # was.
+        #
+        # So: try the stamp, and if tf cannot serve it, take the latest
+        # transform instead. At the speed this branch runs, the difference is a
+        # couple of centimetres of lateral error - against not detecting.
+        scan_time = Time.from_msg(scan.header.stamp)
         if scan_time.nanoseconds == 0:
             scan_time = Time()
 
+        transform = None
         try:
             transform = self.tf_buffer.lookup_transform(
-                'map',
-                frame_id,
-                scan_time,
-                timeout=Duration(seconds=0.05),
-            )
-
-        except TransformException as exc:
-            if not self._warned_tf:
+                'map', frame_id, scan_time, timeout=Duration(seconds=0.05))
+            self._warned_tf = False
+        except TransformException as stamped_exc:
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    'map', frame_id, Time(), timeout=Duration(seconds=0.05))
                 self.get_logger().warning(
-                    f'Cannot transform {frame_id} into map: {exc}'
-                )
-                self._warned_tf = True
-
-            return
-
-        self._warned_tf = False
+                    f'no tf at the scan stamp ({stamped_exc}); using the latest',
+                    throttle_duration_sec=5.0)
+                self._warned_tf = False
+            except TransformException as latest_exc:
+                # Throttled, not latched: before this it warned once and then
+                # went quiet for good, so a permanent failure looked the same
+                # as a single startup hiccup.
+                self.get_logger().warning(
+                    f'Cannot transform {frame_id} into map: {latest_exc}',
+                    throttle_duration_sec=5.0)
+                return
 
         # ------------------------------------------------------------
         # LaserScan -> numpy
