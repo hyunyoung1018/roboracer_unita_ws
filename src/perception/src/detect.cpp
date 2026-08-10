@@ -464,17 +464,32 @@ std::vector<Obstacle> Detect::fittingLShape(const std::vector<Cluster> & cluster
       }
     }
 
-    const double size = std::max(std::max(max1 - min1, max2 - min2), min_size_m_);
-    const double half = size / 2.0;
+    // Per axis, not a square of the longest side.
+    //
+    // `size = max(width, height)` is what UNIST publishes, and it inflates
+    // whichever dimension is smaller. The lidar sees a cone as a shallow arc,
+    // wider across the beam than it is deep, so squaring it off turned a
+    // 0.15 m cone into a 0.5 m obstacle - and both the spline planner and the
+    // state machine subtract that width from the room either side. On a
+    // corridor barely a metre across it consumed the entire gap.
+    //
+    // Each axis is floored at min_size_m instead: only the near face is ever
+    // measured, so the dimension along the viewing direction is always an
+    // underestimate, and anchoring at the near corner below is what covers
+    // the occluded far side.
+    const double width = std::max(max1 - min1, min_size_m_);
+    const double height = std::max(max2 - min2, min_size_m_);
 
     std::pair<double, double> center = corners[closest_corner];
-    center.first += (closest_corner < 2) ? -half : half;
-    center.second += (closest_corner % 2 == 0) ? -half : half;
+    center.first += (closest_corner < 2) ? -width / 2.0 : width / 2.0;
+    center.second += (closest_corner % 2 == 0) ? -height / 2.0 : height / 2.0;
 
     Obstacle obstacle;
     obstacle.center_x = cos_opt * center.first - sin_opt * center.second;
     obstacle.center_y = sin_opt * center.first + cos_opt * center.second;
-    obstacle.size = size;
+    // Kept as the bounding square's side, which is what it has always meant:
+    // the marker draws a cube with it and checkObstacles rejects on it.
+    obstacle.size = std::max(width, height);
     obstacle.theta = theta;
 
     int idx = closest_idx_;
@@ -486,33 +501,66 @@ std::vector<Obstacle> Detect::fittingLShape(const std::vector<Cluster> & cluster
     }
     obstacle.s_center = wrap(obstacle.s_center, track_length_);
 
-    // Real per-axis extents, from the points themselves.
+    // Extents from the fitted rectangle's corners, NOT from the points.
     //
-    // Publishing center +/- size/2 on both axes - which is what UNIST does,
-    // and what the python detector did until it was replaced - models every
-    // obstacle as a square whose side is its LONGEST dimension. A cone is a
-    // shallow arc, wider across the beam than deep, so a 0.15 m cone was
-    // published half a metre wide, and both the spline planner and the state
-    // machine subtract that width from the room either side of it. On a
-    // corridor barely a metre across that consumed the entire gap.
+    // The points cannot give the extents directly, because they do not
+    // surround the centre. The rectangle is anchored at the corner nearest the
+    // sensor and extends away from it - that is how the occluded far side gets
+    // modelled at all - so every measured point lies near one corner, and
+    // measuring outward from the centre gave, on the same obstacle:
     //
-    // Floored at min_size_m/2: only the near face is ever measured, so the
-    // extent along the viewing direction is always an underestimate.
-    const double floor_half = min_size_m_ / 2.0;
-    double s_back = floor_half;
-    double s_front = floor_half;
-    double d_right = floor_half;
-    double d_left = floor_half;
+    //   the side the points are on:  their spread PLUS the corner-to-centre
+    //                                displacement, so too wide, and the
+    //                                planner refused a gap that was there
+    //   the side away from them:     no points at all, so the min_size_m/2
+    //                                floor, so too narrow, and the car cut in
+    //                                and hit the obstacle
+    //
+    // One error, both symptoms, on opposite sides of the same object. The
+    // rectangle is already the model that accounts for occlusion; project it
+    // instead. Four corners, and this also handles the rotation properly -
+    // centre +/- size/2 assumed the box was aligned with the track, and a box
+    // at 45 degrees is 41% wider in d than that.
+    const double half_w = width / 2.0;
+    const double half_h = height / 2.0;
+    const std::pair<double, double> box[4] = {
+      {center.first - half_w, center.second - half_h},
+      {center.first - half_w, center.second + half_h},
+      {center.first + half_w, center.second - half_h},
+      {center.first + half_w, center.second + half_h}};
 
-    for (const ScanPoint & point : cluster) {
-      // Signed, so the extent survives a cluster straddling the s = 0 seam.
+    double s_back = 0.0;
+    double s_front = 0.0;
+    double d_right = 0.0;
+    double d_left = 0.0;
+    bool corners_valid = true;
+
+    for (const auto & corner : box) {
+      const double corner_x = cos_opt * corner.first - sin_opt * corner.second;
+      const double corner_y = sin_opt * corner.first + cos_opt * corner.second;
+
+      double corner_s = 0.0;
+      double corner_d = 0.0;
+      int corner_idx = idx;
+      frenet_converter_.GetFrenetPoint(corner_x, corner_y, &corner_s, &corner_d,
+        &corner_idx, false);
+      if (!std::isfinite(corner_s) || !std::isfinite(corner_d)) {
+        corners_valid = false;
+        break;
+      }
+
+      // Signed, so the extent survives a box straddling the s = 0 seam.
       const double ds =
-        wrap(point.s - obstacle.s_center + track_length_ / 2.0, track_length_) -
+        wrap(corner_s - obstacle.s_center + track_length_ / 2.0, track_length_) -
         track_length_ / 2.0;
       s_back = std::max(s_back, -ds);
       s_front = std::max(s_front, ds);
-      d_right = std::max(d_right, obstacle.d_center - point.d);
-      d_left = std::max(d_left, point.d - obstacle.d_center);
+      d_right = std::max(d_right, obstacle.d_center - corner_d);
+      d_left = std::max(d_left, corner_d - obstacle.d_center);
+    }
+
+    if (!corners_valid) {
+      continue;
     }
 
     obstacle.s_back = s_back;
