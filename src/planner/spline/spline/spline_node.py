@@ -101,6 +101,18 @@ class SplineNode(Node):
         if self.measure:
             self.latency_pub.publish(Float32(data=float(time.perf_counter() - started)))
 
+    def _bail(self, out, reason):
+        """Return an empty path, but say why.
+
+        Every exit from _plan below publishes an empty OTWpntArray, which the
+        state machine reads as "no avoidance available" and silently keeps
+        trailing. Without a reason on the way out, a planner that never manages
+        to route around anything looks identical to one that is not running.
+        """
+        out.wpnts.clear()
+        self.get_logger().info(f"no avoidance path: {reason}", throttle_duration_sec=2.0)
+        return out
+
     def _plan(self):
         out = OTWpntArray()
         out.header.stamp = self.get_clock().now().to_msg()
@@ -116,7 +128,7 @@ class SplineNode(Node):
             and abs(obstacle.d_center) < self.trajectory_threshold
         ]
         if not candidates:
-            return out
+            return out  # nothing in range; not a failure, so not logged
         obstacle = min(candidates, key=lambda item: (item.s_center - cur_s) % max_s)
         reference = self.scaled_msg.wpnts
         s_values = np.asarray([w.s_m for w in reference])
@@ -133,7 +145,12 @@ class SplineNode(Node):
         elif right_room >= self.boundary_margin:
             side, apex_d = 'right', min(0.0, right_apex)
         else:
-            return out
+            return self._bail(
+                out,
+                f"no room either side of obstacle at s={apex_s:.2f}: "
+                f"left {left_room:.2f} m, right {right_room:.2f} m, "
+                f"need {self.boundary_margin:.2f} "
+                f"(evasion_distance {self.evasion_distance:.2f})")
 
         speed = max(1.0, abs(self.odom.twist.twist.linear.x))
         scale = np.clip(1.0 + speed / max(1.0, max(w.vx_mps for w in reference)), 1.0, 1.5)
@@ -152,8 +169,10 @@ class SplineNode(Node):
             base = reference[waypoint_idx]
             available = base.d_left if d_m >= 0.0 else base.d_right
             if abs(d_m) > max(0.0, available - self.boundary_margin):
-                out.wpnts.clear()
-                return out
+                return self._bail(
+                    out,
+                    f"path leaves the track at s={s_m:.2f}: needs d={d_m:.2f} m, "
+                    f"bound {available:.2f} m less {self.boundary_margin:.2f} margin")
             out.wpnts.append(Wpnt(
                 id=idx, s_m=float(s_m), d_m=float(d_m),
                 x_m=float(xy[0, idx]), y_m=float(xy[1, idx]),
