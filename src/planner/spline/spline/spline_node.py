@@ -128,7 +128,16 @@ class SplineNode(Node):
             and abs(obstacle.d_center) < self.trajectory_threshold
         ]
         if not candidates:
-            return out  # nothing in range; not a failure, so not logged
+            if self.obstacles.obstacles:
+                nearest = min(self.obstacles.obstacles,
+                              key=lambda o: (o.s_center - cur_s) % max_s)
+                self.get_logger().info(
+                    f"{len(self.obstacles.obstacles)} obstacle(s), none in range: "
+                    f"nearest is {(nearest.s_center - cur_s) % max_s:.2f} m ahead "
+                    f"(lookahead {self.lookahead}) at d {nearest.d_center:.2f} "
+                    f"(threshold {self.trajectory_threshold})",
+                    throttle_duration_sec=2.0)
+            return out
         obstacle = min(candidates, key=lambda item: (item.s_center - cur_s) % max_s)
         reference = self.scaled_msg.wpnts
         s_values = np.asarray([w.s_m for w in reference])
@@ -182,6 +191,11 @@ class SplineNode(Node):
             ))
         out.ot_side = side
         out.ot_line = side
+        self.get_logger().info(
+            f"avoiding {side} around obstacle at s={apex_s:.2f}: "
+            f"apex d={apex_d:.2f} m, {len(out.wpnts)} waypoints over "
+            f"s {control_s[0]:.2f}..{control_s[-1]:.2f}",
+            throttle_duration_sec=2.0)
         return out
 
     def _markers(self, path):

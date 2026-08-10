@@ -809,13 +809,33 @@ class StateMachine(Node):
         # the car runs off its tail the freeze naturally lapses to unavailable.
         if wpnts_data.frozen:
             return bool(wpnts_data.is_init and self._check_on_spline(wpnts_data))
-        if src_wpnts is None or len(src_wpnts.wpnts) == 0:
+
+        # Four ways to say no, and they mean completely different things: the
+        # planner never published, it published an empty path, its path is too
+        # old, or the car is not near the path it drew. Say which.
+        def no(reason):
+            self.get_logger().info(
+                f"{wpnts_data.name}: not usable - {reason}", throttle_duration_sec=2.0)
             return False
-        elif (self.now_sec() - time_to_float(src_wpnts.header.stamp)) > wpnts_data.latest_threshold:
-            return False
-        else:
-            wpnts_data.initialize_traj(src_wpnts)
-            return bool(self._check_on_spline(wpnts_data))
+
+        if src_wpnts is None:
+            return no("nothing received on its topic yet")
+        if len(src_wpnts.wpnts) == 0:
+            return no("published an empty path")
+        age = self.now_sec() - time_to_float(src_wpnts.header.stamp)
+        if age > wpnts_data.latest_threshold:
+            return no(f"path is {age:.3f} s old, threshold {wpnts_data.latest_threshold}")
+        wpnts_data.initialize_traj(src_wpnts)
+        if not self._check_on_spline(wpnts_data):
+            gap = (wpnts_data.list[-1].s_m - self.cur_s) % self.track_length
+            min_dist = float(np.min(np.linalg.norm(
+                wpnts_data.array[:, 0:2] - self.current_position[:2], axis=1)))
+            return no(
+                f"car is not on it: nearest point {min_dist:.2f} m away "
+                f"(need < {wpnts_data.on_spline_min_dist_thres_m}), "
+                f"path ends {gap:.2f} m ahead "
+                f"(need > {wpnts_data.on_spline_front_horizon_thres_m})")
+        return True
 
     def _check_ftg(self) -> bool:
         threshold = self.ftg_timer_sec * self.rate_hz
