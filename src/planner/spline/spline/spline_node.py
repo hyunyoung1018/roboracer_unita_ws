@@ -56,8 +56,8 @@ class SplineNode(Node):
         self.last_path = None
 
         defaults = {
-            'lookahead': 5.0,
-            'evasion_distance': 0.4,
+            'lookahead': 3.0,
+            'evasion_distance': 0.2,
             'trajectory_threshold': 0.6,
             'boundary_margin': 0.20,
             'spline_resolution': 0.10,
