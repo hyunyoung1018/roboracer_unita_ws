@@ -11,7 +11,7 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
 class GridFilter:
     """Erode free space and test Cartesian path samples against the result."""
 
-    def __init__(self, node, map_topic='/map', kernel_size=7,
+    def __init__(self, node, map_topic='/map', kernel_size=3,
                  occupied_threshold=50, unknown_is_occupied=True):
         self.node = node
         self.kernel_size = max(1, int(kernel_size))

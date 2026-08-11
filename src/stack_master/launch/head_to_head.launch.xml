@@ -63,6 +63,7 @@
        are redirected for this mode. -->
   <node pkg="spline" exec="spline_node" name="spline_node" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
+    <param from="$(var config_dir)/head_to_head_spline.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
     <remap from="/tracking/obstacles" to="/tracking/static_obstacles"/>
     <remap from="/planner/avoidance/otwpnts" to="/planner/avoidance/static_otwpnts"/>
@@ -112,6 +113,11 @@
     <param name="timetrials_only" value="false"/>
     <param name="ot_planner" value="lane_change"/>
     <param name="use_force_trailing" value="true"/>
+    <!-- Physical width is used only in collision clearance checks. The
+         legacy 0.40 m gb_ego_width_m remains the raceline-state tolerance. -->
+    <param name="clearance_vehicle_width_m" value="0.28"/>
+    <param name="trailing_block_hold_sec" value="0.4"/>
+    <param name="trailing_target_hold_sec" value="0.5"/>
     <param name="sim" value="$(var use_sim_time)"/>
     <param name="map" value="$(var map)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
