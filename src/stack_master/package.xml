@@ -58,6 +58,12 @@
   <exec_depend>perception</exec_depend>
   <exec_depend>spline</exec_depend>
 
+  <!-- head_to_head.launch.xml only -->
+  <exec_depend>obstacle_router</exec_depend>
+  <exec_depend>spline_planner</exec_depend>
+  <exec_depend>lane_change_planner</exec_depend>
+  <exec_depend>gp_traj_predictor</exec_depend>
+
   <!-- base_system.launch.xml -->
   <exec_depend>raceline</exec_depend>
   <exec_depend>sector_tuner</exec_depend>

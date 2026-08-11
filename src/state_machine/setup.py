@@ -29,6 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'state_machine = state_machine.state_machine_node:main',
+            'driving_mode_monitor = state_machine.driving_mode_monitor:main',
         ],
     },
 )

@@ -1,0 +1,18 @@
+change_avoidance_node:
+  ros__parameters:
+    rate_hz: 20.0
+    lookahead: 15.0
+    vehicle_width: 0.28
+    safety_margin: 0.10
+    lane_offset: 0.35
+    back_to_raceline_before: 3.0
+    back_to_raceline_after: 3.0
+    obs_traj_thresh: 2.0
+    spline_bound_mindist: 0.05
+    pred_timeout: 0.5
+    max_evasion_start_offset: 0.8
+    path_resolution: 0.10
+    side_switch_frames: 10
+    map_erosion_kernel_size: 7
+    clear_after_frames: 5
+    measure: false

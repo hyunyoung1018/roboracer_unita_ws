@@ -1,0 +1,36 @@
+opponent_trajectory:
+  ros__parameters:
+    loop_rate: 25.0
+    max_opponent_distance: 30.0
+    max_measurement_age: 0.5
+    min_sample_distance: 0.10
+    max_sample_gap: 2.5
+    min_publish_samples: 8
+    max_samples: 400
+    off_trajectory_threshold: 0.30
+    off_trajectory_samples: 5
+
+gaussian_process_opp_traj:
+  ros__parameters:
+    min_training_points: 8
+    max_training_points: 200
+    d_length_scale: 1.0
+    vs_length_scale: 1.5
+    d_noise: 0.04
+    vs_noise: 0.15
+    gp_jitter: 0.000001
+    min_speed: 0.0
+    max_speed: 12.0
+
+opp_prediction:
+  ros__parameters:
+    loop_rate: 20.0
+    n_time_steps: 20
+    dt: 0.10
+    max_opponent_distance: 30.0
+    obstacle_timeout: 0.5
+    trajectory_timeout: 2.0
+    min_training_laps: 1.0
+    learned_deviation_threshold: 0.25
+    opponent_width: 0.28
+    speed_offset: 0.0

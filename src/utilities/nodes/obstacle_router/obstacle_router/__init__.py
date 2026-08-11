@@ -1,0 +1,1 @@
+"""Obstacle routing nodes."""

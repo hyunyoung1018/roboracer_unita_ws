@@ -61,4 +61,4 @@ vel_planner_safety_factor: 0.6
 # this corridor is a metre wide with 16 cm of clearance either side of the
 # obstacle. Raise it once the manoeuvre looks calm:
 #   ros2 param set /state_machine static_avoidance_planner.max_speed_mps 2.0
-max_speed_mps: 1.5
+max_speed_mps: 2.0

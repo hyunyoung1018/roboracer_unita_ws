@@ -1,0 +1,136 @@
+<?xml version="1.0"?>
+<!--
+  Head-to-head mode. This file is deliberately independent from
+  time_trials.launch.xml so the proven time-trials graph remains unchanged.
+
+  Static:  tracking -> router -> existing spline -> static_otwpnts
+  Dynamic: tracking -> router -> GP prediction -> lane change -> otwpnts
+-->
+<launch>
+  <arg name="map" description="Map name (folder under stack_master/maps/)"/>
+  <arg name="localization" default="true"
+       description="Bring up localization and hardware; false if already running."/>
+  <arg name="prediction" default="true"
+       description="Run opponent trajectory learning and prediction."/>
+  <arg name="dynamic_avoidance" default="true"
+       description="Run the UNICORN-derived lane-change planner."/>
+  <arg name="joy_max_speed" default="5.0"/>
+  <arg name="use_sim_time" default="false"/>
+  <arg name="rviz" default="true"/>
+  <arg name="foxglove" default="false"/>
+
+  <let name="config_dir" value="$(find-pkg-share stack_master)/config/car"/>
+  <let name="map_dir" value="$(find-pkg-share stack_master)/maps/$(var map)"/>
+
+  <group if="$(var localization)">
+    <include file="$(find-pkg-share stack_master)/launch/localization.launch.xml">
+      <arg name="map" value="$(var map)"/>
+      <arg name="rviz" value="$(var rviz)"/>
+      <arg name="foxglove" value="$(var foxglove)"/>
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+      <arg name="teleop" value="false"/>
+    </include>
+  </group>
+
+  <!-- Raceline speed and overtaking permission. Existing ot_sectors.yaml is
+       authoritative; this mode never forces permission true. -->
+  <node pkg="sector_tuner" exec="sector_tuner" name="sector_tuner" output="screen">
+    <param from="$(var map_dir)/speed_scaling.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="sector_tuner" exec="ot_interpolator" name="ot_interpolator" output="screen">
+    <param from="$(var map_dir)/ot_sectors.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- Existing perception and tracking publish the unified obstacle stream. -->
+  <node pkg="perception" exec="detect" name="detect" output="screen">
+    <param from="$(var config_dir)/perception.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="perception" exec="tracking_node" name="tracking" output="screen">
+    <param from="$(var config_dir)/perception.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="obstacle_router" exec="obstacle_router_node" name="obstacle_router" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- Existing static planner, unchanged. Only its subscriber and publisher
+       are redirected for this mode. -->
+  <node pkg="spline" exec="spline_node" name="spline_node" output="screen">
+    <param from="$(var config_dir)/perception.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <remap from="/tracking/obstacles" to="/tracking/static_obstacles"/>
+    <remap from="/planner/avoidance/otwpnts" to="/planner/avoidance/static_otwpnts"/>
+  </node>
+
+  <!-- The existing updater is the only publisher of global_waypoints_updated. -->
+  <node pkg="spline_planner" exec="update_waypoints" name="waypoint_updater" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <group if="$(var prediction)">
+    <node pkg="gp_traj_predictor" exec="opponent_trajectory"
+          name="opponent_trajectory" output="screen">
+      <param from="$(find-pkg-share gp_traj_predictor)/config/prediction.yaml"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+      <remap from="/tracking/obstacles" to="/tracking/dynamic_obstacles"/>
+    </node>
+    <node pkg="gp_traj_predictor" exec="gaussian_process_opp_traj"
+          name="gaussian_process_opp_traj" output="screen">
+      <param from="$(find-pkg-share gp_traj_predictor)/config/prediction.yaml"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+    <node pkg="gp_traj_predictor" exec="opp_prediction"
+          name="opp_prediction" output="screen">
+      <param from="$(find-pkg-share gp_traj_predictor)/config/prediction.yaml"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+      <remap from="/tracking/obstacles" to="/tracking/dynamic_obstacles"/>
+    </node>
+  </group>
+
+  <group if="$(var dynamic_avoidance)">
+    <node pkg="lane_change_planner" exec="change_avoidance_node"
+          name="change_avoidance_node" output="screen">
+      <param from="$(find-pkg-share lane_change_planner)/config/lane_change_planner.yaml"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+      <remap from="/tracking/obstacles" to="/tracking/dynamic_obstacles"/>
+    </node>
+  </group>
+
+  <!-- Existing state machine already supports lane_change, prediction,
+       force_trailing, merger, and separate static avoidance waypoints. -->
+  <node pkg="state_machine" exec="state_machine" name="state_machine" output="screen">
+    <param from="$(var config_dir)/state_machine_params.yaml"/>
+    <param name="config_dir" value="$(var config_dir)"/>
+    <param name="map_dir" value="$(var map_dir)"/>
+    <param name="timetrials_only" value="false"/>
+    <param name="ot_planner" value="lane_change"/>
+    <param name="sim" value="$(var use_sim_time)"/>
+    <param name="map" value="$(var map)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <node pkg="controller" exec="controller_manager" name="controller_manager" output="screen">
+    <param from="$(var config_dir)/controller.yaml"/>
+    <param name="save_yaml_path" value="$(var config_dir)/controller.yaml"/>
+    <param name="sim" value="$(var use_sim_time)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <remap from="/imu/data" to="/vesc/sensors/imu/raw"/>
+  </node>
+
+  <node pkg="stack_master" exec="simple_mux_node.py" name="simple_mux" output="screen">
+    <param name="in_topic" value="/vesc/high_level/ackermann_cmd"/>
+    <param name="out_topic" value="/vesc/ackermann_cmd"/>
+    <param name="joy_max_speed" value="$(var joy_max_speed)"/>
+    <param name="joy_max_steer" value="0.2954"/>
+    <param name="steering_angle_to_servo_gain" value="-1.1"/>
+    <param name="steering_angle_to_servo_offset" value="0.445"/>
+    <param name="servo_min" value="0.12"/>
+    <param name="servo_max" value="0.77"/>
+    <param name="use_estop" value="false"/>
+    <param name="sim" value="$(var use_sim_time)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>
