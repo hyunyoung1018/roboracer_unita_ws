@@ -77,7 +77,7 @@ struct Obstacle
   double size{0.0};   ///< side of the bounding square: max(width, height)
   double theta{0.0};  ///< rectangle orientation, for the marker
 
-  // Frenet position and real per-axis extents, taken from the cluster.
+  // Frenet position and extents of the known-size obstacle model.
   double s_center{0.0};
   double d_center{0.0};
   double s_back{0.0};   ///< distance from s_center to the trailing edge
@@ -142,7 +142,8 @@ private:
   double min_2_points_dist_{0.01};
   double new_cluster_threshold_m_{0.4};
   int min_size_n_{4};
-  double min_size_m_{0.2};
+  /// Known obstacle side length (the course uses a 0.50 m cube).
+  double min_size_m_{0.5};
   double max_size_m_{0.6};
   double max_viewing_distance_{9.0};
   double boundaries_inflation_{0.1};

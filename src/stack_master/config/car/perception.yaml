@@ -27,8 +27,8 @@ detect:
     # Minimum number of LiDAR points in a cluster
     min_size_n: 4
 
-    # L-shape fitted obstacle size
-    min_size_m: 0.20
+    # Known obstacle side length (0.50 m x 0.50 m x 0.50 m cube)
+    min_size_m: 0.50
     max_size_m: 0.60
 
     # UNIST adaptive breakpoint clustering

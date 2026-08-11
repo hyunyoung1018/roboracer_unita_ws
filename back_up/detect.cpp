@@ -28,10 +28,7 @@ Detect::Detect()
 
   rate_ = declareNumber("rate_detect", 20.0);
   min_size_n_ = static_cast<int>(declareNumber("min_size_n", 4));
-  // The course obstacle is a known 0.50 m cube.  Keep the existing parameter
-  // name for launch-file compatibility, but use it as the modelled side length
-  // rather than merely a lower bound on the noisy LiDAR measurement.
-  min_size_m_ = declareNumber("min_size_m", 0.50);
+  min_size_m_ = declareNumber("min_size_m", 0.20);
   max_size_m_ = declareNumber("max_size_m", 0.60);
   lambda_angle_ = declareNumber("lambda_deg", 10.0) * M_PI / 180.0;
   sigma_ = declareNumber("sigma", 0.03);
@@ -467,11 +464,7 @@ std::vector<Obstacle> Detect::fittingLShape(const std::vector<Cluster> & cluster
       }
     }
 
-    // The obstacle used on this course is a known 0.50 m x 0.50 m x 0.50 m
-    // cube.  LiDAR normally observes only its near faces, so the measured
-    // depth is not a reliable estimate of the real footprint.  Use the
-    // measured span only to reject wall-sized clusters, then model every valid
-    // obstacle with the configured physical side length (min_size_m_).
+    // Per axis, not a square of the longest side.
     //
     // `size = max(width, height)` is what UNIST publishes, and it inflates
     // whichever dimension is smaller. The lidar sees a cone as a shallow arc,
@@ -480,14 +473,12 @@ std::vector<Obstacle> Detect::fittingLShape(const std::vector<Cluster> & cluster
     // state machine subtract that width from the room either side. On a
     // corridor barely a metre across it consumed the entire gap.
     //
-    const double measured_width = max1 - min1;
-    const double measured_height = max2 - min2;
-    if (measured_width > max_size_m_ || measured_height > max_size_m_) {
-      continue;
-    }
-
-    const double width = min_size_m_;
-    const double height = min_size_m_;
+    // Each axis is floored at min_size_m instead: only the near face is ever
+    // measured, so the dimension along the viewing direction is always an
+    // underestimate, and anchoring at the near corner below is what covers
+    // the occluded far side.
+    const double width = std::max(max1 - min1, min_size_m_);
+    const double height = std::max(max2 - min2, min_size_m_);
 
     std::pair<double, double> center = corners[closest_corner];
     center.first += (closest_corner < 2) ? -width / 2.0 : width / 2.0;
@@ -696,9 +687,6 @@ void Detect::publishObstaclesMarkers()
     marker.color.r = 1.0;
     marker.pose.position.x = obstacle.center_x;
     marker.pose.position.y = obstacle.center_y;
-    // Place the 0.50 m cube on the ground instead of centring it at z = 0,
-    // which would leave its lower half below the map plane in RViz.
-    marker.pose.position.z = obstacle.size / 2.0;
     tf2::Quaternion q;
     q.setRPY(0.0, 0.0, obstacle.theta);
     marker.pose.orientation = tf2::toMsg(q);
