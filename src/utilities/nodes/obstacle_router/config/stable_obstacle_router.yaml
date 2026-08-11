@@ -1,0 +1,12 @@
+stable_obstacle_router:
+  ros__parameters:
+    # Provisional values for UNITA at ~20 Hz. Tune from
+    # /tracking/classification_debug using real static and moving targets.
+    min_std: 0.02
+    max_std: 0.04
+    min_nb_meas: 8
+    history_size: 20
+    static_confirm_count: 3
+    dynamic_confirm_count: 2
+    track_timeout_sec: 1.0
+    debug: true

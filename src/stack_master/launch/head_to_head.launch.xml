@@ -3,8 +3,8 @@
   Head-to-head mode. This file is deliberately independent from
   time_trials.launch.xml so the proven time-trials graph remains unchanged.
 
-  Static:  tracking -> router -> existing spline -> static_otwpnts
-  Dynamic: tracking -> router -> GP prediction -> lane change -> otwpnts
+  Static:  tracking -> stable router -> existing spline -> static_otwpnts
+  Dynamic: tracking -> stable router -> GP prediction -> lane change -> otwpnts
 -->
 <launch>
   <arg name="map" description="Map name (folder under stack_master/maps/)"/>
@@ -43,7 +43,8 @@
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 
-  <!-- Existing perception and tracking publish the unified obstacle stream. -->
+  <!-- Existing perception and tracking remain untouched.  This head-to-head-only
+       adapter stabilizes classification after tracking. -->
   <node pkg="perception" exec="detect" name="detect" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
@@ -52,7 +53,9 @@
     <param from="$(var config_dir)/perception.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
-  <node pkg="obstacle_router" exec="obstacle_router_node" name="obstacle_router" output="screen">
+  <node pkg="obstacle_router" exec="stable_obstacle_router_node"
+        name="stable_obstacle_router" output="screen">
+    <param from="$(find-pkg-share obstacle_router)/config/stable_obstacle_router.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 
@@ -99,17 +102,20 @@
     </node>
   </group>
 
-  <!-- Existing state machine already supports lane_change, prediction,
-       force_trailing, merger, and separate static avoidance waypoints. -->
-  <node pkg="state_machine" exec="state_machine" name="state_machine" output="screen">
+  <!-- The wrapper preserves the existing state logic and only corrects the
+       head-to-head startup semantics of use_force_trailing. -->
+  <node pkg="state_machine" exec="head_to_head_state_machine"
+        name="state_machine" output="screen">
     <param from="$(var config_dir)/state_machine_params.yaml"/>
     <param name="config_dir" value="$(var config_dir)"/>
     <param name="map_dir" value="$(var map_dir)"/>
     <param name="timetrials_only" value="false"/>
     <param name="ot_planner" value="lane_change"/>
+    <param name="use_force_trailing" value="true"/>
     <param name="sim" value="$(var use_sim_time)"/>
     <param name="map" value="$(var map)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <remap from="/tracking/obstacles" to="/tracking/stable_obstacles"/>
   </node>
 
   <node pkg="controller" exec="controller_manager" name="controller_manager" output="screen">
