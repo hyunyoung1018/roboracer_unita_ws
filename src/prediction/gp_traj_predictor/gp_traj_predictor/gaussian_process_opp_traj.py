@@ -50,6 +50,36 @@ def _gp_predict(train_s, train_y, query_s, track_length, length_scale,
     return prediction, variance
 
 
+def aggregate_training_samples(detections, track_length, bin_size):
+    """Median-collapse conflicting measurements that occupy the same s bin."""
+    groups = {}
+    width = max(1e-3, float(bin_size))
+    for point in detections:
+        values = (point.s, point.d, point.vs, point.vd)
+        if not np.all(np.isfinite(values)):
+            continue
+        s = float(point.s) % float(track_length)
+        key = int(np.floor(s / width))
+        groups.setdefault(key, []).append((s, *map(float, values[1:])))
+
+    rows = []
+    for values in groups.values():
+        values = np.asarray(values, dtype=float)
+        rows.append(tuple(np.median(values, axis=0)))
+    rows.sort(key=lambda row: row[0])
+    if not rows:
+        return tuple(np.asarray([], dtype=float) for _ in range(4))
+    columns = np.asarray(rows, dtype=float).T
+    return tuple(columns[index] for index in range(4))
+
+
+def nearest_observation_distance(query_s, train_s, track_length):
+    """Circular distance from every query point to a real training bin."""
+    if len(train_s) == 0:
+        return np.full(len(query_s), np.inf)
+    return np.min(_periodic_distance(query_s, train_s, track_length), axis=1)
+
+
 class GaussianProcessOpponentTrajectory(Node):
     """Fit fixed-kernel periodic GPs without a scikit-learn runtime dependency."""
 
@@ -58,6 +88,8 @@ class GaussianProcessOpponentTrajectory(Node):
         defaults = {
             'min_training_points': 8,
             'max_training_points': 200,
+            'training_s_bin_size': 0.15,
+            'max_extrapolation_distance': 1.0,
             'd_length_scale': 1.0,
             'vs_length_scale': 1.5,
             'd_noise': 0.04,
@@ -65,6 +97,9 @@ class GaussianProcessOpponentTrajectory(Node):
             'gp_jitter': 1e-6,
             'min_speed': 0.0,
             'max_speed': 12.0,
+            'opponent_width': 0.28,
+            'boundary_margin': 0.03,
+            'boundary_clipped_variance': 1.0,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -105,18 +140,27 @@ class GaussianProcessOpponentTrajectory(Node):
         if len(detections) > maximum:
             indices = np.linspace(0, len(detections) - 1, maximum).astype(int)
             detections = [detections[index] for index in indices]
-        train_s = np.asarray([p.s for p in detections], dtype=float)
-        train_d = np.asarray([p.d for p in detections], dtype=float)
-        train_vs = np.asarray([p.vs for p in detections], dtype=float)
-        train_vd = np.asarray([p.vd for p in detections], dtype=float)
-        finite = np.isfinite(train_s + train_d + train_vs + train_vd)
-        train_s, train_d = train_s[finite], train_d[finite]
-        train_vs, train_vd = train_vs[finite], train_vd[finite]
+        train_s, train_d, train_vs, train_vd = aggregate_training_samples(
+            detections,
+            self.track_length,
+            self.get_parameter('training_s_bin_size').value,
+        )
         if len(train_s) < int(self.get_parameter('min_training_points').value):
             return
 
         waypoints = self.global_msg.wpnts[:-1] or self.global_msg.wpnts
-        query_s = np.asarray([w.s_m for w in waypoints], dtype=float)
+        all_query_s = np.asarray([w.s_m for w in waypoints], dtype=float)
+        observed_distance = nearest_observation_distance(
+            all_query_s, train_s, self.track_length)
+        observed = observed_distance <= float(
+            self.get_parameter('max_extrapolation_distance').value)
+        full_coverage = bool(np.all(observed))
+        waypoints = [
+            waypoint for waypoint, keep in zip(waypoints, observed) if keep
+        ]
+        query_s = all_query_s[observed]
+        if len(query_s) < int(self.get_parameter('min_training_points').value):
+            return
         d_pred, d_var = _gp_predict(
             train_s, train_d, query_s, self.track_length,
             self.get_parameter('d_length_scale').value,
@@ -136,19 +180,59 @@ class GaussianProcessOpponentTrajectory(Node):
             float(self.get_parameter('min_speed').value),
             float(self.get_parameter('max_speed').value),
         )
-        vd_pred = np.interp(
-            query_s,
-            np.sort(train_s),
-            train_vd[np.argsort(train_s)],
+        vd_pred, _ = _gp_predict(
+            train_s, train_vd, query_s, self.track_length,
+            self.get_parameter('vs_length_scale').value,
+            self.get_parameter('vs_noise').value,
+            self.get_parameter('gp_jitter').value,
+            matern=False,
+        )
+
+        clearance = (
+            0.5 * float(self.get_parameter('opponent_width').value)
+            + float(self.get_parameter('boundary_margin').value)
+        )
+        lower = np.asarray([-float(w.d_right) + clearance for w in waypoints])
+        upper = np.asarray([float(w.d_left) - clearance for w in waypoints])
+        valid_bounds = lower < upper
+        if not np.any(valid_bounds):
+            return
+        waypoints = [
+            waypoint for waypoint, keep in zip(waypoints, valid_bounds) if keep
+        ]
+        query_s = query_s[valid_bounds]
+        d_pred = d_pred[valid_bounds]
+        d_var = d_var[valid_bounds]
+        vs_pred = vs_pred[valid_bounds]
+        vs_var = vs_var[valid_bounds]
+        vd_pred = vd_pred[valid_bounds]
+        lower = lower[valid_bounds]
+        upper = upper[valid_bounds]
+        if len(query_s) < int(self.get_parameter('min_training_points').value):
+            return
+        raw_d_pred = d_pred.copy()
+        d_pred = np.clip(d_pred, lower, upper)
+        clipped = np.abs(raw_d_pred - d_pred) > 1e-6
+        d_var[clipped] = np.maximum(
+            d_var[clipped],
+            float(self.get_parameter('boundary_clipped_variance').value),
         )
 
         xy = self.converter.get_cartesian(query_s, d_pred).T
         # Once a full lap exists, apply circular CCMA smoothing and convert the
         # result back through the shared UNITA converter.
-        if msg.lapcount >= 1.0 and len(xy) >= 5:
+        if msg.lapcount >= 1.0 and full_coverage and len(xy) >= 5:
             xy = ccma_smooth(xy, window=5)
             sd = self.converter.get_frenet(xy[:, 0], xy[:, 1])
             d_pred = np.asarray(sd[1], dtype=float)
+            smoothed_raw = d_pred.copy()
+            d_pred = np.clip(d_pred, lower, upper)
+            smoothed_clipped = np.abs(smoothed_raw - d_pred) > 1e-6
+            d_var[smoothed_clipped] = np.maximum(
+                d_var[smoothed_clipped],
+                float(self.get_parameter('boundary_clipped_variance').value),
+            )
+            xy = self.converter.get_cartesian(query_s, d_pred).T
 
         output = OpponentTrajectory()
         output.header = Header(stamp=self.get_clock().now().to_msg(), frame_id='map')

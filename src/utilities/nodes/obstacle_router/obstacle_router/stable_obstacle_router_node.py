@@ -7,6 +7,7 @@ import math
 
 import rclpy
 from f110_msgs.msg import ObstacleArray, WpntArray
+from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -17,6 +18,12 @@ from .stable_classifier import (
     StableObstacleClassifier,
     circular_delta,
     output_membership,
+)
+from .opponent_selector import (
+    initial_candidate_key,
+    inside_forward_window,
+    inside_opponent_corridor,
+    unique_reidentification_candidate,
 )
 
 
@@ -36,8 +43,15 @@ class StableObstacleRouter(Node):
         "single_dynamic_opponent": True,
         "dynamic_reid_timeout_sec": 1.0,
         "dynamic_reid_max_distance_m": 1.2,
+        "dynamic_reid_max_lateral_m": 0.25,
+        "dynamic_reid_ambiguity_margin_m": 0.20,
         "dynamic_speed_hold_sec": 0.75,
         "dynamic_speed_valid_min_mps": 0.15,
+        "logical_opponent_id": 1000000,
+        "opponent_width_m": 0.28,
+        "opponent_boundary_margin_m": 0.03,
+        "opponent_forward_min_m": 0.2,
+        "opponent_forward_max_m": 8.0,
         "debug": True,
     }
 
@@ -65,12 +79,28 @@ class StableObstacleRouter(Node):
             self.get_parameter("dynamic_reid_timeout_sec").value)
         self.dynamic_reid_max_distance_m = float(
             self.get_parameter("dynamic_reid_max_distance_m").value)
+        self.dynamic_reid_max_lateral_m = float(
+            self.get_parameter("dynamic_reid_max_lateral_m").value)
+        self.dynamic_reid_ambiguity_margin_m = float(
+            self.get_parameter("dynamic_reid_ambiguity_margin_m").value)
         self.dynamic_speed_hold_sec = float(
             self.get_parameter("dynamic_speed_hold_sec").value)
         self.dynamic_speed_valid_min_mps = float(
             self.get_parameter("dynamic_speed_valid_min_mps").value)
+        self.logical_opponent_id = int(
+            self.get_parameter("logical_opponent_id").value)
+        self.opponent_width_m = float(
+            self.get_parameter("opponent_width_m").value)
+        self.opponent_boundary_margin_m = float(
+            self.get_parameter("opponent_boundary_margin_m").value)
+        self.opponent_forward_min_m = float(
+            self.get_parameter("opponent_forward_min_m").value)
+        self.opponent_forward_max_m = float(
+            self.get_parameter("opponent_forward_max_m").value)
 
         self.active_dynamic_id = None
+        self.ego_s = None
+        self.waypoints = []
         self.last_dynamic_s = None
         self.last_dynamic_d = None
         self.last_dynamic_position_at = None
@@ -91,10 +121,34 @@ class StableObstacleRouter(Node):
             ObstacleArray, "/tracking/obstacles", self.obstacles_cb, 10)
         self.create_subscription(
             WpntArray, "/global_waypoints_scaled", self.waypoints_cb, 10)
+        self.create_subscription(
+            Odometry, "/car_state/odom_frenet", self.odom_cb, 10)
 
     def waypoints_cb(self, msg):
         if msg.wpnts:
             self.classifier.track_length = float(msg.wpnts[-1].s_m)
+            self.waypoints = list(msg.wpnts)
+
+    def odom_cb(self, msg):
+        self.ego_s = float(msg.pose.pose.position.x)
+
+    def _inside_corridor(self, obstacle):
+        return inside_opponent_corridor(
+            obstacle,
+            self.waypoints,
+            self.classifier.track_length,
+            self.opponent_width_m,
+            self.opponent_boundary_margin_m,
+        )
+
+    def _inside_forward_window(self, obstacle):
+        return inside_forward_window(
+            obstacle,
+            self.ego_s,
+            self.classifier.track_length,
+            self.opponent_forward_min_m,
+            self.opponent_forward_max_m,
+        )
 
     def _projected_dynamic_position(self, now, obstacles_by_id):
         active = obstacles_by_id.get(self.active_dynamic_id)
@@ -129,20 +183,36 @@ class StableObstacleRouter(Node):
             obstacle_id = int(obstacle.id)
             if obstacle_id == self.active_dynamic_id or not obstacle.is_visible:
                 continue
+            if not self._inside_corridor(obstacle):
+                continue
+            if not self._inside_forward_window(obstacle):
+                continue
             history = self.classifier.tracks.get(obstacle_id)
             if history is not None and history.stable_class == STATIC:
+                continue
+            # A track that independently accumulated enough evidence to become
+            # DYNAMIC is a second moving object (for example the operator), not
+            # a just-created replacement ID for the locked opponent.
+            if history is not None and history.stable_class == DYNAMIC:
                 continue
             ds = circular_delta(
                 float(obstacle.s_center), reference[0],
                 self.classifier.track_length)
             dd = float(obstacle.d_center) - reference[1]
+            if abs(dd) > self.dynamic_reid_max_lateral_m:
+                continue
             candidates.append((math.hypot(ds, dd), obstacle_id))
         if not candidates:
             return None
 
-        distance, new_id = min(candidates)
-        if distance > self.dynamic_reid_max_distance_m:
+        selected = unique_reidentification_candidate(
+            candidates,
+            self.dynamic_reid_max_distance_m,
+            self.dynamic_reid_ambiguity_margin_m,
+        )
+        if selected is None:
             return None
+        distance, new_id = selected
         old_id = self.active_dynamic_id
         if self.classifier.transfer_track(old_id, new_id) is None:
             return None
@@ -175,6 +245,57 @@ class StableObstacleRouter(Node):
         self.last_dynamic_d = float(obstacle.d_center)
         self.last_dynamic_position_at = now
 
+    def _active_expired(self, now):
+        if self.active_dynamic_id is None:
+            return False
+        return (
+            self.last_dynamic_position_at is None
+            or now - self.last_dynamic_position_at > self.dynamic_reid_timeout_sec
+        )
+
+    def _select_dynamic(self, rows, now):
+        """Return one locked physical tracker target, or ``None``.
+
+        A retained active track wins even when a person is momentarily closer.
+        Re-identification is handled before classification.  If the previous
+        target is in its re-identification grace period, publish no new target
+        instead of silently switching the GP to a different moving object.
+        """
+        candidates = [
+            row for row in rows
+            if row[1].stable_class == DYNAMIC
+            and row[3]
+            and row[4]
+        ]
+        by_id = {int(row[0].id): row for row in candidates}
+        selected = by_id.get(self.active_dynamic_id)
+        if selected is not None:
+            return selected
+
+        if self._active_expired(now):
+            old_id = self.active_dynamic_id
+            self.active_dynamic_id = None
+            self.get_logger().warn(
+                f'dynamic opponent tracker {old_id} expired; '
+                'waiting to acquire one replacement target')
+
+        if self.active_dynamic_id is not None:
+            return None
+
+        visible = [row for row in candidates if row[0].is_visible]
+        if not visible:
+            return None
+        selected = min(
+            visible,
+            key=lambda row: initial_candidate_key(
+                row[0], self.ego_s, self.classifier.track_length),
+        )
+        self.active_dynamic_id = int(selected[0].id)
+        self.get_logger().warn(
+            f'acquired dynamic opponent tracker {self.active_dynamic_id} as '
+            f'logical opponent {self.logical_opponent_id}')
+        return selected
+
     def obstacles_cb(self, msg):
         now = self.get_clock().now().nanoseconds * 1e-9
         self.retired_dynamic_ids = {
@@ -187,11 +308,13 @@ class StableObstacleRouter(Node):
         dynamic_msg = ObstacleArray(header=msg.header)
         stable_msg = ObstacleArray(header=msg.header)
         debug_records = []
+        rows = []
 
         for obstacle in msg.obstacles:
             obstacle_id = int(obstacle.id)
             if obstacle_id in self.retired_dynamic_ids:
                 continue
+            raw_is_static = bool(obstacle.is_static)
             history = self.classifier.update(
                 obstacle_id=obstacle.id,
                 s=obstacle.s_center,
@@ -201,34 +324,68 @@ class StableObstacleRouter(Node):
             )
             stable_obstacle = deepcopy(obstacle)
             stable_obstacle.is_static = history.stable_class == "STATIC"
-            if history.stable_class == DYNAMIC:
-                if self.active_dynamic_id is None:
-                    self.active_dynamic_id = obstacle_id
-                if obstacle_id == self.active_dynamic_id:
-                    self._stabilize_dynamic_speed(stable_obstacle, now)
-            stable_msg.obstacles.append(stable_obstacle)
+            corridor_ok = self._inside_corridor(stable_obstacle)
+            forward_ok = self._inside_forward_window(stable_obstacle)
+            rows.append((
+                stable_obstacle, history, obstacle_id == handed_off_id,
+                corridor_ok, forward_ok, raw_is_static,
+            ))
 
+        self.classifier.remove_stale(now)
+        selected = self._select_dynamic(rows, now)
+        selected_tracker_id = int(selected[0].id) if selected is not None else None
+
+        for (
+            stable_obstacle, history, reidentified, corridor_ok, forward_ok,
+            raw_is_static,
+        ) in rows:
+            obstacle_id = int(stable_obstacle.id)
             in_static, in_dynamic = output_membership(history.stable_class)
+            is_selected = in_dynamic and obstacle_id == selected_tracker_id
+            selected_output = None
+            if is_selected:
+                selected_output = deepcopy(stable_obstacle)
+                self._stabilize_dynamic_speed(selected_output, now)
+                selected_output.id = self.logical_opponent_id
+
+            # Reject an object whose expected opponent footprint does not fit in
+            # the track. This router only runs in head-to-head, so time-trials'
+            # detector/tracker/static spline path is unchanged.
+            include_stable = (
+                in_static
+                or (history.stable_class == "UNKNOWN" and corridor_ok)
+                or is_selected
+            )
+            if include_stable:
+                output_obstacle = deepcopy(
+                    selected_output if is_selected else stable_obstacle)
+                stable_msg.obstacles.append(output_obstacle)
+
+            # Confirmed static obstacles retain the existing output contract;
+            # only the head-to-head dynamic/unknown candidate path is filtered.
             if in_static:
                 static_msg.obstacles.append(deepcopy(stable_obstacle))
-            elif in_dynamic:
-                dynamic_msg.obstacles.append(deepcopy(stable_obstacle))
+            elif is_selected:
+                dynamic_msg.obstacles.append(deepcopy(selected_output))
 
             debug_records.append({
-                "id": int(obstacle.id),
-                "raw_is_static": bool(obstacle.is_static),
+                "id": self.logical_opponent_id if is_selected else obstacle_id,
+                "tracker_id": obstacle_id,
+                "raw_is_static": raw_is_static,
                 "stable_class": history.stable_class,
                 "std_s": round(float(history.std_s), 6),
                 "std_d": round(float(history.std_d), 6),
                 "sample_count": int(history.sample_count),
                 "static_evidence": int(history.static_evidence),
                 "dynamic_evidence": int(history.dynamic_evidence),
-                "is_visible": bool(obstacle.is_visible),
+                "is_visible": bool(stable_obstacle.is_visible),
                 "routed_vs": round(float(stable_obstacle.vs), 4),
-                "reidentified": obstacle_id == handed_off_id,
+                "reidentified": reidentified,
+                "inside_opponent_corridor": corridor_ok,
+                "inside_forward_window": forward_ok,
+                "selected_opponent": is_selected,
             })
 
-        self.classifier.remove_stale(now)
         self.static_pub.publish(static_msg)
         self.dynamic_pub.publish(dynamic_msg)
         self.stable_pub.publish(stable_msg)

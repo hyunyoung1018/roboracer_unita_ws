@@ -8,6 +8,13 @@ from obstacle_router.stable_classifier import (
     circular_std,
     output_membership,
 )
+from obstacle_router.opponent_selector import (
+    initial_candidate_key,
+    inside_forward_window,
+    inside_opponent_corridor,
+    unique_reidentification_candidate,
+)
+from types import SimpleNamespace
 
 
 def make_classifier():
@@ -110,3 +117,48 @@ def test_output_membership_is_exclusive_and_unknown_is_stable_only():
     assert output_membership(STATIC) == (True, False)
     assert output_membership(DYNAMIC) == (False, True)
     assert output_membership(UNKNOWN) == (False, False)
+
+
+def test_opponent_corridor_rejects_people_beyond_track_boundary():
+    waypoints = [SimpleNamespace(s_m=0.0, d_left=0.5, d_right=0.5)]
+    box = SimpleNamespace(s_center=0.0, d_center=0.20)
+    outside_person = SimpleNamespace(s_center=0.0, d_center=0.36)
+
+    assert inside_opponent_corridor(box, waypoints, 10.0, 0.28, 0.03)
+    assert not inside_opponent_corridor(
+        outside_person, waypoints, 10.0, 0.28, 0.03)
+
+
+def test_opponent_candidate_must_be_in_forward_window():
+    opponent = SimpleNamespace(s_center=1.0)
+
+    assert inside_forward_window(opponent, 0.0, 10.0, 0.2, 8.0)
+    assert not inside_forward_window(opponent, 1.1, 10.0, 0.2, 8.0)
+
+
+def test_initial_candidate_prefers_box_nearer_raceline():
+    box = SimpleNamespace(id=9, s_center=3.0, d_center=0.04)
+    operator = SimpleNamespace(id=10, s_center=2.8, d_center=0.28)
+
+    selected = min(
+        (operator, box),
+        key=lambda obstacle: initial_candidate_key(obstacle, 0.0, 10.0),
+    )
+
+    assert selected is box
+
+
+def test_reidentification_refuses_two_similarly_plausible_objects():
+    assert unique_reidentification_candidate(
+        [(0.30, 11), (0.42, 12)],
+        max_distance=1.2,
+        ambiguity_margin=0.20,
+    ) is None
+
+
+def test_reidentification_accepts_one_clear_replacement():
+    assert unique_reidentification_candidate(
+        [(0.25, 11), (0.80, 12)],
+        max_distance=1.2,
+        ambiguity_margin=0.20,
+    ) == (0.25, 11)

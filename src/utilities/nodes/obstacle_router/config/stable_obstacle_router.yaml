@@ -14,6 +14,16 @@ stable_obstacle_router:
     single_dynamic_opponent: true
     dynamic_reid_timeout_sec: 1.0
     dynamic_reid_max_distance_m: 1.2
+    dynamic_reid_max_lateral_m: 0.25
+    # Do not guess when the box and operator are similarly plausible matches.
+    dynamic_reid_ambiguity_margin_m: 0.20
     dynamic_speed_hold_sec: 0.75
     dynamic_speed_valid_min_mps: 0.15
+    # Only this canonical ID leaves /tracking/dynamic_obstacles. Raw tracker IDs
+    # remain available in /tracking/classification_debug as tracker_id.
+    logical_opponent_id: 1000000
+    opponent_width_m: 0.28
+    opponent_boundary_margin_m: 0.03
+    opponent_forward_min_m: 0.2
+    opponent_forward_max_m: 8.0
     debug: true

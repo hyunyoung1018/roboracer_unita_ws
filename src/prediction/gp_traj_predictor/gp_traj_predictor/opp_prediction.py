@@ -23,6 +23,69 @@ from frenet_conversion.frenet_converter import FrenetConverter
 from .prediction_node import nearest_dynamic, periodic_interp, trajectory_markers
 
 
+def _circular_nearest_distances(query_s, reference_s, track_length):
+    query_s = np.asarray(query_s, dtype=float) % track_length
+    reference_s = np.asarray(reference_s, dtype=float) % track_length
+    if len(reference_s) == 0:
+        return np.full(len(query_s), np.inf)
+    difference = np.abs(query_s[:, None] - reference_s[None, :])
+    return np.min(np.minimum(difference, track_length - difference), axis=1)
+
+
+def validate_learned_profile(
+        profile_s, profile_d, trajectory, global_waypoints, track_length,
+        opponent_width, boundary_margin, max_query_gap, max_d_variance):
+    """Validate that every future point is observed, bounded and trustworthy."""
+    profile_s = np.asarray(profile_s, dtype=float)
+    profile_d = np.asarray(profile_d, dtype=float)
+    if not trajectory or not global_waypoints or len(profile_s) != len(profile_d):
+        return False, 'INVALID_LEARNED_TRAJECTORY', {}
+    if not np.all(np.isfinite(profile_s + profile_d)):
+        return False, 'INVALID_LEARNED_TRAJECTORY', {'reason': 'non_finite'}
+
+    trajectory_s = np.asarray([point.s_m for point in trajectory], dtype=float)
+    query_gap = _circular_nearest_distances(
+        profile_s, trajectory_s, track_length)
+    worst_gap_index = int(np.argmax(query_gap))
+    if query_gap[worst_gap_index] > float(max_query_gap):
+        return False, 'TRAJECTORY_UNOBSERVED', {
+            'query_s_m': round(float(profile_s[worst_gap_index] % track_length), 3),
+            'nearest_observation_m': round(float(query_gap[worst_gap_index]), 3),
+            'limit_m': float(max_query_gap),
+        }
+
+    trajectory_var = np.asarray(
+        [max(0.0, float(point.d_var)) for point in trajectory], dtype=float)
+    query_var = periodic_interp(
+        profile_s, trajectory_s, trajectory_var, track_length)
+    worst_var_index = int(np.argmax(query_var))
+    if query_var[worst_var_index] > float(max_d_variance):
+        return False, 'TRAJECTORY_UNCERTAIN', {
+            'query_s_m': round(float(profile_s[worst_var_index] % track_length), 3),
+            'd_variance': round(float(query_var[worst_var_index]), 3),
+            'limit': float(max_d_variance),
+        }
+
+    global_s = np.asarray([point.s_m for point in global_waypoints], dtype=float)
+    half_width = 0.5 * float(opponent_width)
+    clearance = half_width + float(boundary_margin)
+    for index, (s, d) in enumerate(zip(profile_s, profile_d)):
+        distance = np.abs(global_s - (s % track_length))
+        distance = np.minimum(distance, track_length - distance)
+        waypoint = global_waypoints[int(np.argmin(distance))]
+        lower = -float(waypoint.d_right) + clearance
+        upper = float(waypoint.d_left) - clearance
+        if lower >= upper or d < lower - 1e-6 or d > upper + 1e-6:
+            return False, 'TRAJECTORY_OUT_OF_BOUNDS', {
+                'query_s_m': round(float(s % track_length), 3),
+                'd_m': round(float(d), 3),
+                'right_limit_m': round(float(lower), 3),
+                'left_limit_m': round(float(upper), 3),
+                'point_index': index,
+            }
+    return True, None, None
+
+
 class OpponentPredictor(Node):
     """Publish a learned prediction only after a complete, consistent trajectory."""
 
@@ -32,7 +95,7 @@ class OpponentPredictor(Node):
             'loop_rate': 20.0,
             'n_time_steps': 20,
             'dt': 0.10,
-            'max_opponent_distance': 30.0,
+            'max_opponent_distance': 8.0,
             'obstacle_timeout': 0.5,
             'trajectory_timeout': 2.0,
             'min_training_laps': 1.0,
@@ -41,6 +104,9 @@ class OpponentPredictor(Node):
             'learned_ready_confirm_frames': 3,
             'learned_reject_confirm_frames': 5,
             'opponent_width': 0.28,
+            'trajectory_boundary_margin': 0.03,
+            'max_trajectory_query_gap': 0.15,
+            'max_trajectory_d_variance': 0.80,
             'speed_offset': 0.0,
         }
         for name, value in defaults.items():
@@ -177,6 +243,11 @@ class OpponentPredictor(Node):
         d = [w.d_m for w in self.trajectory.oppwpnts]
         expected = float(periodic_interp(
             [obstacle.s_center], s, d, self.track_length)[0])
+        valid, invalid_status, invalid_detail = self._validate_learned_profile(
+            [obstacle.s_center], [expected])
+        if not valid:
+            self._reset_learned_gate()
+            return False, invalid_status, invalid_detail
         deviation = abs(float(obstacle.d_center) - expected)
         enter_threshold = float(self.get_parameter(
             'learned_deviation_enter_threshold').value)
@@ -270,6 +341,19 @@ class OpponentPredictor(Node):
             current += speed[index] * dt
         return s, d, speed, vd
 
+    def _validate_learned_profile(self, s, d):
+        return validate_learned_profile(
+            s,
+            d,
+            self.trajectory.oppwpnts if self.trajectory is not None else [],
+            self.global_msg.wpnts if self.global_msg is not None else [],
+            self.track_length,
+            self.get_parameter('opponent_width').value,
+            self.get_parameter('trajectory_boundary_margin').value,
+            self.get_parameter('max_trajectory_query_gap').value,
+            self.get_parameter('max_trajectory_d_variance').value,
+        )
+
     def _loop(self):
         required_inputs = {
             'ego_s': self.ego_s,
@@ -311,11 +395,17 @@ class OpponentPredictor(Node):
         count = max(2, int(self.get_parameter('n_time_steps').value))
         dt = max(0.01, float(self.get_parameter('dt').value))
         learned, status, detail = self._learned_status(obstacle)
-        self._set_diagnostic(status, detail)
         if learned:
             s, d, speed, vd = self._learned_profile(obstacle, count, dt)
-        else:
+            valid, invalid_status, invalid_detail = self._validate_learned_profile(s, d)
+            if not valid:
+                learned = False
+                status = invalid_status
+                detail = invalid_detail
+                self._reset_learned_gate()
+        if not learned:
             s, d, speed, vd = self._fallback_profile(obstacle, count, dt)
+        self._set_diagnostic(status, detail)
         self._publish_prediction(obstacle, s, d, speed, vd, dt, learned)
 
     def _publish_prediction(self, source, s, d, speed, vd, dt, learned):

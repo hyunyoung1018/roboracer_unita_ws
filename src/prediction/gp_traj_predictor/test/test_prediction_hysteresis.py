@@ -36,6 +36,9 @@ class FakePredictor:
     def _reset_learned_gate(self):
         OpponentPredictor._reset_learned_gate(self)
 
+    def _validate_learned_profile(self, _s, _d):
+        return True, None, None
+
 
 def learned_status(predictor, deviation):
     obstacle = SimpleNamespace(id=7, s_center=2.0, d_center=deviation)

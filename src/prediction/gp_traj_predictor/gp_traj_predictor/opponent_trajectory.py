@@ -28,6 +28,24 @@ from .prediction_node import (
 )
 
 
+def measurement_rejection_reason(
+        ds, dd, dt, max_distance, max_time, max_lateral_jump, max_speed):
+    """Return why a visible sample is not continuous with the last one."""
+    if dt is None or dt <= 0.01:
+        return 'NON_INCREASING_TIME'
+    if dt > float(max_time):
+        return 'MEASUREMENT_GAP'
+    if ds < -0.05:
+        return 'BACKWARD_JUMP'
+    if ds > float(max_distance):
+        return 'LONGITUDINAL_JUMP'
+    if abs(dd) > float(max_lateral_jump):
+        return 'LATERAL_JUMP'
+    if ds / dt > float(max_speed):
+        return 'IMPLAUSIBLE_SPEED'
+    return None
+
+
 class OpponentTrajectoryCollector(Node):
     """Collect stable per-distance samples and publish projected observations."""
 
@@ -39,6 +57,9 @@ class OpponentTrajectoryCollector(Node):
             'max_measurement_age': 0.5,
             'min_sample_distance': 0.10,
             'max_sample_gap': 2.5,
+            'max_sample_gap_sec': 0.5,
+            'max_lateral_jump': 0.20,
+            'max_sample_speed': 6.0,
             'min_publish_samples': 8,
             'max_samples': 400,
             'off_trajectory_threshold': 0.30,
@@ -54,10 +75,12 @@ class OpponentTrajectoryCollector(Node):
         self.learned = None
         self.active_id = None
         self.last_s = None
+        self.last_d = None
         self.last_time = None
         self.traversed = 0.0
         self.off_count = 0
         self.samples = deque(maxlen=int(self.get_parameter('max_samples').value))
+        self._last_rejection_reason = None
 
         self.projected_pub = self.create_publisher(
             ProjOppTraj, '/proj_opponent_trajectory', 10)
@@ -92,7 +115,7 @@ class OpponentTrajectoryCollector(Node):
     def _learned_cb(self, msg):
         self.learned = msg
 
-    def _accept_opponent_id(self, obstacle_id):
+    def _accept_opponent_id(self, obstacle_id, anchor_reset=False):
         """Follow the race's single dynamic opponent across tracker ID changes.
 
         The shared tracker may assign a new ID after a LiDAR dropout.  In
@@ -108,12 +131,23 @@ class OpponentTrajectoryCollector(Node):
 
         old_id = self.active_id
         self.active_id = obstacle_id
-        self.last_s = None
-        self.last_time = None
-        self.off_count = 0
+        suffix = '; measurement anchor reset' if anchor_reset else ''
         self.get_logger().warn(
             f'opponent tracker ID changed {old_id} -> {obstacle_id}; '
-            'preserving learned trajectory and lap progress')
+            f'preserving learned trajectory and lap progress{suffix}')
+
+    def _set_measurement_anchor(self, obstacle, measurement_time):
+        self.last_s = float(obstacle.s_center)
+        self.last_d = float(obstacle.d_center)
+        self.last_time = float(measurement_time)
+
+    def _reject_transition(self, reason, obstacle, measurement_time):
+        if reason != self._last_rejection_reason:
+            self.get_logger().warn(
+                f'opponent measurement rejected ({reason}); preserving learned '
+                'trajectory and establishing a new continuity anchor')
+        self._last_rejection_reason = reason
+        self._set_measurement_anchor(obstacle, measurement_time)
 
     def _sample(self):
         if self.ego_s is None or not self.track_length or self.converter is None:
@@ -130,18 +164,44 @@ class OpponentTrajectoryCollector(Node):
         measurement_time = stamp_seconds(self.latest_obstacles.header.stamp) or now
         if now - measurement_time > float(self.get_parameter('max_measurement_age').value):
             return
-        if self.active_id != obstacle.id:
-            self._accept_opponent_id(obstacle.id)
+        if not obstacle.is_visible:
+            return
 
         if self.last_s is None:
             ds = 0.0
+            dd = 0.0
+            dt = None
         else:
             ds = circular_signed_delta(obstacle.s_center, self.last_s, self.track_length)
-            if ds < -0.05 or ds > float(self.get_parameter('max_sample_gap').value):
-                return
             if ds < float(self.get_parameter('min_sample_distance').value):
+                if ds < -0.05:
+                    id_changed = self.active_id != obstacle.id
+                    if id_changed:
+                        self._accept_opponent_id(obstacle.id, anchor_reset=True)
+                    self._reject_transition(
+                        'BACKWARD_JUMP', obstacle, measurement_time)
                 return
-        dt = None if self.last_time is None else measurement_time - self.last_time
+            dd = float(obstacle.d_center) - float(self.last_d)
+            dt = measurement_time - self.last_time
+            reason = measurement_rejection_reason(
+                ds,
+                dd,
+                dt,
+                self.get_parameter('max_sample_gap').value,
+                self.get_parameter('max_sample_gap_sec').value,
+                self.get_parameter('max_lateral_jump').value,
+                self.get_parameter('max_sample_speed').value,
+            )
+            if reason is not None:
+                id_changed = self.active_id != obstacle.id
+                if id_changed:
+                    self._accept_opponent_id(obstacle.id, anchor_reset=True)
+                self._reject_transition(reason, obstacle, measurement_time)
+                return
+
+        if self.active_id != obstacle.id:
+            self._accept_opponent_id(obstacle.id)
+        self._last_rejection_reason = None
         computed_vs = ds / dt if dt is not None and dt > 0.01 else obstacle.vs
         vs = float(obstacle.vs) if math.isfinite(obstacle.vs) else float(computed_vs)
         if dt is not None and dt > 0.01 and math.isfinite(computed_vs):
@@ -153,7 +213,7 @@ class OpponentTrajectoryCollector(Node):
         point.vs = max(0.0, vs)
         point.vd = float(obstacle.vd) if math.isfinite(obstacle.vd) else 0.0
         point.is_static = False
-        point.is_visible = bool(obstacle.is_visible)
+        point.is_visible = True
         point.time = float(measurement_time)
         point.s_var = max(0.0, float(obstacle.s_var))
         point.d_var = max(0.0, float(obstacle.d_var))
@@ -161,8 +221,7 @@ class OpponentTrajectoryCollector(Node):
         point.vd_var = max(0.0, float(obstacle.vd_var))
         self.samples.append(point)
         self.traversed += max(0.0, ds)
-        self.last_s = float(obstacle.s_center)
-        self.last_time = measurement_time
+        self._set_measurement_anchor(obstacle, measurement_time)
 
         if self.learned is not None and self.learned.oppwpnts:
             learned_s = [w.s_m for w in self.learned.oppwpnts]
