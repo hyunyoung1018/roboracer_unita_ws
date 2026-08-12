@@ -102,6 +102,25 @@ class StableObstacleClassifier:
         self.tracks[int(obstacle_id)] = history
         return history
 
+    def transfer_track(self, old_id, new_id):
+        """Move one classification history to a replacement tracker ID.
+
+        The tracker ID is an association detail, not an object identity.  The
+        head-to-head router calls this only after its single-opponent spatial
+        check has matched a newly visible ID to the previous dynamic target.
+        """
+        old_id = int(old_id)
+        new_id = int(new_id)
+        if old_id == new_id:
+            return self.tracks.get(old_id)
+        history = self.tracks.pop(old_id, None)
+        if history is None:
+            return None
+        self.tracks.pop(new_id, None)
+        history.obstacle_id = new_id
+        self.tracks[new_id] = history
+        return history
+
     def update(self, obstacle_id, s, d, is_visible, now):
         """Update one ID and return its classification state.
 

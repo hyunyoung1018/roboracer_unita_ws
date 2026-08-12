@@ -47,6 +47,10 @@ class Controller:
                 trailing_i_gain,
                 trailing_d_gain,
                 blind_trailing_speed,
+                trailing_accel_limit,
+                trailing_decel_limit,
+                trailing_emergency_gap,
+                trailing_rate_limit_enabled,
 
                 loop_rate,
                 wheelbase,
@@ -105,6 +109,10 @@ class Controller:
         self.trailing_i_gain = trailing_i_gain
         self.trailing_d_gain = trailing_d_gain
         self.blind_trailing_speed = blind_trailing_speed
+        self.trailing_accel_limit = trailing_accel_limit
+        self.trailing_decel_limit = trailing_decel_limit
+        self.trailing_emergency_gap = trailing_emergency_gap
+        self.trailing_rate_limit_enabled = trailing_rate_limit_enabled
 
         self.loop_rate = loop_rate
         self.AEB_thres = AEB_thres
@@ -121,6 +129,7 @@ class Controller:
         self.v_diff = None
         self.i_gap = 0
         self.trailing_command = 2
+        self.trailing_initialized = False
         self.speed_command = None
         self.last_valid_speed = 0
         self.curvature_waypoints = 0
@@ -439,6 +448,7 @@ class Controller:
         else:
             self.trailing_speed = global_speed
             self.i_gap = 0
+            self.trailing_initialized = False
             speed_command = global_speed
 
         speed_command = self.speed_adjust_lat_err(speed_command, lat_e_norm)
@@ -468,9 +478,36 @@ class Controller:
         d_value = self.v_diff * self.trailing_d_gain
         i_value = self.i_gap * self.trailing_i_gain
 
-        self.trailing_command = np.clip(self.opponent[2] - p_value - i_value - d_value, 0, global_speed)
+        raw_command = np.clip(
+            self.opponent[2] - p_value - i_value - d_value,
+            0,
+            global_speed,
+        )
         if not self.opponent[4] and self.gap_actual > self.gap_should:
-            self.trailing_command = max(self.blind_trailing_speed, self.trailing_command)
+            raw_command = min(
+                global_speed,
+                max(self.blind_trailing_speed, raw_command),
+            )
+
+        if not self.trailing_rate_limit_enabled:
+            self.trailing_command = float(raw_command)
+            return self.trailing_command
+
+        # Avoid stop-go commands from a single noisy gap/speed sample.  Start
+        # from measured ego speed when entering TRAILING, then rate-limit both
+        # acceleration and braking.  A genuinely unsafe close gap still stops
+        # immediately rather than being softened by the limiter.
+        if self.gap_actual <= self.trailing_emergency_gap:
+            self.trailing_command = 0.0
+            self.trailing_initialized = True
+            return self.trailing_command
+        previous = self.trailing_command if self.trailing_initialized \
+            else max(0.0, float(self.speed_now))
+        dt = 1.0 / max(float(self.loop_rate), 1.0)
+        lower = previous - float(self.trailing_decel_limit) * dt
+        upper = previous + float(self.trailing_accel_limit) * dt
+        self.trailing_command = float(np.clip(raw_command, lower, upper))
+        self.trailing_initialized = True
 
         return self.trailing_command
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Generate safe fallback or learned future trajectories for one opponent."""
 
+import json
+
 import numpy as np
 import rclpy
 from f110_msgs.msg import (
@@ -14,7 +16,7 @@ from f110_msgs.msg import (
 from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import Bool, Header
+from std_msgs.msg import Bool, Header, String
 from visualization_msgs.msg import MarkerArray
 
 from frenet_conversion.frenet_converter import FrenetConverter
@@ -34,7 +36,10 @@ class OpponentPredictor(Node):
             'obstacle_timeout': 0.5,
             'trajectory_timeout': 2.0,
             'min_training_laps': 1.0,
-            'learned_deviation_threshold': 0.25,
+            'learned_deviation_enter_threshold': 0.35,
+            'learned_deviation_exit_threshold': 0.55,
+            'learned_ready_confirm_frames': 3,
+            'learned_reject_confirm_frames': 5,
             'opponent_width': 0.28,
             'speed_offset': 0.0,
         }
@@ -51,6 +56,12 @@ class OpponentPredictor(Node):
         self.obstacles_received_at = None
         self.trajectory = None
         self.trajectory_received_at = None
+        self._diagnostic_status = None
+        self._diagnostic_payload = None
+        self._diagnostic_subscriber_count = 0
+        self._learned_gate_open = False
+        self._learned_ready_count = 0
+        self._learned_reject_count = 0
 
         self.obstacle_pub = self.create_publisher(
             ObstacleArray, '/opponent_prediction/obstacles', 10)
@@ -60,6 +71,9 @@ class OpponentPredictor(Node):
             Bool, '/opponent_prediction/force_trailing', 10)
         self.marker_pub = self.create_publisher(
             MarkerArray, '/opponent_prediction_markerarray', 10)
+        # Keep volatile QoS: this is live state, not latched configuration.
+        self.diagnostic_pub = self.create_publisher(
+            String, '/opponent_prediction/diagnostics', 10)
 
         # Generic source name is remapped to /tracking/dynamic_obstacles.
         self.create_subscription(
@@ -75,6 +89,7 @@ class OpponentPredictor(Node):
             OpponentTrajectory, '/opponent_trajectory', self._trajectory_cb, 10)
         rate = float(self.get_parameter('loop_rate').value)
         self.create_timer(1.0 / max(rate, 1.0), self._loop)
+        self.create_timer(0.5, self._republish_diagnostic_for_new_subscriber)
 
     def _obstacle_cb(self, msg):
         self.obstacles = msg
@@ -110,23 +125,116 @@ class OpponentPredictor(Node):
             return float('inf')
         return (self.get_clock().now() - received_at).nanoseconds * 1e-9
 
-    def _learned_ready(self, obstacle):
+    def _set_diagnostic(self, status, detail=None):
+        """Publish only a diagnostic state transition, never every loop."""
+        if status == self._diagnostic_status:
+            return
+        self._diagnostic_status = status
+        payload = {
+            'source': 'predictor',
+            'status': status,
+            'detail': detail or {},
+        }
+        self._diagnostic_payload = json.dumps(payload)
+        self.diagnostic_pub.publish(String(data=self._diagnostic_payload))
+
+    def _republish_diagnostic_for_new_subscriber(self):
+        """Give a newly started volatile monitor the current state once."""
+        count = self.diagnostic_pub.get_subscription_count()
+        subscriber_added = count > self._diagnostic_subscriber_count
+        has_payload = self._diagnostic_payload is not None
+        if subscriber_added and has_payload:
+            self.diagnostic_pub.publish(String(data=self._diagnostic_payload))
+        self._diagnostic_subscriber_count = count
+
+    def _learned_status(self, obstacle):
+        """Return learned readiness and the exact force-trailing reason."""
         if self.trajectory is None or not self.trajectory.oppwpnts:
-            return False
-        if self._age(self.trajectory_received_at) > float(
-                self.get_parameter('trajectory_timeout').value):
-            return False
-        if self.trajectory.lap_count < float(
-                self.get_parameter('min_training_laps').value):
-            return False
+            self._reset_learned_gate()
+            return False, 'NO_TRAJECTORY', {'obstacle_id': int(obstacle.id)}
+        timeout = float(self.get_parameter('trajectory_timeout').value)
+        age = self._age(self.trajectory_received_at)
+        if age > timeout:
+            self._reset_learned_gate()
+            return False, 'TRAJECTORY_STALE', {
+                'age_s': round(age, 3),
+                'limit_s': timeout,
+            }
+        minimum_laps = float(self.get_parameter('min_training_laps').value)
+        lap_count = float(self.trajectory.lap_count)
+        if lap_count < minimum_laps:
+            self._reset_learned_gate()
+            return False, 'TRAINING', {
+                'lap_count': round(lap_count, 3),
+                'required_laps': minimum_laps,
+            }
         if not self.trajectory.opp_is_on_trajectory:
-            return False
+            self._reset_learned_gate()
+            return False, 'OFF_TRAJECTORY', {
+                'obstacle_id': int(obstacle.id),
+            }
         s = [w.s_m for w in self.trajectory.oppwpnts]
         d = [w.d_m for w in self.trajectory.oppwpnts]
         expected = float(periodic_interp(
             [obstacle.s_center], s, d, self.track_length)[0])
-        return abs(obstacle.d_center - expected) <= float(
-            self.get_parameter('learned_deviation_threshold').value)
+        deviation = abs(float(obstacle.d_center) - expected)
+        enter_threshold = float(self.get_parameter(
+            'learned_deviation_enter_threshold').value)
+        exit_threshold = float(self.get_parameter(
+            'learned_deviation_exit_threshold').value)
+        ready_frames = max(1, int(self.get_parameter(
+            'learned_ready_confirm_frames').value))
+        reject_frames = max(1, int(self.get_parameter(
+            'learned_reject_confirm_frames').value))
+
+        if self._learned_gate_open:
+            if deviation >= exit_threshold:
+                self._learned_reject_count += 1
+            else:
+                self._learned_reject_count = 0
+            if self._learned_reject_count >= reject_frames:
+                self._reset_learned_gate()
+                return False, 'DEVIATION_TOO_LARGE', {
+                    'deviation_m': round(deviation, 3),
+                    'exit_limit_m': exit_threshold,
+                    'reject_frames': reject_frames,
+                }
+            return True, 'LEARNED_READY', {
+                'obstacle_id': int(obstacle.id),
+                'lap_count': round(lap_count, 3),
+                'deviation_m': round(deviation, 3),
+            }
+
+        if deviation <= enter_threshold:
+            self._learned_ready_count += 1
+        else:
+            self._learned_ready_count = 0
+        if self._learned_ready_count < ready_frames:
+            status = 'LEARNED_CONFIRMING' \
+                if deviation <= enter_threshold else 'DEVIATION_TOO_LARGE'
+            return False, status, {
+                'deviation_m': round(deviation, 3),
+                'enter_limit_m': enter_threshold,
+                'ready_frames': self._learned_ready_count,
+                'required_frames': ready_frames,
+            }
+        self._learned_gate_open = True
+        self._learned_ready_count = 0
+        self._learned_reject_count = 0
+        return True, 'LEARNED_READY', {
+            'obstacle_id': int(obstacle.id),
+            'lap_count': round(lap_count, 3),
+            'deviation_m': round(deviation, 3),
+        }
+
+    def _reset_learned_gate(self):
+        self._learned_gate_open = False
+        self._learned_ready_count = 0
+        self._learned_reject_count = 0
+
+    def _learned_ready(self, obstacle):
+        """Compatibility wrapper retained for callers and unit tests."""
+        return self._learned_status(obstacle)[0]
 
     def _fallback_profile(self, obstacle, count, dt):
         speed = max(0.0, float(obstacle.vs))
@@ -163,15 +271,30 @@ class OpponentPredictor(Node):
         return s, d, speed, vd
 
     def _loop(self):
-        ready = all((
-            self.ego_s is not None,
-            self.track_length is not None,
-            self.converter is not None,
-            self.updated_msg is not None,
-            self.center_msg is not None,
-        ))
-        if not ready or self._age(self.obstacles_received_at) > float(
-                self.get_parameter('obstacle_timeout').value):
+        required_inputs = {
+            'ego_s': self.ego_s,
+            'track_length': self.track_length,
+            'converter': self.converter,
+            'global_waypoints_updated': self.updated_msg,
+            'centerline_waypoints': self.center_msg,
+        }
+        missing = [
+            name for name, value in required_inputs.items()
+            if value is None
+        ]
+        if missing:
+            self._set_diagnostic('NOT_READY', {'missing': missing})
+            self._publish_empty()
+            return
+        obstacle_timeout = float(self.get_parameter('obstacle_timeout').value)
+        obstacle_age = self._age(self.obstacles_received_at)
+        if obstacle_age > obstacle_timeout:
+            detail = {'limit_s': obstacle_timeout}
+            if np.isfinite(obstacle_age):
+                detail['age_s'] = round(obstacle_age, 3)
+            else:
+                detail['received'] = False
+            self._set_diagnostic('OBSTACLE_STALE', detail)
             self._publish_empty()
             return
         obstacle = nearest_dynamic(
@@ -181,12 +304,14 @@ class OpponentPredictor(Node):
             float(self.get_parameter('max_opponent_distance').value),
         )
         if obstacle is None:
+            self._set_diagnostic('NO_DYNAMIC_OBSTACLE')
             self._publish_empty()
             return
 
         count = max(2, int(self.get_parameter('n_time_steps').value))
         dt = max(0.01, float(self.get_parameter('dt').value))
-        learned = self._learned_ready(obstacle)
+        learned, status, detail = self._learned_status(obstacle)
+        self._set_diagnostic(status, detail)
         if learned:
             s, d, speed, vd = self._learned_profile(obstacle, count, dt)
         else:

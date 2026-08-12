@@ -91,6 +91,21 @@ def test_histories_are_isolated_by_id():
     )
 
 
+def test_dynamic_history_can_be_transferred_to_reacquired_id():
+    classifier = make_classifier()
+    previous = feed(
+        classifier, 21, [6.0 + 0.04 * index for index in range(14)])
+    assert previous.stable_class == DYNAMIC
+
+    transferred = classifier.transfer_track(21, 37)
+    result = classifier.update(37, 6.58, 0.0, True, 1.0)
+
+    assert transferred is previous
+    assert result.stable_class == DYNAMIC
+    assert 21 not in classifier.tracks
+    assert classifier.tracks[37] is previous
+
+
 def test_output_membership_is_exclusive_and_unknown_is_stable_only():
     assert output_membership(STATIC) == (True, False)
     assert output_membership(DYNAMIC) == (False, True)

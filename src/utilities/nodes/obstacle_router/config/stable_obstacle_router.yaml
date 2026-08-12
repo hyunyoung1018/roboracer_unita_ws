@@ -9,4 +9,11 @@ stable_obstacle_router:
     static_confirm_count: 3
     dynamic_confirm_count: 2
     track_timeout_sec: 1.0
+    # Head-to-head has one moving opponent. Transfer its stable class and last
+    # credible speed when the shared tracker assigns a replacement ID.
+    single_dynamic_opponent: true
+    dynamic_reid_timeout_sec: 1.0
+    dynamic_reid_max_distance_m: 1.2
+    dynamic_speed_hold_sec: 0.75
+    dynamic_speed_valid_min_mps: 0.15
     debug: true

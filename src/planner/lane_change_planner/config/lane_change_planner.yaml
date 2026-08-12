@@ -13,6 +13,7 @@ change_avoidance_node:
     max_evasion_start_offset: 0.8
     path_resolution: 0.10
     side_switch_frames: 10
-    map_erosion_kernel_size: 7
+    map_erosion_kernel_size: 5
     clear_after_frames: 5
+    empty_path_publish_hz: 1.0
     measure: false

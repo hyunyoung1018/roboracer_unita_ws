@@ -37,6 +37,54 @@ def obstacle_mode_for_class(prefix, stable_class):
     return f"OBSTACLE_{prefix}_UNKNOWN", f"장애물 {action} (분류값 오류)"
 
 
+DIAGNOSTIC_DESCRIPTIONS = {
+    "predictor": {
+        "NOT_READY": "predictor 입력 준비 대기",
+        "OBSTACLE_STALE": "동적 장애물 입력이 없거나 만료됨 (force_trailing)",
+        "NO_DYNAMIC_OBSTACLE": "추적 중인 동적 장애물 없음 (force_trailing)",
+        "NO_TRAJECTORY": "학습된 상대 궤적 없음 (force_trailing)",
+        "TRAJECTORY_STALE": "상대 궤적이 만료됨 (force_trailing)",
+        "TRAINING": "상대 궤적 학습 랩 수 부족 (force_trailing)",
+        "OFF_TRAJECTORY": "상대가 학습 궤도를 벗어남 (force_trailing)",
+        "DEVIATION_TOO_LARGE": "현재 상대 위치와 학습 궤적 편차가 큼 (force_trailing)",
+        "LEARNED_CONFIRMING": "학습 예측 사용 조건 확인 중 (force_trailing)",
+        "LEARNED_READY": "학습 예측 사용 가능 (force_trailing 해제)",
+    },
+    "planner": {
+        "NOT_READY": "planner 입력 준비 대기",
+        "PREDICTION_MISSING": "예측 경로 없음",
+        "PREDICTION_STALE": "예측 경로 timestamp 만료",
+        "FORCE_TRAILING": "predictor가 추월 경로 생성을 금지함",
+        "NO_DYNAMIC_OBSTACLE": "lookahead 안에 회피할 동적 장애물 없음",
+        "PREDICTION_ID_MISMATCH": "현재 장애물 ID와 예측 ID 불일치",
+        "NO_SAFE_SIDE": "좌우 어느 쪽도 필요한 여유 폭을 만족하지 못함",
+        "SIDE_SWITCH_PENDING": "안전한 추월 방향 전환 확인 중",
+        "PATH_TOO_SHORT": "생성 가능한 회피 경로 길이가 너무 짧음",
+        "START_OFFSET_TOO_LARGE": "차량 현재 위치와 회피 경로 시작점 차이가 큼",
+        "INVALID_RAW_PATH": "원본 회피 경로 계산 결과가 유효하지 않음",
+        "GRID_FILTER_NOT_READY": "GridFilter가 아직 맵을 받지 못함",
+        "RAW_GRID_REJECTED": "GridFilter가 원본 회피 경로를 거부함",
+        "INVALID_SMOOTHED_PATH": "평활화된 회피 경로가 너무 짧음",
+        "SMOOTHED_GRID_REJECTED": "GridFilter가 평활화된 회피 경로를 거부함",
+        "PATH_READY": "동적 장애물 추월 경로 생성 완료",
+    },
+}
+
+
+def diagnostic_description(source, status):
+    """Return a stable human-readable description for a diagnostic state."""
+    return DIAGNOSTIC_DESCRIPTIONS.get(source, {}).get(
+        status, "알 수 없는 진단 상태")
+
+
+def diagnostic_detail_text(detail):
+    """Format the small structured payload without hiding useful values."""
+    if not isinstance(detail, dict) or not detail:
+        return ""
+    return ", ".join(
+        f"{key}={value}" for key, value in detail.items())
+
+
 class DrivingModeMonitor(Node):
     """Monitor state-machine output in a quiet, dedicated terminal."""
 
@@ -48,11 +96,16 @@ class DrivingModeMonitor(Node):
         self.stable_classes = {}
         self.current_s = None
         self.track_length = None
+        self.last_diagnostic_status = {}
 
         self.declare_parameter(
             "obstacle_topic", "/tracking/stable_obstacles")
         self.declare_parameter(
             "classification_debug_topic", "/tracking/classification_debug")
+        self.declare_parameter(
+            "prediction_diagnostic_topic", "/opponent_prediction/diagnostics")
+        self.declare_parameter(
+            "planner_diagnostic_topic", "/planner/avoidance/diagnostics")
 
         self.create_subscription(
             BehaviorStrategy, "/behavior_strategy", self.behavior_cb, 10)
@@ -72,6 +125,19 @@ class DrivingModeMonitor(Node):
             Odometry, "/car_state/odom_frenet", self.odom_frenet_cb, 10)
         self.create_subscription(
             WpntArray, "/global_waypoints_scaled", self.waypoints_cb, 10)
+        # Standard volatile QoS is intentional; diagnostics are live events.
+        self.create_subscription(
+            String,
+            str(self.get_parameter("prediction_diagnostic_topic").value),
+            self.diagnostic_cb,
+            10,
+        )
+        self.create_subscription(
+            String,
+            str(self.get_parameter("planner_diagnostic_topic").value),
+            self.diagnostic_cb,
+            10,
+        )
 
     def obstacles_cb(self, msg):
         self.obstacles = list(msg.obstacles)
@@ -105,6 +171,40 @@ class DrivingModeMonitor(Node):
         if msg.wpnts:
             # The final global waypoint carries the closed-loop track length.
             self.track_length = float(msg.wpnts[-1].s_m)
+
+    def diagnostic_cb(self, msg):
+        """Print a gate reason once, then wait for its state to change."""
+        try:
+            payload = json.loads(msg.data)
+            source = str(payload["source"])
+            status = str(payload["status"])
+            detail = payload.get("detail", {})
+        except (
+            AttributeError,
+            TypeError,
+            ValueError,
+            KeyError,
+            json.JSONDecodeError,
+        ) as exc:
+            self.get_logger().warn(
+                f"invalid dynamic diagnostic message: {exc}",
+                throttle_duration_sec=2.0,
+            )
+            return
+
+        if self.last_diagnostic_status.get(source) == status:
+            return
+        self.last_diagnostic_status[source] = status
+
+        description = diagnostic_description(source, status)
+        detail_text = diagnostic_detail_text(detail)
+        message = f"[DYNAMIC_DIAG][{source.upper()}] {description} ({status})"
+        if detail_text:
+            message += f": {detail_text}"
+        if status in ("LEARNED_READY", "PATH_READY"):
+            self.get_logger().info(message)
+        else:
+            self.get_logger().warn(message)
 
     def closest_obstacle(self):
         """Return closest tracked obstacle when targets are omitted."""

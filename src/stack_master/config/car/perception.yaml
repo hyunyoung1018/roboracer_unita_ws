@@ -119,6 +119,6 @@ spline_node:
     # [m] How close the path's centreline may come to the track edge. NOT
     # reducible below the car's half width of 0.14 - at 0.20 the car passes
     # 6 cm from the wall, and 0.15 would put it 1 cm away.
-    boundary_margin: 0.20
-    spline_resolution: 0.10
+    boundary_margin: 0.19
+    spline_resolution: 0.05
     measure: false

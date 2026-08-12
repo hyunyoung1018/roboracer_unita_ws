@@ -32,7 +32,8 @@ L1_PARAMS = [
     'acc_scaler_for_steer', 'dec_scaler_for_steer', 'start_scale_speed',
     'end_scale_speed', 'downscale_factor', 'speed_lookahead_for_steer',
     'trailing_gap', 'trailing_vel_gain', 'trailing_p_gain', 'trailing_i_gain',
-    'trailing_d_gain', 'blind_trailing_speed', 'curvature_factor',
+    'trailing_d_gain', 'blind_trailing_speed', 'trailing_accel_limit',
+    'trailing_decel_limit', 'trailing_emergency_gap', 'curvature_factor',
     'speed_factor_for_lat_err', 'speed_factor_for_curvature', 'KP', 'KI', 'KD',
     'heading_error_thres', 'steer_gain_for_speed', 'future_constant', 'AEB_thres',
     'speed_diff_thres', 'start_speed', 'start_curvature_factor',
@@ -78,8 +79,11 @@ class ControllerManager(Node):
         self.acc_now = np.zeros(10)
         self.speed_now_y = 0
         self.yaw_rate = 0
-        self.waypoint_safety_counter = 0
+        self.last_behavior_at = None
         self.opponent = [0, 0, 0, False, True]  # s, d, vs, is_static, is_visible
+        self.last_opponent_id = None
+        self.last_valid_opponent_speed = None
+        self.last_valid_opponent_speed_at = None
         self.state = ""
         self.trailing_command = 2
         self.i_gap = 0
@@ -94,7 +98,16 @@ class ControllerManager(Node):
         self.wheelbase = self._get_param('wheelbase', 0.321)
         self.steer_max = self._get_param('steer_max', 0.2954)
         self.measuring = self._get_param('measure', False)
-        self.state_machine_rate = self._get_param('state_machine_rate', 40)
+        self.behavior_timeout_sec = float(
+            self._get_param('behavior_timeout_sec', 0.5))
+        self.single_opponent_mode = bool(
+            self._get_param('single_opponent_mode', False))
+        self.opponent_speed_hold_sec = float(
+            self._get_param('opponent_speed_hold_sec', 0.75))
+        self.opponent_speed_valid_min_mps = float(
+            self._get_param('opponent_speed_valid_min_mps', 0.15))
+        self.trailing_rate_limit_enabled = bool(
+            self._get_param('trailing_rate_limit_enabled', False))
 
         # save-back path (controller.yaml in stack_master/config)
         try:
@@ -206,6 +219,9 @@ class ControllerManager(Node):
             self.downscale_factor, self.speed_lookahead_for_steer,
             self.trailing_gap, self.trailing_vel_gain, self.trailing_p_gain,
             self.trailing_i_gain, self.trailing_d_gain, self.blind_trailing_speed,
+            self.trailing_accel_limit, self.trailing_decel_limit,
+            self.trailing_emergency_gap,
+            self.trailing_rate_limit_enabled,
             self.loop_rate, self.wheelbase,
             self.speed_factor_for_lat_err, self.speed_factor_for_curvature,
             self.speed_diff_thres, self.start_speed, self.start_curvature_factor,
@@ -322,13 +338,41 @@ class ControllerManager(Node):
         self.position_in_map_frenet = np.array([s, d, vs, vd])
 
     def behavior_cb(self, data: BehaviorStrategy):
+        now = self.get_clock().now()
+        self.last_behavior_at = now
         if len(data.trailing_targets) != 0:
             opponent = data.trailing_targets[0]
             opponent_s = opponent.s_center
             opponent_d = opponent.d_center
-            opponent_vs = opponent.vs
+            opponent_vs = float(opponent.vs)
             opponent_visible = opponent.is_visible
             opponent_static = opponent.is_static
+            opponent_id = int(opponent.id)
+            if self.single_opponent_mode and not opponent_static:
+                now_sec = now.nanoseconds * 1e-9
+                speed_is_valid = (
+                    np.isfinite(opponent_vs)
+                    and opponent_vs >= self.opponent_speed_valid_min_mps
+                )
+                if speed_is_valid:
+                    self.last_valid_opponent_speed = opponent_vs
+                    self.last_valid_opponent_speed_at = now_sec
+                elif (
+                    self.last_valid_opponent_speed is not None
+                    and self.last_valid_opponent_speed_at is not None
+                    and now_sec - self.last_valid_opponent_speed_at
+                    <= self.opponent_speed_hold_sec
+                ):
+                    opponent_vs = self.last_valid_opponent_speed
+                if (
+                    self.last_opponent_id is not None
+                    and self.last_opponent_id != opponent_id
+                ):
+                    self.get_logger().warn(
+                        f'controller opponent ID changed '
+                        f'{self.last_opponent_id} -> {opponent_id}; '
+                        f'using continuous speed {opponent_vs:.2f} m/s')
+                self.last_opponent_id = opponent_id
             self.opponent = [opponent_s, opponent_d, opponent_vs, opponent_static, opponent_visible]
         else:
             self.opponent = None
@@ -348,7 +392,6 @@ class ControllerManager(Node):
             else:
                 self.waypoint_list_in_map.append([waypoint_in_map[0], waypoint_in_map[1], speed, 0, waypoint.s_m, waypoint.kappa_radpm, waypoint.psi_rad, waypoint.ax_mps2, waypoint.d_m])
         self.waypoint_array_in_map = np.array(self.waypoint_list_in_map)
-        self.waypoint_safety_counter = 0
         self.state = data.state
 
     def _imu_to_base(self, imu_frame):
@@ -458,9 +501,16 @@ class ControllerManager(Node):
         self.curvature_waypoints = curvature_waypoints
         self.l1_pub.publish(Point(x=float(idx_nearest_waypoint), y=float(L1_distance), z=float(self.curvature_waypoints)))
 
-        self.waypoint_safety_counter += 1
-        if self.waypoint_safety_counter >= self.loop_rate/self.state_machine_rate * 10:
-            self.get_logger().error(f"[{self.name}] Received no local wpnts. STOPPING!!", throttle_duration_sec=0.5)
+        behavior_age = (
+            self.get_clock().now() - self.last_behavior_at
+        ).nanoseconds * 1e-9
+        if behavior_age >= self.behavior_timeout_sec:
+            self.get_logger().error(
+                f"[{self.name}] BehaviorStrategy stale for "
+                f"{behavior_age:.2f}s (limit {self.behavior_timeout_sec:.2f}s). "
+                f"STOPPING!!",
+                throttle_duration_sec=0.5,
+            )
             speed = 0
             steering_angle = 0
 

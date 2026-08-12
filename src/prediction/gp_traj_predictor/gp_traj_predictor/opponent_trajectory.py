@@ -92,13 +92,28 @@ class OpponentTrajectoryCollector(Node):
     def _learned_cb(self, msg):
         self.learned = msg
 
-    def _reset_for_id(self, obstacle_id):
-        self.active_id = int(obstacle_id)
+    def _accept_opponent_id(self, obstacle_id):
+        """Follow the race's single dynamic opponent across tracker ID changes.
+
+        The shared tracker may assign a new ID after a LiDAR dropout.  In
+        head-to-head mode there is only one dynamic opponent, so an ID change
+        must not discard the trajectory and lap progress already learned for
+        that car.  Reset only the state used to differentiate consecutive
+        measurements; otherwise the gap would create a false velocity spike.
+        """
+        obstacle_id = int(obstacle_id)
+        if self.active_id is None:
+            self.active_id = obstacle_id
+            return
+
+        old_id = self.active_id
+        self.active_id = obstacle_id
         self.last_s = None
         self.last_time = None
-        self.traversed = 0.0
         self.off_count = 0
-        self.samples.clear()
+        self.get_logger().warn(
+            f'opponent tracker ID changed {old_id} -> {obstacle_id}; '
+            'preserving learned trajectory and lap progress')
 
     def _sample(self):
         if self.ego_s is None or not self.track_length or self.converter is None:
@@ -116,7 +131,7 @@ class OpponentTrajectoryCollector(Node):
         if now - measurement_time > float(self.get_parameter('max_measurement_age').value):
             return
         if self.active_id != obstacle.id:
-            self._reset_for_id(obstacle.id)
+            self._accept_opponent_id(obstacle.id)
 
         if self.last_s is None:
             ds = 0.0

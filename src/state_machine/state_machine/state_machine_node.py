@@ -471,14 +471,22 @@ class StateMachine(Node):
         if os.path.exists(sp):
             with open(sp, "r") as f:
                 d = yaml.safe_load(f) or {}
-            self.sectors_params = (d.get("speed_sector_tuner", {}) or {}).get("ros__parameters", {}) or {}
+            # Current ROS 2 maps use the launched node name (sector_tuner) as
+            # their YAML root.  Keep accepting the legacy ROS1-port name so
+            # older map directories remain usable.
+            block = d.get("sector_tuner") or d.get("speed_sector_tuner") or {}
+            self.sectors_params = block.get("ros__parameters", {}) or {}
         else:
             self.get_logger().warn(f"[{self.name}] {sp} not found; no FTG-only zones")
         op = os.path.join(maps_dir, "ot_sectors.yaml")
         if os.path.exists(op):
             with open(op, "r") as f:
                 d = yaml.safe_load(f) or {}
-            self.ot_sectors_params = (d.get("ot_sector_tuner", {}) or {}).get("ros__parameters", {}) or {}
+            # ot_sectors.yaml is loaded by the /ot_interpolator ROS 2 node.
+            # Accept the old name as a fallback, but prefer the actual node
+            # name used by every map currently shipped in this workspace.
+            block = d.get("ot_interpolator") or d.get("ot_sector_tuner") or {}
+            self.ot_sectors_params = block.get("ros__parameters", {}) or {}
             self.ot_begin_margin = float(self.ot_sectors_params.get("ot_sector_begin", self.ot_begin_margin))
         else:
             self.get_logger().warn(f"[{self.name}] {op} not found; no overtake zones")
@@ -526,13 +534,13 @@ class StateMachine(Node):
 
     def _sector_param_event_cb(self, event):
         node = event.node.lstrip("/")
-        if node == "speed_sector_tuner":
+        if node in ("sector_tuner", "speed_sector_tuner"):
             for p in list(event.new_parameters) + list(event.changed_parameters):
                 if p.name.startswith("Sector") and p.name.endswith(".only_FTG"):
                     key = p.name.split(".")[0]
                     self.sectors_params.setdefault(key, {})["only_FTG"] = bool(self._param_msg_value(p))
             self._load_sector_params()
-        elif node == "ot_sector_tuner":
+        elif node in ("ot_interpolator", "ot_sector_tuner"):
             for p in list(event.new_parameters) + list(event.changed_parameters):
                 if p.name.startswith("Overtaking_sector") and p.name.endswith(".ot_flag"):
                     key = p.name.split(".")[0]

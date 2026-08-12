@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Head-to-head wrapper for the legacy UNITA state machine."""
 
+from copy import deepcopy
+
 import rclpy
 
 from .state_machine_node import StateMachine
@@ -54,10 +56,29 @@ class HeadToHeadStateMachine(StateMachine):
         return self.get_parameter(name).value
 
     def _remember_trailing_target(self, target):
-        if target is None:
+        if target is None or not bool(target.is_visible):
             return
-        self._last_trailing_target = target
+        self._last_trailing_target = deepcopy(target)
         self._last_trailing_target_at = self.now_sec()
+
+    def _held_trailing_target(self):
+        """Propagate the one opponent briefly through a detector dropout."""
+        if (
+            self._last_trailing_target is None
+            or self._last_trailing_target_at is None
+        ):
+            return None
+        age = self.now_sec() - self._last_trailing_target_at
+        if age > self.trailing_target_hold_sec:
+            return None
+        target = deepcopy(self._last_trailing_target)
+        if self.track_length and self.track_length > 0.0:
+            ds = max(0.0, float(target.vs)) * max(0.0, age)
+            target.s_start = (float(target.s_start) + ds) % self.track_length
+            target.s_end = (float(target.s_end) + ds) % self.track_length
+            target.s_center = (float(target.s_center) + ds) % self.track_length
+        target.is_visible = False
+        return target
 
     def _nearest_interest_target(self):
         gap, target = nearest_ahead(
@@ -96,18 +117,23 @@ class HeadToHeadStateMachine(StateMachine):
             self._remember_trailing_target(wpnts_data.closest_target)
             return False
 
-        # A tracked obstacle is still present and the previous global-path
-        # decision was blocked very recently. Hold the blocked decision long
-        # enough to suppress one-frame d/edge noise, but never invent an
-        # obstacle after the tracker itself has removed it.
+        # Hold the previous blocked decision through one short detector/ID
+        # dropout.  The held target is propagated at its last credible speed
+        # and its timestamp is never refreshed by another invisible frame, so
+        # this cannot turn into a permanent ghost opponent.
+        held_target = self._held_trailing_target()
+        target = fallback_target or held_target
         if (
-            fallback_target is not None
+            target is not None
             and getattr(self, "_last_gb_blocked_at", None) is not None
             and now - self._last_gb_blocked_at <= self.trailing_block_hold_sec
         ):
-            wpnts_data.closest_target = fallback_target
-            wpnts_data.closest_gap = gap
-            self._remember_trailing_target(fallback_target)
+            wpnts_data.closest_target = target
+            wpnts_data.closest_gap = (
+                float(target.s_start) - self.cur_s
+            ) % self.track_length
+            if fallback_target is not None:
+                self._remember_trailing_target(fallback_target)
             return False
         return True
 
@@ -123,13 +149,9 @@ class HeadToHeadStateMachine(StateMachine):
             self._remember_trailing_target(target)
             return [target], selected_src
 
-        if (
-            self._last_trailing_target is not None
-            and self._last_trailing_target_at is not None
-            and self.now_sec() - self._last_trailing_target_at
-            <= self.trailing_target_hold_sec
-        ):
-            return [self._last_trailing_target], selected_src
+        held_target = self._held_trailing_target()
+        if held_target is not None:
+            return [held_target], selected_src
         return [], selected_src
 
 

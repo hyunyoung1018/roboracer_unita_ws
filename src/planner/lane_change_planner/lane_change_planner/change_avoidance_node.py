@@ -2,6 +2,7 @@
 """UNICORN-derived, prediction-gated lane-change avoidance planner."""
 
 from copy import deepcopy
+import json
 import time
 
 import numpy as np
@@ -20,7 +21,7 @@ from nav_msgs.msg import Odometry
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import Bool, Float32, Float32MultiArray, Header
+from std_msgs.msg import Bool, Float32, Float32MultiArray, Header, String
 from visualization_msgs.msg import Marker, MarkerArray
 
 from frenet_conversion.frenet_converter import FrenetConverter
@@ -66,6 +67,7 @@ class ChangeAvoidanceNode(Node):
         'side_switch_frames': 10,
         'map_erosion_kernel_size': 7,
         'clear_after_frames': 5,
+        'empty_path_publish_hz': 1.0,
         'measure': False,
     }
 
@@ -95,6 +97,12 @@ class ChangeAvoidanceNode(Node):
         self.pending_side = None
         self.pending_count = 0
         self.no_path_count = 0
+        self.last_empty_publish_at = None
+        self._diagnostic_status = None
+        self._diagnostic_payload = None
+        self._diagnostic_subscriber_count = 0
+        self._side_failure_status = 'NO_SAFE_SIDE'
+        self._side_failure_detail = {}
         self.last_switch_time = self.get_clock().now().to_msg()
 
         self.path_pub = self.create_publisher(
@@ -109,6 +117,9 @@ class ChangeAvoidanceNode(Node):
             MarkerArray, '/planner/avoidance/start_end_markers', 10)
         self.latency_pub = self.create_publisher(
             Float32, '/planner/avoidance/lane_change_latency', 10)
+        # Deliberately volatile: the monitor reports live transitions only.
+        self.diagnostic_pub = self.create_publisher(
+            String, '/planner/avoidance/diagnostics', 10)
 
         # Keep the generic UNICORN input name; head_to_head remaps it to the
         # router's dynamic-only stream.
@@ -137,6 +148,7 @@ class ChangeAvoidanceNode(Node):
         )
         self.create_timer(1.0 / max(self.rate_hz, 1.0), self._loop)
         self.create_timer(0.2, self._publish_lane_markers)
+        self.create_timer(0.5, self._republish_diagnostic_for_new_subscriber)
 
     def _read_parameters(self):
         for name in self.PARAM_DEFAULTS:
@@ -216,11 +228,40 @@ class ChangeAvoidanceNode(Node):
         age = (self.get_clock().now() - self.prediction_received_at).nanoseconds * 1e-9
         return age <= float(self.pred_timeout)
 
+    def _prediction_age(self):
+        if self.prediction_received_at is None:
+            return float('inf')
+        return (
+            self.get_clock().now() - self.prediction_received_at
+        ).nanoseconds * 1e-9
+
+    def _set_diagnostic(self, status, detail=None):
+        """Publish a planner gate transition without loop-rate log spam."""
+        if status == self._diagnostic_status:
+            return
+        self._diagnostic_status = status
+        payload = {
+            'source': 'planner',
+            'status': status,
+            'detail': detail or {},
+        }
+        self._diagnostic_payload = json.dumps(payload)
+        self.diagnostic_pub.publish(String(data=self._diagnostic_payload))
+
+    def _republish_diagnostic_for_new_subscriber(self):
+        """Give a newly started volatile monitor the current state once."""
+        count = self.diagnostic_pub.get_subscription_count()
+        subscriber_added = count > self._diagnostic_subscriber_count
+        has_payload = self._diagnostic_payload is not None
+        if subscriber_added and has_payload:
+            self.diagnostic_pub.publish(String(data=self._diagnostic_payload))
+        self._diagnostic_subscriber_count = count
+
     def _reference_at(self, s):
         s_values = np.asarray([w.s_m for w in self.scaled_msg.wpnts])
         return self.scaled_msg.wpnts[int(np.argmin(np.abs(s_values - (s % self.track_length))))]
 
-    def _available_sides(self, obstacle):
+    def _side_geometry(self, obstacle):
         reference = self._reference_at(obstacle.s_center)
         half_width = 0.5 * float(self.vehicle_width)
         required_center_clearance = half_width + float(self.safety_margin)
@@ -228,18 +269,30 @@ class ChangeAvoidanceNode(Node):
         right_target = min(-float(self.lane_offset), obstacle.d_right - required_center_clearance)
         left_bound_room = reference.d_left - left_target - half_width
         right_bound_room = reference.d_right + right_target - half_width
+        return {
+            'left': (left_target, left_bound_room),
+            'right': (right_target, right_bound_room),
+        }
+
+    def _available_sides(self, obstacle):
+        geometry = self._side_geometry(obstacle)
         available = {}
-        if left_bound_room >= self.spline_bound_mindist:
-            available['left'] = (left_target, left_bound_room)
-        if right_bound_room >= self.spline_bound_mindist:
-            available['right'] = (right_target, right_bound_room)
+        for side, (target, room) in geometry.items():
+            if room >= self.spline_bound_mindist:
+                available[side] = (target, room)
         return available
 
     def _select_side(self, obstacles):
         if not obstacles:
             return None, None
+        side_rooms = {'left': [], 'right': []}
         available_for_all = {'left': [], 'right': []}
         for obstacle in obstacles:
+            geometry = self._side_geometry(obstacle)
+            for side in side_rooms:
+                side_rooms[side].append((
+                    float(geometry[side][1]), int(obstacle.id),
+                    float(obstacle.s_center), float(obstacle.d_center)))
             available = self._available_sides(obstacle)
             for side in list(available_for_all):
                 if side not in available:
@@ -247,6 +300,17 @@ class ChangeAvoidanceNode(Node):
                 else:
                     available_for_all[side].append(available[side])
         if not available_for_all:
+            worst_left = min(side_rooms['left'], default=(float('-inf'), -1, 0.0, 0.0))
+            worst_right = min(side_rooms['right'], default=(float('-inf'), -1, 0.0, 0.0))
+            self._side_failure_status = 'NO_SAFE_SIDE'
+            self._side_failure_detail = {
+                'prediction_count': len(obstacles),
+                'required_room_m': float(self.spline_bound_mindist),
+                'min_left_room_m': round(worst_left[0], 3),
+                'left_failure_id': worst_left[1],
+                'min_right_room_m': round(worst_right[0], 3),
+                'right_failure_id': worst_right[1],
+            }
             return None, None
         raw_side = max(
             available_for_all,
@@ -257,6 +321,13 @@ class ChangeAvoidanceNode(Node):
         committed = self._apply_side_hysteresis(raw_side)
         if committed != raw_side:
             # The old side is no longer guaranteed safe for every predicted pose.
+            self._side_failure_status = 'SIDE_SWITCH_PENDING'
+            self._side_failure_detail = {
+                'committed_side': committed,
+                'requested_side': raw_side,
+                'pending_frames': int(self.pending_count),
+                'required_frames': int(self.side_switch_frames),
+            }
             return None, None
         return committed, target
 
@@ -282,7 +353,7 @@ class ChangeAvoidanceNode(Node):
 
     def _considered_obstacles(self):
         if self.current_s is None or not self.track_length:
-            return []
+            return [], 'NOT_READY', {'missing': ['ego_s_or_track_length']}
         actual = [
             obs for obs in self.dynamic_obstacles.obstacles
             if not obs.is_static
@@ -290,15 +361,37 @@ class ChangeAvoidanceNode(Node):
             and abs(obs.d_center - self.current_d) < self.obs_traj_thresh
         ]
         if not actual:
-            return []
+            return [], 'NO_DYNAMIC_OBSTACLE', {
+                'lookahead_m': float(self.lookahead),
+                'lateral_limit_m': float(self.obs_traj_thresh),
+            }
         nearest = min(actual, key=lambda obs: (obs.s_center - self.current_s) % self.track_length)
         if nearest.id != self.predictions.id:
-            return []
+            return [], 'PREDICTION_ID_MISMATCH', {
+                'obstacle_id': int(nearest.id),
+                'prediction_id': int(self.predictions.id),
+            }
         predicted = [
             obs for obs in self.predicted_obstacles.obstacles
             if (obs.s_center - self.current_s) % self.track_length < self.lookahead
         ]
-        return predicted or [nearest]
+        return predicted or [nearest], None, None
+
+    def _first_grid_failure(self, xy):
+        """Return the first rejected sample so the failure is actionable."""
+        for index, (x, y) in enumerate(np.asarray(xy, dtype=float)):
+            if not self.map_filter.is_point_inside(x, y):
+                pixel = self.map_filter.world_to_pixel(x, y)
+                detail = {
+                    'path_index': int(index),
+                    'x_m': round(float(x), 3),
+                    'y_m': round(float(y), 3),
+                }
+                if pixel is not None:
+                    detail['pixel_x'] = int(pixel[0])
+                    detail['pixel_y'] = int(pixel[1])
+                return detail
+        return None
 
     def _unwrap(self, s):
         forward = (float(s) - self.current_s) % self.track_length
@@ -309,6 +402,8 @@ class ChangeAvoidanceNode(Node):
     def _plan(self, obstacles):
         side, target_d = self._select_side(obstacles)
         if side is None:
+            self._set_diagnostic(
+                self._side_failure_status, self._side_failure_detail)
             return None
         starts = [self._unwrap(obs.s_start) for obs in obstacles]
         ends = [self._unwrap(obs.s_end) for obs in obstacles]
@@ -323,6 +418,9 @@ class ChangeAvoidanceNode(Node):
             path_start + 0.5 * self.track_length,
         )
         if path_end - path_start < self.path_resolution * 4:
+            self._set_diagnostic('PATH_TOO_SHORT', {
+                'length_m': round(path_end - path_start, 3),
+            })
             return None
 
         count = max(5, int(np.ceil((path_end - path_start) / self.path_resolution)) + 1)
@@ -344,11 +442,21 @@ class ChangeAvoidanceNode(Node):
             d[index] = target_d * weight
 
         if abs(self.current_d - d[0]) > self.max_evasion_start_offset:
+            self._set_diagnostic('START_OFFSET_TOO_LARGE', {
+                'offset_m': round(abs(self.current_d - d[0]), 3),
+                'limit_m': float(self.max_evasion_start_offset),
+            })
             return None
         xy = self.converter.get_cartesian(s_unwrapped % self.track_length, d).T
         if len(xy) < 5 or not np.all(np.isfinite(xy)):
+            self._set_diagnostic('INVALID_RAW_PATH', {'point_count': len(xy)})
             return None
-        if not self.map_filter.ready or not self.map_filter.is_path_inside(xy):
+        if not self.map_filter.ready:
+            self._set_diagnostic('GRID_FILTER_NOT_READY')
+            return None
+        raw_failure = self._first_grid_failure(xy)
+        if raw_failure is not None:
+            self._set_diagnostic('RAW_GRID_REJECTED', raw_failure)
             return None
 
         smoothed_xy = ccma_smooth(xy)
@@ -358,7 +466,14 @@ class ChangeAvoidanceNode(Node):
         out_d = np.asarray(smoothed_sd[1])
         keep = np.concatenate([[True], np.diff(out_s) > 1e-4])
         smoothed_xy, out_s, out_d = smoothed_xy[keep], out_s[keep], out_d[keep]
-        if len(out_s) < 5 or not self.map_filter.is_path_inside(smoothed_xy):
+        if len(out_s) < 5:
+            self._set_diagnostic('INVALID_SMOOTHED_PATH', {
+                'point_count': len(out_s),
+            })
+            return None
+        smoothed_failure = self._first_grid_failure(smoothed_xy)
+        if smoothed_failure is not None:
+            self._set_diagnostic('SMOOTHED_GRID_REJECTED', smoothed_failure)
             return None
 
         heading, curvature = _heading_curvature(smoothed_xy)
@@ -387,20 +502,51 @@ class ChangeAvoidanceNode(Node):
         return OTWpntArray(
             header=Header(stamp=self.get_clock().now().to_msg(), frame_id='map'))
 
+    def _publish_empty_if_due(self):
+        """Refresh an empty path at a low rate while no valid path exists."""
+        now = self.get_clock().now()
+        hz = max(0.01, float(self.empty_path_publish_hz))
+        due = self.last_empty_publish_at is None or (
+            now - self.last_empty_publish_at
+        ).nanoseconds * 1e-9 >= 1.0 / hz
+        if due:
+            self.path_pub.publish(self._empty_path())
+            self.last_empty_publish_at = now
+
     def _loop(self):
         started = time.perf_counter()
-        ready = all((
-            self.current_s is not None,
-            self.converter is not None,
-            self.scaled_msg is not None,
-            self.updated_msg is not None,
-            self.center_msg is not None,
-            self.behavior is not None,
-        ))
+        required_inputs = {
+            'ego_s': self.current_s,
+            'converter': self.converter,
+            'global_waypoints_scaled': self.scaled_msg,
+            'global_waypoints_updated': self.updated_msg,
+            'centerline_waypoints': self.center_msg,
+            'behavior_strategy': self.behavior,
+        }
+        missing = [
+            name for name, value in required_inputs.items()
+            if value is None
+        ]
+        ready = not missing
         result = None
         obstacles = []
-        if ready and self._prediction_fresh() and not self.force_trailing:
-            obstacles = self._considered_obstacles()
+        if not ready:
+            self._set_diagnostic('NOT_READY', {'missing': missing})
+        elif not self.predictions.predictions:
+            self._set_diagnostic('PREDICTION_MISSING')
+        elif self.prediction_received_at is None:
+            self._set_diagnostic('PREDICTION_MISSING')
+        elif not self._prediction_fresh():
+            self._set_diagnostic('PREDICTION_STALE', {
+                'age_s': round(self._prediction_age(), 3),
+                'limit_s': float(self.pred_timeout),
+            })
+        elif self.force_trailing:
+            self._set_diagnostic('FORCE_TRAILING')
+        else:
+            obstacles, gate_status, gate_detail = self._considered_obstacles()
+            if gate_status is not None:
+                self._set_diagnostic(gate_status, gate_detail)
             if obstacles:
                 result = self._plan(deepcopy(obstacles))
 
@@ -414,14 +560,20 @@ class ChangeAvoidanceNode(Node):
             self._publish_path_markers(path)
             self._publish_start_end_markers(self.current_s, obs_start, obs_end, path_end)
             self.no_path_count = 0
+            self.last_empty_publish_at = None
+            self._set_diagnostic('PATH_READY', {
+                'side': path.ot_side,
+                'point_count': len(path.wpnts),
+            })
         else:
             self.no_path_count += 1
             if self.no_path_count == int(self.clear_after_frames):
-                self.path_pub.publish(self._empty_path())
                 self._clear_path_markers()
                 self.committed_side = None
                 self.pending_side = None
                 self.pending_count = 0
+            if self.no_path_count >= int(self.clear_after_frames):
+                self._publish_empty_if_due()
         if self.measure:
             self.latency_pub.publish(Float32(data=float(time.perf_counter() - started)))
 

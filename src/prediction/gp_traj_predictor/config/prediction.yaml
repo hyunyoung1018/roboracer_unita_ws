@@ -7,7 +7,7 @@ opponent_trajectory:
     max_sample_gap: 2.5
     min_publish_samples: 8
     max_samples: 400
-    off_trajectory_threshold: 0.30
+    off_trajectory_threshold: 0.55
     off_trajectory_samples: 5
 
 gaussian_process_opp_traj:
@@ -30,7 +30,13 @@ opp_prediction:
     max_opponent_distance: 30.0
     obstacle_timeout: 0.5
     trajectory_timeout: 2.0
-    min_training_laps: 1.0
-    learned_deviation_threshold: 0.25
+    min_training_laps: 0.5
+    # Hysteresis prevents a noisy d estimate from toggling force_trailing at
+    # every 20 Hz prediction tick. Open conservatively, close only after a
+    # clearly larger deviation persists for several frames.
+    learned_deviation_enter_threshold: 0.35
+    learned_deviation_exit_threshold: 0.55
+    learned_ready_confirm_frames: 3
+    learned_reject_confirm_frames: 5
     opponent_width: 0.28
     speed_offset: 0.0
