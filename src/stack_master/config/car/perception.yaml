@@ -174,8 +174,8 @@ spline_node:
     # this planner says the line already clears it and publishes nothing.
     #
     # MUST match what the state machine calls a blocked raceline, which is
-    # gb_ego_width_m/2 + lateral_width_gb_m. Set to evasion_distance, and
-    # lateral_width_gb_m set to 0.10 so the state machine agrees: the raceline
+    # gb_ego_width_m/2 + global_tracking's lateral_width_m. Set to
+    # evasion_distance, and that set to 0.10, so the state machine agrees: the raceline
     # counts as blocked exactly when this planner would start moving off it.
     #
     # Getting this wrong in either direction has now been seen on the car.
@@ -188,7 +188,7 @@ spline_node:
     #
     # Three numbers, one threshold:
     #   raceline_clearance_m == evasion_distance
-    #                        == gb_ego_width_m/2 + lateral_width_gb_m
+    #                        == gb_ego_width_m/2 + lateral_width_m
     raceline_clearance_m: 0.24
 
     lookahead: 10.0

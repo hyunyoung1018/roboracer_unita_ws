@@ -22,12 +22,12 @@ state_machine:
     # hidden padding, which made every clearance number mean something other
     # than it said. free_dist in _check_free_frenet is now the real gap
     # between the car's side and the obstacle's edge, so the margins on top
-    # of it - lateral_width_m, lateral_width_gb_m - are real margins and can
+    # of it are real margins and can
     # be tuned as such.
     #
     # NOTE it cuts both ways. The same check decides whether the RACELINE is
-    # blocked, and a narrower car is blocked less often, so lateral_width_gb_m
-    # below carries the 6 cm back to keep avoidance triggering when it did.
+    # blocked, and a narrower car is blocked less often, so
+    # global_tracking.yaml's lateral_width_m carries the 6 cm back.
     gb_ego_width_m: 0.28
     gb_horizon_m: 15.0
     interest_horizon_m: 20.0
@@ -51,13 +51,6 @@ state_machine:
     # safety
     volt_threshold: 11.0
     # dynamic (replaces dyn_statemachine_tuner.cfg)
-    # [m] DEAD. Read into the node and used by nothing but a debug dump - the
-    # raceline's free check takes its margin from the global_tracking planner
-    # block, config/planners/global_tracking.yaml, like every other planner.
-    # Two rounds of tuning went into this value before the logs showed the
-    # check asking for a number it could not have come from. Left at the
-    # matching value so it does not mislead again; change global_tracking.yaml.
-    lateral_width_gb_m: 0.10
     lateral_width_ot_m: 0.3
     splini_hyst_timer_sec: 0.7
     splini_ttl: 2.0

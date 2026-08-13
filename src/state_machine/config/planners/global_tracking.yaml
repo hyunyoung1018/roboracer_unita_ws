@@ -1,9 +1,7 @@
 free_scaling_reference_distance_m: 1
 is_closed: true
 # [m] Clearance the RACELINE needs from an obstacle before the state machine
-# looks for a way around it. THIS is the parameter that decides it - not
-# lateral_width_gb_m, which is read into the node and then used by nothing but
-# a debug dump.
+# looks for a way around it.
 #
 # 0.15 -> 0.10, so that
 #   gb_ego_width_m/2 + this = 0.14 + 0.10 = 0.24 = evasion_distance

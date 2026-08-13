@@ -92,6 +92,13 @@ class WaypointData:
     def update_param(self):
         get = self.node.get_planner_param
         self.min_horizon = get(self.name, "min_horizon")
+        # A planner nothing publishes is not a planner that is failing. Set
+        # `enabled: false` in its yaml and the state machine stops offering
+        # the state at all, rather than asking every tick and logging that
+        # the topic is still empty.
+        enabled = get(self.name, "enabled")
+        self.enabled = True if enabled is None else bool(enabled)
+
         self.max_horizon = get(self.name, "max_horizon")
         self.lateral_width_m = get(self.name, "lateral_width_m")
         self.free_scaling_reference_distance_m = get(self.name, "free_scaling_reference_distance_m")
@@ -218,7 +225,6 @@ class StateMachine(Node):
 
         # dynamic-parameter-backed attributes (aliases onto params)
         self.gb_ego_width_m = self.params.gb_ego_width_m
-        self.lateral_width_gb_m = self.params.lateral_width_gb_m
         self.gb_horizon_m = self.params.gb_horizon_m
         self.interest_horizon_m = self.params.interest_horizon_m
         self.static_overtake_max_speed_mps = self.params.static_overtake_max_speed_mps
@@ -849,13 +855,21 @@ class StateMachine(Node):
         # Four ways to say no, and they mean completely different things: the
         # planner never published, it published an empty path, its path is too
         # old, or the car is not near the path it drew. Say which.
+        if not wpnts_data.enabled:
+            return False
+
         def no(reason):
             self.get_logger().info(
                 f"{wpnts_data.name}: not usable - {reason}", throttle_duration_sec=2.0)
             return False
 
         if src_wpnts is None:
-            return no("nothing received on its topic yet")
+            # Once, not every two seconds. A topic with no publisher stays
+            # that way, and repeating it buries the refusals that change.
+            self.get_logger().info(
+                f"{wpnts_data.name}: nothing has ever been received on its topic",
+                once=True)
+            return False
         if len(src_wpnts.wpnts) == 0:
             return no("published an empty path")
         age = self.now_sec() - time_to_float(src_wpnts.header.stamp)
@@ -991,8 +1005,7 @@ class StateMachine(Node):
                             # Which path, which obstacle, and what it needed.
                             # Without the name this fires for the raceline
                             # check and the avoidance check alike, and those
-                            # use different margins (lateral_width_gb_m vs
-                            # lateral_width_m) - so the same number can be a
+                            # use different margins, so the same number can be a
                             # correct "raceline is blocked, go around" or the
                             # refusal that stops the car going around.
                             self.get_logger().info(
@@ -1679,7 +1692,7 @@ class StateMachine(Node):
             self.get_logger().error(f"[{self.name}] config_dir unset; cannot save params")
             return
         path = os.path.join(self.config_dir, "state_machine_params.yaml")
-        keys = ["lateral_width_gb_m", "lateral_width_ot_m", "overtaking_ttl_sec",
+        keys = ["lateral_width_ot_m", "overtaking_ttl_sec",
                 "splini_hyst_timer_sec", "splini_ttl", "pred_splini_ttl",
                 "emergency_break_horizon", "ftg_speed_mps", "ftg_timer_sec",
                 "ftg_active", "force_RACELINE"]

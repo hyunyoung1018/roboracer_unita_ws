@@ -5,7 +5,7 @@
   <version>0.0.0</version>
   <description>
     rclpy's ParameterEventHandler, backported for Humble, which does not ship
-    it. Previously carried inside the
+    it. Taken from ForzaETH's race_stack, which carried it inside their
     stack_master; ours is ament_cmake and has no python module, and a node
     depending on stack_master would be a cycle anyway. It lives here so the
     nodes that watch each other's parameters - sector_tuner, ot_interpolator,

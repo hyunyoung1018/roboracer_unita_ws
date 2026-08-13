@@ -17,7 +17,7 @@
       joy + joy_teleop  -> /vesc/ackermann_cmd        (hold LB on the F710)
       robot_state_publisher -> TF for ego_racecar/*
 
-  The equivalent file is often called teleop_launch.xml, which is a misnomer:
+  ForzaETH calls the equivalent file teleop_launch.xml, which is a misnomer:
   it brings up the whole car, and their mapping launch includes it for exactly
   that reason. Named for what it does here.
 
@@ -28,9 +28,9 @@
 
   Before the first run:
     - the four VESC calibration gains in config/car/vesc.yaml are still
-      generic, not albomb's
+      ForzaETH's, not the racecar's
     - the Jetson needs an interface on 192.168.0.0/24 to reach the LiDAR
-    - the IMU yaw sign in albomb's URDF is unverified; see README section 4
+    - the IMU yaw sign in the racecar URDF is unverified; see README section 4
 -->
 <launch>
   <arg name="lidar"  default="true"  description="Start the Hokuyo driver"/>
@@ -40,7 +40,7 @@
                     which reads /joy itself - do not switch it off with teleop"/>
   <arg name="teleop" default="true"  description="Start joy_teleop"/>
   <arg name="description" default="true"
-       description="Publish albomb's URDF. Turn off if something else already does."/>
+       description="Publish the racecar URDF. Turn off if something else already does."/>
   <!-- Default matches vesc.yaml, which points at a udev symlink. That rule has
        to be written before it exists, so a first bringup overrides it:
        vesc_port:=/dev/ttyACM0 -->

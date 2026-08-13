@@ -1,7 +1,7 @@
 """
 Path helpers shared by the sector slicers.
 
-Replaces the `get_data_path()` these nodes were written against,
+Replaces the `get_data_path()` these nodes inherited from ForzaETH race_stack,
 which resolved to `<install>/../../src/race_stack/stack_master/<subpath>` - it
 hardcoded both the repository name and the position of the maps folder, so it
 pointed at a directory that does not exist in this workspace at all.

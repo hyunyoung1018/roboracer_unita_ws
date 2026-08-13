@@ -132,7 +132,7 @@ class ControllerManager(Node):
         self.l1_pub = self.create_publisher(Point, 'l1_distance', 10)
         self.predict_pub = self.create_publisher(MarkerArray, '/controller_prediction/markers', 10)
         self.publish_topic = self._get_param('drive_topic', '/vesc/high_level/ackermann_cmd')
-        # albomb's frames are namespaced, not a bare base_link.
+        # the racecar's frames are namespaced, not a bare base_link.
         self.base_frame = self._get_param('base_frame', 'ego_racecar/base_link')
         self.drive_pub = self.create_publisher(AckermannDriveStamped, self.publish_topic, 10)
         if self.measuring:
@@ -416,7 +416,7 @@ class ControllerManager(Node):
 
     def imu_cb(self, data):
         # The axis swap used to be hardcoded for a different mounting (-acc.x as
-        # longitudinal, -gyro.z as yaw rate). albomb's IMU sits at a different
+        # longitudinal, -gyro.z as yaw rate). the racecar's IMU sits at a different
         # angle, so those pick the lateral axis and the wrong sense of rotation
         # - and a flipped yaw rate makes the controller predict the car turning
         # the other way. Deriving it from TF means the URDF stays the one place

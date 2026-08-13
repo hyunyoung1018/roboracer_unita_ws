@@ -1,4 +1,4 @@
--- Cartographer 2D SLAM config for MAPPING (albomb, real car only).
+-- Cartographer 2D SLAM config for MAPPING (real car only).
 --
 -- LiDAR + IMU. No wheel odometry.
 --
@@ -15,7 +15,7 @@
 --     CHECK(sensor_to_tracking->translation().norm() < 1e-5)
 --         << "The IMU frame must be colocated with the tracking frame."
 --
--- and albomb's IMU sits at (0.07, 0, 0.09) from base_link, so tracking on
+-- and the racecar's IMU sits at (0.07, 0, 0.09) from base_link, so tracking on
 -- base_link would abort at the first IMU message. Tracking on ego_racecar/imu
 -- makes that transform the identity. published_frame stays on base_link; only
 -- the IMU->tracking transform is constrained.
@@ -61,7 +61,7 @@ options = {
   landmarks_sampling_ratio = 1.,
 
   -- Cartographer owns TF: map -> ego_racecar/base_link, published directly.
-  -- Not REP-105 compliant (no odom frame appears), which is a deliberate choice
+  -- Not REP-105 compliant (no odom frame appears), which is ForzaETH's choice
   -- and kept here: the alternative puts the drifty wheel odometry back into the
   -- TF path between the localizer and the car. Set provide_odom_frame = true if
   -- something downstream ever needs the odom frame.

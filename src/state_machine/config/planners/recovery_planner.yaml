@@ -1,3 +1,9 @@
+# No node publishes /planner/recovery/wpnts, so the RECOVERY state can
+# never be entered. With this false the state machine stops asking.
+# The car still returns to the raceline - the controller pulls it back -
+# it just does not plan a path for the return.
+enabled: false
+
 free_scaling_reference_distance_m: 1
 hyst_timer_sec: 4.0
 is_closed: false

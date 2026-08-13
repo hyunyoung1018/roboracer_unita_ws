@@ -51,7 +51,7 @@
   <!-- ===== drivers, teleop, robot description ===== -->
   <!-- Cartographer resolves both the laser and the IMU against its
        tracking_frame (ego_racecar/imu), and publishes onto
-       ego_racecar/base_link. All three links come from albomb's URDF, which
+       ego_racecar/base_link. All three links come from the racecar URDF, which
        hardware.launch.xml publishes along with the drivers. -->
   <group if="$(var hardware)">
     <include file="$(find-pkg-share stack_master)/launch/hardware.launch.xml"/>

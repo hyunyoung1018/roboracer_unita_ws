@@ -1,10 +1,10 @@
 # VESC 6 MkVI - motor driver, servo, wheel odometry and IMU.
 #
-# VESC driver and ackermann conversion for albomb. The
-# four calibration gains below are PER CAR and have NOT been measured on albomb.
+# Seeded from ForzaETH race_stack (stack_master/config/NUC2/vesc.yaml). The
+# four calibration gains below are PER CAR and have NOT been measured on this racecar.
 # Driving on them will get the wrong speed and the wrong steering angle.
 #
-# TODO - measure on albomb before the first real run:
+# TODO - measure on this racecar before the first real run:
 #   speed_to_erpm_gain            drive a known distance, compare /vesc/odom
 #                                 travel against the tape measure   [DONE]
 #   steering_angle_to_servo_gain  \  centre the wheels to find the offset, then
@@ -74,14 +74,14 @@
     # becomes a different speed.
     #
     # Was 69000, copied from race_stack's NUC configs - 15.6 m/s at our gain,
-    # a speed this car cannot reach, so the clamp never fired. This is not
-    # what protects the
+    # a speed this car cannot reach, so the clamp never fired. ForzaETH's own
+    # Jetson config uses 23250. This is not what protects the
     # motor; that is Max ERPM and the current limits in the VESC firmware.
     speed_min: -35400.0
     speed_max: 35400.0
     position_min: 0.0
     position_max: 0.0
-    # MEASURED on albomb. Mechanical stops are at 0.10 and 0.90, and the
+    # MEASURED on this racecar. Mechanical stops are at 0.10 and 0.90, and the
     # wheels point dead ahead at 0.445 - so the rack is not centred in its own
     # travel: 0.345 one way against 0.455 the other. Steering has to be
     # symmetric, so both sides take the smaller number, and both back off 0.02
@@ -117,7 +117,7 @@
 
 /**/vesc_driver_node:
   ros__parameters:
-    # Stamped on both IMU messages. Must name a link that exists in albomb's
+    # Stamped on both IMU messages. Must name a link that exists in the racecar's
     # URDF, because cartographer resolves it against tracking_frame and
     # robot_localization looks it up in TF. Upstream left it empty, which makes
     # both drop the samples without an error.

@@ -4,7 +4,7 @@
   <name>frenet_conversion</name>
   <version>0.0.0</version>
   <description>Frenet coordinate conversion, for python and C++ consumers</description>
-  <maintainer email="unita@todo.todo">unita</maintainer>
+  <maintainer email="kuehnej@ethz.ch">kuehnej</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>

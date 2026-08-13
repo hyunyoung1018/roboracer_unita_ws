@@ -5,7 +5,7 @@
   <version>0.0.0</version>
   <description>
     Sector speed scaling and overtaking-sector interpolation over the global
-    waypoints.
+    waypoints. From ForzaETH race_stack.
   </description>
   <maintainer email="imsunghy@gmail.com">young</maintainer>
   <license>MIT</license>

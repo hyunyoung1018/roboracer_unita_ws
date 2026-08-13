@@ -24,7 +24,7 @@
 
       map  -> odom        ekf_localization
       odom -> base_link   vesc_to_odom (hardware.launch.xml odom_tf:=true)
-      base_link -> laser  albomb's URDF
+      base_link -> laser  the racecar URDF
 
   The particle filter's own publish_tf stays false - it contributes a pose
   measurement, not a transform. Cartographer must not be running: it claims

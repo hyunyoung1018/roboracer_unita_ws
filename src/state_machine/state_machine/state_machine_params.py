@@ -26,7 +26,6 @@ live-updated through a single `add_on_set_parameters_callback` registered on the
 class StateMachineParams:
     # dynamic params that the node also mirrors as a same-named attribute
     _NODE_MIRRORED_PARAMS = {
-        "lateral_width_gb_m",
         "lateral_width_ot_m",
         "splini_hyst_timer_sec",
         "emergency_break_horizon",
@@ -174,15 +173,6 @@ class StateMachineParams:
         # ------------------------------------------------------------------ #
         # DYNAMIC PARAMETERS (replaces dyn_statemachine_tuner.cfg)
         # ------------------------------------------------------------------ #
-        self._declare(
-            "lateral_width_gb_m", 0.3,
-            ParameterDescriptor(
-                description="Threshold to raceline for GB_FREE in meters",
-                type=ParameterType.PARAMETER_DOUBLE,
-                floating_point_range=[FloatingPointRange(from_value=0.1, to_value=1.75, step=0.05)],
-            ),
-        )
-        self.lateral_width_gb_m: float = node.get_parameter("lateral_width_gb_m").value
 
         self._declare(
             "lateral_width_ot_m", 0.3,

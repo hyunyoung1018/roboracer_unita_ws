@@ -48,7 +48,7 @@
   RACELINE was formerly called GB_TRACK; see state_machine/states_types.py.
 
   No node started here publishes a transform. The chain is unchanged from
-  localization.launch.xml - albomb's URDF through robot_state_publisher for
+  localization.launch.xml - the racecar URDF through robot_state_publisher for
   everything rigid, the EKF for map -> odom - and the controller and state
   machine only read frames, never claim them. The two they name are
   parameters (base_frame, laser_frame), so they follow the URDF's
