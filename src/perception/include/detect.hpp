@@ -6,17 +6,17 @@
 // Differences from that port, all deliberate - see detect.cpp for the
 // reasoning at each site:
 //
-//   - No grid_filter. UNIST decides whether a lidar point is on the track by
-//     testing it against an eroded occupancy image; we test it in Frenet
-//     against the waypoints' own d_left/d_right, which is what ForzaETH's
-//     laserPointOnTrack did before that port replaced it. Their header still
-//     declares that function with no definition left anywhere - this file is
-//     where it comes back.
-//   - The check is per point, before clustering, which is where UNIST applies
-//     theirs. The python detector this replaced applied it to the cluster mean
-//     instead, so a wall was only rejected when its fitted centre happened to
-//     land off the track - which is how a stationary car came to report
-//     anywhere between one and six obstacles from one frame to the next.
+//   - Two on-track tests, chosen by on_track_mode. UNIST's grid_filter is
+//     the default and is what this port originally dropped; the Frenet one
+//     that replaced it is ForzaETH's laserPointOnTrack, whose declaration
+//     survives in UNIST's header with no definition anywhere. Keeping both
+//     is what lets them be compared on the same track. See detect.cpp for
+//     what the difference cost.
+//   - Either check runs per point, before clustering, which is where UNIST
+//     applies theirs. The python detector this replaced applied it to the
+//     cluster mean instead, so a wall was only rejected when its fitted
+//     centre happened to land off the track - which is how a stationary car
+//     came to report anywhere between one and six obstacles per frame.
 //   - Obstacles report their real per-axis extent rather than a square whose
 //     side is the cluster's longest dimension.
 //   - detect_fov_deg, max_viewing_distance and max_detect_d_m are
