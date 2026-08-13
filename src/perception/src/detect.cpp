@@ -558,7 +558,7 @@ std::vector<Obstacle> Detect::fittingLShape(const std::vector<Cluster> & cluster
     // still - and it holds at the obstacle's own size, capped at the rule's
     // 0.50 m. This node reports what it actually saw.
     //
-    // `size = max(width, height)` is what UNIST publishes, and it inflates
+    // `size = max(width, height)` as a square inflates
     // whichever dimension is smaller. The lidar sees a cone as a shallow arc,
     // wider across the beam than it is deep, so squaring it off turned a
     // 0.15 m cone into a 0.5 m obstacle - and both the spline planner and the
@@ -722,7 +722,7 @@ visualization_msgs::msg::MarkerArray Detect::clearMarkers() const
   // Returns an array that STARTS with the delete, for the caller to append to.
   //
   // It used to be published as its own message, immediately before the one
-  // carrying the markers - which is what unicorn does, and what made the boxes
+  // carrying the markers, which is what made the boxes
   // strobe at exactly the detection rate. RViz applies each message as it
   // arrives, so between the two there was a moment with nothing on screen, 20
   // times a second. Markers inside ONE array are applied in order, so putting

@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.8)
 project(grid_filter)
 
-# Hybrid, the same shape as frenet_conversion: the python module the team
-# added is untouched and still imported as grid_filter.grid_filter, and a
-# C++ library is added alongside it for the detector.
+# Hybrid, the same shape as frenet_conversion: one package serving the
+# python module (imported as grid_filter.grid_filter, used by the lane
+# change planner) and a C++ library for the detector.
 
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)

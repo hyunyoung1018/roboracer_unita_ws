@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lightweight Frenet spline avoidance adapted from UNICORN's spliner node."""
+"""Lightweight Frenet spline obstacle avoidance."""
 
 import time
 

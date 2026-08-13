@@ -1,6 +1,6 @@
 # VESC 6 MkVI - motor driver, servo, wheel odometry and IMU.
 #
-# Seeded from ForzaETH race_stack (stack_master/config/NUC2/vesc.yaml). The
+# VESC driver and ackermann conversion for albomb. The
 # four calibration gains below are PER CAR and have NOT been measured on albomb.
 # Driving on them will get the wrong speed and the wrong steering angle.
 #
@@ -74,8 +74,8 @@
     # becomes a different speed.
     #
     # Was 69000, copied from race_stack's NUC configs - 15.6 m/s at our gain,
-    # a speed this car cannot reach, so the clamp never fired. ForzaETH's own
-    # Jetson config and UNIST both use 23250. This is not what protects the
+    # a speed this car cannot reach, so the clamp never fired. This is not
+    # what protects the
     # motor; that is Max ERPM and the current limits in the VESC firmware.
     speed_min: -35400.0
     speed_max: 35400.0

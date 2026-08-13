@@ -3,12 +3,12 @@ controller_manager:
     # [m] Must match albomb_core.xacro's wheel_base and vesc.yaml's wheelbase -
     # the L1 controller inverts the same bicycle model vesc_to_odom integrates,
     # so a mismatch makes the car steer to a curvature it is not reporting.
-    # UNIST's default is 0.321 (their car); ours is 0.324. All three places
+    # The controller's built-in default is 0.321; ours is 0.324. All three places
     # move together or none do.
     wheelbase: 0.324
     # [rad] What the steering can actually reach. Derived from the measured
-    # servo limits in vesc.yaml: (0.445 - 0.12) / 1.1. UNIST hardcoded 0.53 for
-    # their car; commanding past our limit is not dangerous, vesc_driver clips
+    # servo limits in vesc.yaml: (0.445 - 0.12) / 1.1. The code default is 0.53,
+    # for a different car; commanding past our limit is not dangerous, vesc_driver clips
     # it, but the controller would keep reasoning about an angle the wheels
     # never took.
     # Rounded DOWN. The exact limit is (0.445 - 0.12)/1.1 = 0.2954545, and

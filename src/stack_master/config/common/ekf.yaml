@@ -8,7 +8,7 @@
 # filter's pose with the IMU is the same shape of problem. Re-check the topic
 # names and frames before wiring it up again.
 #
-# Based on ForzaETH race_stack (state_estimation/config/ekf.yaml), with frames
+# EKF fusing the particle filter pose with wheel odometry, with frames
 # adapted to albomb_description (car_name = ego_racecar).
 #
 # Fuses VESC wheel odometry (yaw, vx) + VESC IMU (yaw, vyaw) into a filtered

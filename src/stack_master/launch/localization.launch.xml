@@ -15,7 +15,7 @@
       frenet_odom_republisher                       -> /car_state/odom_frenet
       raceline_publisher                            -> /global_waypoints
 
-  Structure follows UNIST's localization launch. The two-source EKF is the part
+  The two-source EKF is the part
   worth understanding: the particle filter contributes position and heading
   only, the VESC contributes forward speed and yaw rate only, and neither is
   asked for what it is bad at. See config/car/ekf_pf.yaml.

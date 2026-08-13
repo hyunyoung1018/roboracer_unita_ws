@@ -1,22 +1,19 @@
 #ifndef PERCEPTION_DETECT_HPP_
 #define PERCEPTION_DETECT_HPP_
 
-// C++ obstacle detector, ported from unicorn-racing-stack/perception.
+// UNITA obstacle detector.
 //
 // Differences from that port, all deliberate - see detect.cpp for the
 // reasoning at each site:
 //
-//   - Two on-track tests, chosen by on_track_mode. UNIST's grid_filter is
-//     the default and is what this port originally dropped; the Frenet one
-//     that replaced it is ForzaETH's laserPointOnTrack, whose declaration
-//     survives in UNIST's header with no definition anywhere. Keeping both
-//     is what lets them be compared on the same track. See detect.cpp for
-//     what the difference cost.
-//   - Either check runs per point, before clustering, which is where UNIST
-//     applies theirs. The python detector this replaced applied it to the
-//     cluster mean instead, so a wall was only rejected when its fitted
-//     centre happened to land off the track - which is how a stationary car
-//     came to report anywhere between one and six obstacles per frame.
+//   - Two on-track tests, chosen by on_track_mode: an occupancy-grid lookup
+//     and a Frenet lateral-offset test. The grid is the default; both are
+//     kept so they can be compared on the same track. detect.cpp says why
+//     that mattered.
+//   - Either check runs per point, BEFORE clustering. Judging a whole
+//     cluster by where its fitted centre landed instead is what made a
+//     stationary car report anywhere between one and six obstacles per
+//     frame: a wall entered a cluster and was only sometimes thrown out.
 //   - Obstacles report their real per-axis extent rather than a square whose
 //     side is the cluster's longest dimension.
 //   - detect_fov_deg, max_viewing_distance and max_detect_d_m are

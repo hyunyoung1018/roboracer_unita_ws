@@ -15,7 +15,7 @@
 #
 # The TF chain is the standard REP-105 one, and it has to be: robot_localization
 # on Humble refuses to start if map_frame, odom_frame and base_link_frame are not
-# all distinct ("Invalid frame configuration!"). UNIST collapses odom_frame onto
+# all distinct ("Invalid frame configuration!"). Collapsing odom_frame onto
 # base_link, which their distro tolerates and ours does not.
 #
 #   map  -> odom          this node, the correction

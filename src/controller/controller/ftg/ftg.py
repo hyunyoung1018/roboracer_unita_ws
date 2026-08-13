@@ -31,7 +31,7 @@ class FTG:
                  front_fov_deg=None, smooth_deg=None, disp_thresh=None,
                  bubble_m=None, steer_ema=None, max_steer=None) -> None:
         self.node = node
-        # albomb's laser link is namespaced; UNIST hardcodes 'laser'. The
+        # albomb's laser link is namespaced rather than a bare 'laser'. The
         # markers below are drawn in it, so a wrong name makes them invisible
         # rather than misplaced - the same failure the particle filter had.
         self.laser_frame = 'ego_racecar/laser'

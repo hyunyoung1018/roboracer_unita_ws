@@ -1,8 +1,7 @@
 #ifndef GRID_FILTER_HPP_
 #define GRID_FILTER_HPP_
 
-// Occupancy-grid "is this point on the track" test, ported from
-// unicorn-racing-stack/race_utils/f110_utils/libs/grid_filter.
+// Occupancy-grid "is this point on the track" test.
 //
 // It answers the question the detector actually needs - could the car be
 // here - by looking the point up in the eroded map image. That is O(1) and,
@@ -11,16 +10,10 @@
 // a waypoint, and where a track doubles back that assignment can pick the
 // wrong branch. See detect.cpp.
 //
-// Differences from the original, both deliberate:
-//
-//   - Free space is decided from the map yaml's free_thresh the way
-//     map_server does it, rather than by testing the pixel for exactly 255.
-//     Our maps are trinary, so 205 means unknown and must not read as free;
-//     an exact-255 test also breaks on any map saved with a different
-//     white level.
-//   - pixelToGlobal is dropped. It read a member that was never assigned,
-//     so it returned pixel * resolution with no origin, and nothing called
-//     it.
+// Free space is decided from the map yaml's free_thresh the way map_server
+// does it. Our maps are trinary, so 205 means unknown and must not read as
+// free, and a test against a fixed white level breaks on any map saved
+// differently.
 
 #include <opencv2/opencv.hpp>
 #include <string>

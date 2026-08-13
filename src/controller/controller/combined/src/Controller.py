@@ -363,7 +363,7 @@ class Controller:
             # driver's clip message did before its throttle was fixed.
             self.logger_info("steering angle clipped", throttle_duration_sec=2.0)
         steering_angle = np.clip(steering_angle, self.curr_steering_angle - threshold, self.curr_steering_angle + threshold)
-        # The car's own limit, not UNIST's 0.53. Steering past it does not
+        # The car's own limit, not the 0.53 code default. Steering past it does not
         # bend the car any further - vesc_driver clips the servo command - but
         # the controller would go on believing it had, and every term computed
         # from the angle it thinks it commanded drifts from the one it got.

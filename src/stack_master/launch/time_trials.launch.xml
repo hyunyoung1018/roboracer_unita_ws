@@ -7,7 +7,7 @@
 
       ros2 launch stack_master time_trials.launch.xml map:=<name>
 
-  Ported from UNIST's race.launch.xml with the obstacle half left out:
+  The driving half of the stack, with the obstacle half optional:
 
       state_machine     /global_waypoints_scaled + /global_waypoints/overtaking
                         -> /behavior_strategy, /local_waypoints
@@ -45,14 +45,14 @@
   (it waits on /ot_section_check, which an empty ot_sectors.yaml never grants)
   and everything under prediction. Both belong to head-to-head.
 
-  RACELINE is what UNIST calls GB_TRACK; see state_machine/states_types.py.
+  RACELINE was formerly called GB_TRACK; see state_machine/states_types.py.
 
   No node started here publishes a transform. The chain is unchanged from
   localization.launch.xml - albomb's URDF through robot_state_publisher for
   everything rigid, the EKF for map -> odom - and the controller and state
   machine only read frames, never claim them. The two they name are
   parameters (base_frame, laser_frame), so they follow the URDF's
-  ego_racecar/* rather than the bare base_link/laser UNIST hardcodes.
+  ego_racecar/* rather than a bare base_link/laser.
 
   WHY THE RACELINE'S START POSE MATTERS HERE, not just in generation: the
   speed sectors are waypoint index ranges, and the state machine turns the

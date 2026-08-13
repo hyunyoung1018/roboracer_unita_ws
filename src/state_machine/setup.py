@@ -20,8 +20,8 @@ setup(
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='jeongsang ryu',
-    maintainer_email='ryujs@unist.ac.kr',
-    description='UNICORN racing state machine for the F1TENTH stack',
+    maintainer_email='unita@todo.todo',
+    description='UNITA racing state machine',
     license='MIT',
     extras_require={
         'test': ['pytest'],

@@ -61,7 +61,7 @@ options = {
   landmarks_sampling_ratio = 1.,
 
   -- Cartographer owns TF: map -> ego_racecar/base_link, published directly.
-  -- Not REP-105 compliant (no odom frame appears), which is ForzaETH's choice
+  -- Not REP-105 compliant (no odom frame appears), which is a deliberate choice
   -- and kept here: the alternative puts the drifty wheel odometry back into the
   -- TF path between the localizer and the car. Set provide_odom_frame = true if
   -- something downstream ever needs the odom frame.

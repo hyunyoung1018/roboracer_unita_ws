@@ -2,7 +2,7 @@
 <package format="3">
   <name>perception</name>
   <version>0.1.0</version>
-  <description>LiDAR obstacle detection and tracking adapted from HMCL-UNIST UNICORN, in python and C++.</description>
+  <description>UNITA LiDAR obstacle detection and tracking, in python and C++.</description>
   <maintainer email="unita@todo.todo">unita</maintainer>
   <license>MIT</license>
 

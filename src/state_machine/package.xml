@@ -3,8 +3,8 @@
 <package format="3">
   <name>state_machine</name>
   <version>0.0.0</version>
-  <description>UNICORN racing state machine: selects the driving mode (global tracking, trailing, overtaking, recovery, start, follow-the-gap) for the F1TENTH stack.</description>
-  <maintainer email="ryujs@unist.ac.kr">jeongsang ryu</maintainer>
+  <description>UNITA racing state machine: selects the driving mode (global tracking, trailing, overtaking, recovery, start, follow-the-gap) for the F1TENTH stack.</description>
+  <maintainer email="unita@todo.todo">unita</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>

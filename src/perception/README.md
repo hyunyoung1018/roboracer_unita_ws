@@ -1,6 +1,6 @@
 # perception
 
-LiDAR obstacle detection and tracking adapted from HMCL-UNIST's UNICORN stack
+UNITA LiDAR obstacle detection and tracking
 to the Python-only utility libraries in `roboracer_unita_ws`.
 
 ## Data flow

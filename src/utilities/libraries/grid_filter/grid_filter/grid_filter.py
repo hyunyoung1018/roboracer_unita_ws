@@ -1,4 +1,4 @@
-"""Conservative occupancy-grid lookup adapted from UNICORN's grid_filter."""
+"""Conservative occupancy-grid lookup."""
 
 from math import atan2, cos, sin
 

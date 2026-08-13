@@ -49,7 +49,7 @@ FTG_PARAMS = [
 
 
 class ControllerManager(Node):
-    """ROS2 port of the ROS1 unicorn controller_manager (Pure-Pursuit only; the
+    """UNITA controller manager (Pure-Pursuit only; the
     MAP / steering-lookup branch was intentionally removed).
 
     Subscribes /behavior_strategy, /car_state/odom, /imu/data,
@@ -132,7 +132,7 @@ class ControllerManager(Node):
         self.l1_pub = self.create_publisher(Point, 'l1_distance', 10)
         self.predict_pub = self.create_publisher(MarkerArray, '/controller_prediction/markers', 10)
         self.publish_topic = self._get_param('drive_topic', '/vesc/high_level/ackermann_cmd')
-        # UNIST hardcodes base_link; albomb's frames are namespaced.
+        # albomb's frames are namespaced, not a bare base_link.
         self.base_frame = self._get_param('base_frame', 'ego_racecar/base_link')
         self.drive_pub = self.create_publisher(AckermannDriveStamped, self.publish_topic, 10)
         if self.measuring:
@@ -204,7 +204,7 @@ class ControllerManager(Node):
             [[wpnt.x_m, wpnt.y_m, wpnt.psi_rad] for wpnt in data.wpnts])
         # ROS1 read /global_republisher/track_length; derive from the waypoints' s_m
         self.track_length = data.wpnts[-1].s_m
-        # Three arguments, not two: UNIST's FrenetConverter took x and y and
+        # Three arguments, not two: an earlier FrenetConverter took x and y and
         # derived the heading; ours is race_stack's and is given it. Every other
         # caller in this workspace already passes psi.
         self.converter = FrenetConverter(
@@ -415,7 +415,7 @@ class ControllerManager(Node):
         return self._imu_rot
 
     def imu_cb(self, data):
-        # UNIST hardcoded the axis swap for their mounting (-acc.x as
+        # The axis swap used to be hardcoded for a different mounting (-acc.x as
         # longitudinal, -gyro.z as yaw rate). albomb's IMU sits at a different
         # angle, so those pick the lateral axis and the wrong sense of rotation
         # - and a flipped yaw rate makes the controller predict the car turning

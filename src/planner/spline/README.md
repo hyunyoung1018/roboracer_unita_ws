@@ -1,6 +1,6 @@
 # spline
 
-Local Frenet spline obstacle avoidance adapted from HMCL-UNIST's `spliner`.
+UNITA local Frenet spline obstacle avoidance.
 
 The package uses interfaces already present in this workspace:
 

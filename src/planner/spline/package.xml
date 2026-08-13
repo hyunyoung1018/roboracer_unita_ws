@@ -2,7 +2,7 @@
 <package format="3">
   <name>spline</name>
   <version>0.1.0</version>
-  <description>Frenet spline obstacle avoidance adapted from HMCL-UNIST UNICORN.</description>
+  <description>UNITA Frenet spline obstacle avoidance.</description>
   <maintainer email="unita@todo.todo">unita</maintainer>
   <license>MIT</license>
   <exec_depend>rclpy</exec_depend>

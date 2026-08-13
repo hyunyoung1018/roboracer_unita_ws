@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-UNICORN racing state machine - ROS2 (Jazzy / rclpy) port.
+UNITA racing state machine.
 
 Ported from the ROS1 (catkin/rospy) `state_machine` package. This is the racing
 "brain": it subscribes to perception / planning / localization topics, computes a
 set of boolean conditions, runs the state-transition graph and publishes the chosen
 driving behaviour (local waypoints + BehaviorStrategy).
 
-The full UNICORN feature set is preserved (RECOVERY / START / multi-planner
+The full feature set is present (RECOVERY / START / multi-planner
 sustainability / prediction-aware free checks / velocity replanning / BehaviorStrategy
 trailing & overtaking targets). The race_stack ROS2 template was used only for the
 ament/rclpy structural idioms.
@@ -901,7 +901,7 @@ class StateMachine(Node):
     def _lateral_half_width(obs) -> float:
         """Half the obstacle's LATERAL extent, in metres.
 
-        Not size/2. UNIST's detector models every obstacle as a square of side
+        Not size/2. A detector that models every obstacle as a square of side
         `size` and fills d_left/d_right from that same number, so there size/2
         is the lateral half-width. Ours measures the real Frenet extents per
         axis and reports `size` as the diameter of the circle that bounds the

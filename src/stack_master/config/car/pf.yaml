@@ -1,4 +1,4 @@
-# Particle filter localisation, from UNIST's tuning of the f1tenth filter.
+# Particle filter localisation.
 #
 # It localises the LASER and converts to base_link through the static URDF
 # transform, so the frames below have to name links that albomb_description
@@ -7,7 +7,7 @@
 # publish_tf is false on purpose. The EKF downstream owns map -> base_link; if
 # the filter also published map -> laser then laser would have two parents,
 # because the URDF already gives base_link -> laser, and TF would reject the
-# tree. (UNIST's config misspells this key as `publis_tf`, so it never takes
+# tree. (The upstream config misspells this key as `publis_tf`, so it never takes
 # effect there - ours is spelled correctly and the node defaults it to false.)
 
 particle_filter:

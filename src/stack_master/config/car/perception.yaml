@@ -27,13 +27,12 @@ detect:
     # Which question is asked of every lidar return.
     #
     #   grid   - look it up in the eroded map image. One array lookup, no
-    #            waypoint, no coordinate transform. This is what UNIST does
-    #            and what this port dropped; putting it back removes a whole
-    #            class of failure, because the alternative has to assign the
-    #            return to a waypoint first and where the track doubles back
-    #            it can pick the wrong branch. It also stops the track
-    #            boundary being a proxy: an obstacle against a wall is in
-    #            free space and reads as such.
+    #            waypoint, no coordinate transform. Removes a whole class of
+    #            failure: the alternative has to assign the return to a
+    #            waypoint first, and where the track doubles back it can pick
+    #            the wrong branch. It also stops the track boundary being a
+    #            proxy - an obstacle against a wall is in free space and
+    #            reads as such.
     #   frenet - the lateral-offset test. Kept to compare the two on the
     #            same track, and used automatically if the map fails to load.
     #
@@ -69,7 +68,7 @@ detect:
     min_size_m: 0.20
     max_size_m: 0.60
 
-    # UNIST adaptive breakpoint clustering
+    # Adaptive breakpoint clustering
     lambda_deg: 10.0
     sigma: 0.03
     min_2_points_dist: 0.01
