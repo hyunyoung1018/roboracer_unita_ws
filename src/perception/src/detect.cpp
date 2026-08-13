@@ -295,12 +295,36 @@ std::vector<Cluster> Detect::clustering(
     point.x = point_map.x();
     point.y = point_map.y();
 
-    // The converter's proximity search is seeded with the previous point's
-    // index and falls back to a full sweep when that neighbourhood turns out
-    // to be more than 2 m away, so consecutive returns off the same surface
-    // are cheap and a jump across the track is still correct.
+    // FULL search, not the proximity one, and this is not an optimisation
+    // that was overlooked.
+    //
+    // The proximity search seeds from the previous point's index, scans 20
+    // waypoints (about 2 m of track) and only falls back to a full sweep if
+    // nothing in that window is within 2 m. Where the track doubles back -
+    // the end of a straight, just before a corner - waypoints from the
+    // straight and from the corner ARE within 2 m of each other, so the
+    // fallback never fires and the point is assigned to the wrong branch.
+    // Its d is then measured in the wrong waypoint's frame and
+    // laserPointOnTrack throws it away.
+    //
+    // That produced exactly the reported symptom, all three parts of it:
+    // a box at the end of a straight was invisible; the same box moved into
+    // the middle of the straight, where the track does not double back
+    // nearby, was seen; and turning the car at the original position made it
+    // appear, because the scan is walked in angular order and the heading
+    // decides which beams precede which - a different seed sequence
+    // mis-assigns a different set of points.
+    //
+    // Nothing in the geometry was ambiguous. The search was.
+    //
+    // UNIST never hit this because they do not convert per point at all:
+    // grid_filter answers "is this on the track" from an eroded occupancy
+    // image. Replacing that with a Frenet test is what introduced the
+    // failure, so paying for the correct search is the cost of that choice.
+    // It is ~200 comparisons per surviving return, which is what moving this
+    // node to C++ bought.
     frenet_converter_.GetFrenetPoint(
-      point.x, point.y, &point.s, &point.d, &closest_idx_, false);
+      point.x, point.y, &point.s, &point.d, &closest_idx_, true);
 
     if (!std::isfinite(point.s) || !std::isfinite(point.d)) {
       continue;
