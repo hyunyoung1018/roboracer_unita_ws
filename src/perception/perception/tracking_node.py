@@ -277,13 +277,25 @@ class TrackingNode(Node):
         return obstacle
 
     def _markers(self, obstacles):
+        # DELETEALL at the front of EVERY array, not only the empty ones.
+        #
+        # Marker ids here are track ids, and track ids only ever go up.
+        # Without a delete, a viewer keeps every marker this node has ever
+        # published: each phantom detection that lived eight frames leaves a
+        # cylinder and a label behind forever, and after a few minutes of
+        # driving past walls that is thousands of them. The car does not slow
+        # down for it, but the machine drawing them does, and so does anything
+        # measuring the stack through that viewer.
+        #
+        # It also has to be in the same message as the markers, or the frame
+        # blinks - see clearMarkers in detect.cpp.
         array = MarkerArray()
+        clear = Marker()
+        clear.header = obstacles.header
+        clear.header.frame_id = 'map'
+        clear.action = Marker.DELETEALL
+        array.markers.append(clear)
         if not obstacles.obstacles:
-            marker = Marker()
-            marker.header = obstacles.header
-            marker.header.frame_id = 'map'
-            marker.action = Marker.DELETEALL
-            array.markers.append(marker)
             return array
         # Draw what the PLANNER is given, not what the detector last saw.
         #
