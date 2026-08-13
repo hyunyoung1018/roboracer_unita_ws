@@ -70,6 +70,20 @@ detect:
     # real obstacle parked against the wall has to stay detectable.
     boundaries_inflation: 0.15
 
+    # [m] Hard cap on |d| for a lidar return to be clustered at all.
+    #
+    # The track boundary is not a good proxy for "close enough to matter".
+    # map_no's right boundary reaches 1.47 m around s=17.5, so the wall there
+    # is inside the mapped track and boundaries_inflation cannot reject it -
+    # the detector was reporting obstacles at d = -1.4 all along it. The
+    # planner ignores those anyway (trajectory_threshold 0.6 on the centre),
+    # so they were pure cost: an L-shape fit each, and boxes drawn on every
+    # wall the car drove past.
+    #
+    # 0.6 + half of max_size_m, so an obstacle the planner would still
+    # consider keeps all of its points.
+    max_detect_d_m: 0.90
+
     # UNITA-specific detection FOV
     # Full Hokuyo scan remains available for localization.
     detect_fov_deg: 220.0

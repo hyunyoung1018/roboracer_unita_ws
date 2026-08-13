@@ -37,6 +37,7 @@ Detect::Detect()
   max_viewing_distance_ = declareNumber("max_viewing_distance", 9.0);
   boundaries_inflation_ = declareNumber("boundaries_inflation", 0.10);
   detect_fov_deg_ = declareNumber("detect_fov_deg", 360.0);
+  max_detect_d_m_ = declareNumber("max_detect_d_m", 0.90);
 
   breakpoints_markers_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
     "/detect/breakpoints_markers", 5);
@@ -145,6 +146,8 @@ rcl_interfaces::msg::SetParametersResult Detect::dynParamCb(
       max_viewing_distance_ = as_number(param);
     } else if (name == "detect_fov_deg") {
       detect_fov_deg_ = as_number(param);
+    } else if (name == "max_detect_d_m") {
+      max_detect_d_m_ = as_number(param);
     } else if (name == "new_cluster_threshold_m") {
       new_cluster_threshold_m_ = as_number(param);
     } else if (name == "lambda_deg") {
@@ -175,6 +178,24 @@ rcl_interfaces::msg::SetParametersResult Detect::dynParamCb(
 bool Detect::laserPointOnTrack(double d, int idx) const
 {
   if (idx < 0 || idx >= static_cast<int>(d_left_array_.size())) {
+    return false;
+  }
+
+  // A hard cap on how far off the line anything is worth clustering.
+  //
+  // The track boundary is not a good proxy for "somewhere the car could
+  // hit something". On map_no it reaches 1.47 m to the right around
+  // s = 17.5, so the wall there is legitimately inside the mapped track and
+  // the boundary test cannot reject its returns - the detector was fitting
+  // boxes along it and reporting obstacles at d = -1.4 while the car drove
+  // past. The planner already ignores those (trajectory_threshold is 0.6 on
+  // the obstacle's centre), so they cost L-shape fits and clutter rviz
+  // without ever changing a decision.
+  //
+  // 0.90 is that 0.6 plus half of the largest obstacle we accept, so an
+  // obstacle whose centre the planner would still consider keeps all of its
+  // points. Raise it if a wide track ever needs obstacles further out.
+  if (std::fabs(d) > max_detect_d_m_) {
     return false;
   }
 

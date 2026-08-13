@@ -19,7 +19,10 @@
 //     anywhere between one and six obstacles from one frame to the next.
 //   - Obstacles report their real per-axis extent rather than a square whose
 //     side is the cluster's longest dimension.
-//   - detect_fov_deg and max_viewing_distance are honoured.
+//   - detect_fov_deg, max_viewing_distance and max_detect_d_m are
+//     honoured; the last is a hard cap on how far off the raceline
+//     anything is worth clustering, because the track boundary is a poor
+//     proxy for that on a map with wide sections.
 //
 // The python detector is in the history up to the merge of the perception-cpp
 // branch, where both were installed and selectable so that the two could be
@@ -77,7 +80,7 @@ struct Obstacle
   double size{0.0};   ///< side of the bounding square: max(width, height)
   double theta{0.0};  ///< rectangle orientation, for the marker
 
-  // Frenet position and extents of the known-size obstacle model.
+  // Frenet position, and the measured per-axis extents.
   double s_center{0.0};
   double d_center{0.0};
   double s_back{0.0};   ///< distance from s_center to the trailing edge
@@ -142,12 +145,14 @@ private:
   double min_2_points_dist_{0.01};
   double new_cluster_threshold_m_{0.4};
   int min_size_n_{4};
-  /// Known obstacle side length (the course uses a 0.50 m cube).
-  double min_size_m_{0.5};
+  /// Floor on a measured extent, per axis. NOT the modelled size: the
+  /// footprint is settled over time by the tracker.
+  double min_size_m_{0.20};
   double max_size_m_{0.6};
   double max_viewing_distance_{9.0};
   double boundaries_inflation_{0.1};
   double detect_fov_deg_{360.0};
+  double max_detect_d_m_{0.90};
   bool measuring_{false};
 
   // --- state ---
