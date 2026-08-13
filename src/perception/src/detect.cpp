@@ -634,6 +634,15 @@ void Detect::publishObstaclesMessage()
 
 visualization_msgs::msg::MarkerArray Detect::clearMarkers() const
 {
+  // Returns an array that STARTS with the delete, for the caller to append to.
+  //
+  // It used to be published as its own message, immediately before the one
+  // carrying the markers - which is what unicorn does, and what made the boxes
+  // strobe at exactly the detection rate. RViz applies each message as it
+  // arrives, so between the two there was a moment with nothing on screen, 20
+  // times a second. Markers inside ONE array are applied in order, so putting
+  // the delete at the front of the same message clears the previous frame and
+  // draws this one atomically.
   visualization_msgs::msg::MarkerArray array;
   visualization_msgs::msg::Marker marker;
   // RViz drops a DELETEALL whose frame is empty.
@@ -645,7 +654,7 @@ visualization_msgs::msg::MarkerArray Detect::clearMarkers() const
 
 void Detect::publishBreakpoints(const std::vector<Cluster> & clusters)
 {
-  visualization_msgs::msg::MarkerArray array;
+  visualization_msgs::msg::MarkerArray array = clearMarkers();
   const double lifetime = 3.0 / std::max(1.0, rate_);
 
   for (size_t idx = 0; idx < clusters.size(); idx++) {
@@ -674,13 +683,12 @@ void Detect::publishBreakpoints(const std::vector<Cluster> & clusters)
     }
   }
 
-  breakpoints_markers_pub_->publish(clearMarkers());
   breakpoints_markers_pub_->publish(array);
 }
 
 void Detect::publishObstaclesMarkers()
 {
-  visualization_msgs::msg::MarkerArray array;
+  visualization_msgs::msg::MarkerArray array = clearMarkers();
   const double lifetime = 3.0 / std::max(1.0, rate_);
 
   for (const Obstacle & obstacle : tracked_obstacles_) {
@@ -705,7 +713,6 @@ void Detect::publishObstaclesMarkers()
     array.markers.push_back(marker);
   }
 
-  obstacles_marker_pub_->publish(clearMarkers());
   obstacles_marker_pub_->publish(array);
 }
 

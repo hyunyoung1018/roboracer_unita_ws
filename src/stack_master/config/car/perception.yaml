@@ -24,8 +24,23 @@ detect:
     # made this 20 in the first place.
     rate_detect: 20.0
 
-    # Minimum number of LiDAR points in a cluster
-    min_size_n: 4
+    # Minimum number of LiDAR points in a cluster.
+    #
+    # 4 -> 8. This is now the main defence against a wall becoming an
+    # obstacle, because min_size_m stopped being a floor and became the
+    # modelled side length: ANY cluster that survives is published as a full
+    # 0.50 m cube. A four-point leak through the boundary band therefore
+    # produced a half-metre obstacle, which is why boxes appeared along the
+    # walls while driving past them.
+    #
+    # The real obstacle cannot be that small. A 0.50 m cube subtends, at this
+    # lidar's 0.25 deg resolution:
+    #
+    #   1 m -> 112 beams    3 m -> 38    5 m -> 22    9 m -> 12
+    #
+    # so 8 keeps it out to the 9 m viewing limit with room for grazing angles
+    # and dark faces, while rejecting the short fragments a wall leaks.
+    min_size_n: 8
 
     # Known obstacle side length (0.50 m x 0.50 m x 0.50 m cube)
     min_size_m: 0.50
@@ -42,8 +57,18 @@ detect:
     # Maximum detection distance
     max_viewing_distance: 9.0
 
-    # Frenet track boundary inflation
-    boundaries_inflation: 0.10
+    # [m] How far inside the track boundary a lidar return must be to count.
+    #
+    # 0.10 -> 0.15. The track measures 1.05 to 1.85 m wide here, and at 0.10
+    # a return within 10 cm of the wall was still accepted - which is inside
+    # the combined localisation and lidar error at range, so wall returns
+    # leaked in continuously. They cluster into short fragments, and a short
+    # fragment is exactly what now becomes a 0.50 m cube.
+    #
+    # Do not push this much further: the narrowest half-width on this track
+    # is 0.33 m, so 0.15 already discards the outer 45% of that side, and a
+    # real obstacle parked against the wall has to stay detectable.
+    boundaries_inflation: 0.15
 
     # UNITA-specific detection FOV
     # Full Hokuyo scan remains available for localization.
@@ -117,8 +142,9 @@ spline_node:
     trajectory_threshold: 0.6
 
     # [m] How close the path's centreline may come to the track edge. NOT
-    # reducible below the car's half width of 0.14 - at 0.20 the car passes
-    # 6 cm from the wall, and 0.15 would put it 1 cm away.
+    # reducible below the car's half width of 0.14 - at 0.19 the car passes
+    # 5 cm from the wall, and 0.15 would put it 1 cm away. That 5 cm is where
+    # localisation error lives, so this is the wrong parameter to spend.
     boundary_margin: 0.19
     spline_resolution: 0.05
     measure: false
