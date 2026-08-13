@@ -1158,7 +1158,8 @@ class StateMachine(Node):
         if len(self.cur_obstacles_in_interest) != 0:
             self.get_logger().info(
                 "static avoidance refused: "
-                f"slow_enough={slow_enough} (vs {self.cur_vs:.2f} < 3.0), "
+                f"slow_enough={slow_enough} "
+                f"(vs {self.cur_vs:.2f} < {self.static_overtake_max_speed_mps:.2f}), "
                 f"closing={closing}, have_path={have_path}, path_free={path_free}",
                 throttle_duration_sec=2.0)
         return False
