@@ -11,14 +11,16 @@ max_horizon: 10.0
 # own half width of 0.14 is taken off. At 0.02 the floor is 0.22 and
 # evasion_distance 0.24 leaves 10 cm, with 2 cm of slack left in this check.
 #
-# The other way to buy room is gb_ego_width_m, which is 0.4 against a car
-# that measures 0.28. Deliberately not touched: _check_close_to_raceline
-# reads it too, so lowering it also changes when the car counts as back on
-# the raceline. This parameter is read here and nowhere else.
+# 0.02 -> 0.05, because gb_ego_width_m is now the car's real 0.28 rather
+# than 0.4. free_dist is therefore the true gap between the car's side and
+# the obstacle's edge, and this is a genuine safety margin rather than a
+# number compensating for 12 cm of padding elsewhere. 5 cm is about what
+# localisation error and the obstacle's measured edge are worth together.
+# The floor it puts on evasion_distance is 0.28/2 + this = 0.19.
 #
 # The requirement is scaled by distance (free_scaling_reference_distance_m),
 # so it is strictest far out and relaxes on approach.
-lateral_width_m: 0.02
+lateral_width_m: 0.05
 free_scaling_reference_distance_m: 2.0
 # [s] How old the planner's path may be. It replans at 20 Hz, so 0.1 was two
 # cycles of slack and the jetson lost that regularly - "path is 0.171 s old"

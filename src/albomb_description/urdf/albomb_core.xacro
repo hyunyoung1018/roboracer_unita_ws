@@ -3,9 +3,9 @@
 
   <xacro:property name="car_name" value="ego_racecar" />
   <xacro:property name="wheel_track" value="0.235" />     <!-- 윤거 -->
-  <xacro:property name="wheel_base" value="0.327" />      <!-- 축거 -->
+  <xacro:property name="wheel_base" value="0.324" />      <!-- 축거 -->
   <xacro:property name="wheel_radius" value="0.05" />     <!-- 바퀴 반지름 -->
-  <xacro:property name="wheel_length" value="0.04" />    <!-- 바퀴 두께 -->
+  <xacro:property name="wheel_length" value="0.045" />    <!-- 바퀴 두께 -->
 
   <material name="Black">
     <color rgba="0.0 0.0 0.0 1.0"/>

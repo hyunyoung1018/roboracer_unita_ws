@@ -9,7 +9,20 @@ state_machine:
     ot_planner: "lane_change"
     track_length: 1.0
     # geometry / horizons
-    gb_ego_width_m: 0.4
+    # [m] The car's overall width, as the free-space checks model it.
+    #
+    # 0.4 -> 0.28. 0.28 is measured, and albomb_core.xacro agrees:
+    # wheel_track 0.235 + wheel_length 0.04 = 0.275. The old 0.4 was 12 cm of
+    # hidden padding, which made every clearance number mean something other
+    # than it said. free_dist in _check_free_frenet is now the real gap
+    # between the car's side and the obstacle's edge, so the margins on top
+    # of it - lateral_width_m, lateral_width_gb_m - are real margins and can
+    # be tuned as such.
+    #
+    # NOTE it cuts both ways. The same check decides whether the RACELINE is
+    # blocked, and a narrower car is blocked less often, so lateral_width_gb_m
+    # below carries the 6 cm back to keep avoidance triggering when it did.
+    gb_ego_width_m: 0.28
     gb_horizon_m: 15.0
     interest_horizon_m: 20.0
     overtaking_horizon_m: 6.9
@@ -32,7 +45,12 @@ state_machine:
     # safety
     volt_threshold: 11.0
     # dynamic (replaces dyn_statemachine_tuner.cfg)
-    lateral_width_gb_m: 0.3
+    # [m] Clearance the RACELINE needs from an obstacle before the state
+    # machine looks for a way around it. 0.3 -> 0.36: gb_ego_width_m lost
+    # 12 cm, i.e. 6 cm per side, and this is what decides when avoidance is
+    # needed at all. Without the compensation a narrower car would simply
+    # judge the raceline clear and drive at the obstacle.
+    lateral_width_gb_m: 0.36
     lateral_width_ot_m: 0.3
     splini_hyst_timer_sec: 0.7
     splini_ttl: 2.0
