@@ -134,7 +134,11 @@ spline_node:
     # See the comment in spline_node._loop - the state machine's
     # latest_threshold still decides usability, this only stops a dropout
     # from being published as "there is nothing here".
-    path_hold_s: 0.3
+    #
+    # Capped at the state machine's latest_threshold (0.25). Holding longer
+    # only republishes paths it will reject as stale - "path is 0.321 s old,
+    # threshold 0.25" in the logs was exactly that.
+    path_hold_s: 0.25
 
     # [m] How much wider the other side must be before the planner switches
     # sides. Left and right room are often within a couple of centimetres of
@@ -148,15 +152,22 @@ spline_node:
     # this planner says the line already clears it and publishes nothing.
     #
     # MUST match what the state machine calls a blocked raceline, which is
-    # gb_ego_width_m/2 + lateral_width_gb_m = 0.14 + 0.36 = 0.50. It used to
-    # test against evasion_distance instead, and the two disagreeing opened a
-    # dead zone: an obstacle whose edge sat between 0.24 and 0.50 m from the
-    # line had the state machine asking for an avoidance while this node
-    # answered "nothing to avoid", so the car trailed it forever. Measured on
-    # map_no, every refusal was in that band - edges of 0.37 to 0.48 m.
+    # gb_ego_width_m/2 + lateral_width_gb_m. Set to evasion_distance, and
+    # lateral_width_gb_m set to 0.10 so the state machine agrees: the raceline
+    # counts as blocked exactly when this planner would start moving off it.
     #
-    # Change this and lateral_width_gb_m together, or the dead zone reopens.
-    raceline_clearance_m: 0.50
+    # Getting this wrong in either direction has now been seen on the car.
+    # Too low and the planner says "nothing to avoid" while the state machine
+    # asks for a path, and the car trails an obstacle forever. Too high and
+    # the planner is asked for a path in situations where the raceline is
+    # already clear, and the apex it computes lands on the raceline itself -
+    # which the state machine then measures against the same obstacle and
+    # refuses. Both look identical from outside the car.
+    #
+    # Three numbers, one threshold:
+    #   raceline_clearance_m == evasion_distance
+    #                        == gb_ego_width_m/2 + lateral_width_gb_m
+    raceline_clearance_m: 0.24
 
     lookahead: 10.0
 

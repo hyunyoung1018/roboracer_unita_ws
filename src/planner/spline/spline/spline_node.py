@@ -245,13 +245,19 @@ class SplineNode(Node):
             bias = -self.side_hysteresis_m
 
         if left_room >= self.boundary_margin and left_room + bias >= right_room:
+            # Bailing here and clamping the apex to the raceline are NOT the
+            # same thing. Clamping publishes the raceline as an avoidance
+            # path, the state machine measures it against the obstacle that
+            # made it plan in the first place, and refuses - which is what
+            # "apex d=0.00" in the logs was. If there is nothing to avoid,
+            # say so and publish nothing.
             if -obstacle.d_left >= self.raceline_clearance_m:
                 return self._bail(
                     out,
                     f"raceline already clears the obstacle at s={apex_s:.2f} on the "
                     f"left (its edge is {-obstacle.d_left:.2f} m to the right of the "
                     f"line, needs {self.raceline_clearance_m:.2f})")
-            side, apex_d = 'left', max(left_apex, 0.0)
+            side, apex_d = 'left', left_apex
         elif right_room >= self.boundary_margin:
             if obstacle.d_right >= self.raceline_clearance_m:
                 return self._bail(
@@ -259,7 +265,7 @@ class SplineNode(Node):
                     f"raceline already clears the obstacle at s={apex_s:.2f} on the "
                     f"right (its edge is {obstacle.d_right:.2f} m to the left of the "
                     f"line, needs {self.raceline_clearance_m:.2f})")
-            side, apex_d = 'right', min(right_apex, 0.0)
+            side, apex_d = 'right', right_apex
         else:
             return self._bail(
                 out,

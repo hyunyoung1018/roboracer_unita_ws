@@ -48,11 +48,17 @@ state_machine:
     volt_threshold: 11.0
     # dynamic (replaces dyn_statemachine_tuner.cfg)
     # [m] Clearance the RACELINE needs from an obstacle before the state
-    # machine looks for a way around it. 0.3 -> 0.36: gb_ego_width_m lost
-    # 12 cm, i.e. 6 cm per side, and this is what decides when avoidance is
-    # needed at all. Without the compensation a narrower car would simply
-    # judge the raceline clear and drive at the obstacle.
-    lateral_width_gb_m: 0.36
+    # machine looks for a way around it.
+    #
+    # 0.36 -> 0.10, tied to the spline planner's evasion_distance:
+    #   gb_ego_width_m/2 + this = 0.14 + 0.10 = 0.24 = evasion_distance
+    #
+    # At 0.36 the threshold was 0.50, and between 0.24 and 0.50 the state
+    # machine demanded an avoidance for a situation the planner could not
+    # improve on - the apex it computed landed on the raceline itself. The
+    # two have to name the same distance or the car trails obstacles it
+    # could pass. See raceline_clearance_m in perception.yaml.
+    lateral_width_gb_m: 0.10
     lateral_width_ot_m: 0.3
     splini_hyst_timer_sec: 0.7
     splini_ttl: 2.0
