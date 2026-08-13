@@ -54,6 +54,7 @@ class SplineNode(Node):
         self.converter = None
 
         self.last_path = None
+        self.last_side = None
 
         defaults = {
             'lookahead': 3.0,
@@ -63,6 +64,7 @@ class SplineNode(Node):
             'spline_resolution': 0.10,
             'rate_hz': 10.0,
             'path_hold_s': 0.3,
+            'side_hysteresis_m': 0.10,
             'measure': False,
         }
         for name, value in defaults.items():
@@ -90,6 +92,7 @@ class SplineNode(Node):
         self.boundary_margin = float(self.get_parameter('boundary_margin').value)
         self.resolution = float(self.get_parameter('spline_resolution').value)
         self.path_hold_s = float(self.get_parameter('path_hold_s').value)
+        self.side_hysteresis_m = float(self.get_parameter('side_hysteresis_m').value)
         self.measure = bool(self.get_parameter('measure').value)
 
     def _parameter_cb(self, params):
@@ -100,6 +103,7 @@ class SplineNode(Node):
             'boundary_margin': 'boundary_margin',
             'spline_resolution': 'resolution',
             'path_hold_s': 'path_hold_s',
+            'side_hysteresis_m': 'side_hysteresis_m',
             'measure': 'measure',
         }
         for parameter in params:
@@ -202,6 +206,7 @@ class SplineNode(Node):
                     f"(lookahead {self.lookahead}) at d {nearest.d_center:.2f} "
                     f"(threshold {self.trajectory_threshold})",
                     throttle_duration_sec=2.0)
+            self.last_side = None
             return out
         obstacle = min(candidates, key=lambda item: (item.s_center - cur_s) % max_s)
         reference = self.scaled_msg.wpnts
@@ -220,7 +225,22 @@ class SplineNode(Node):
         # raceline itself as an "avoidance path", which the state machine then
         # measured against the obstacle and refused, over and over. Say so and
         # publish nothing instead: there is nothing to avoid.
-        if left_room >= self.boundary_margin and left_room >= right_room:
+        # Stick to the side already chosen unless the other is clearly better.
+        #
+        # The two are often within a couple of centimetres of each other, and
+        # the obstacle's measured edges move by about that much between frames,
+        # so a bare comparison flips sides several times a second. Each flip is
+        # a completely different path, the state machine sees a path the car is
+        # not on, and avoidance never settles. Requiring the other side to win
+        # by side_hysteresis_m makes the choice sticky without making it
+        # permanent - a genuinely wider gap still takes it.
+        bias = 0.0
+        if self.last_side == 'left':
+            bias = self.side_hysteresis_m
+        elif self.last_side == 'right':
+            bias = -self.side_hysteresis_m
+
+        if left_room >= self.boundary_margin and left_room + bias >= right_room:
             if left_apex <= 0.0:
                 return self._bail(
                     out,
@@ -312,6 +332,7 @@ class SplineNode(Node):
             ))
         out.ot_side = side
         out.ot_line = side
+        self.last_side = side
         self.get_logger().info(
             f"avoiding {side} around obstacle at s={apex_s:.2f}: "
             f"apex d={apex_d:.2f} m, {len(out.wpnts)} waypoints over "

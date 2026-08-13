@@ -4,7 +4,9 @@ state_machine:
     rate: 80
     n_loc_wpnts: 80
     timetrials_only: false
-    sim: true
+    # Nothing declares this today, so it is inert either way - but a car
+    # config that says sim: true is a trap for whoever reads it next.
+    sim: false
     measure: false
     ot_planner: "lane_change"
     track_length: 1.0

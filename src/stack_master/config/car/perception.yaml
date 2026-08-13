@@ -94,6 +94,13 @@ tracking:
     # few seconds.
     extent_decay_mps: 0.05
 
+    # How many recent measurements the median position of a STATIC obstacle
+    # is taken over. A static obstacle is not moving, but the L-shape fit
+    # lands centimetres apart each frame as the viewing angle changes, and
+    # the avoidance apex sits on the obstacle's edge - so that jitter went
+    # straight into the local path. 10 samples is half a second at 20 Hz.
+    static_position_samples: 10
+
     association_distance: 0.8
     max_missed_frames: 8
     velocity_smoothing: 0.65
@@ -114,6 +121,14 @@ spline_node:
     # latest_threshold still decides usability, this only stops a dropout
     # from being published as "there is nothing here".
     path_hold_s: 0.3
+
+    # [m] How much wider the other side must be before the planner switches
+    # sides. Left and right room are often within a couple of centimetres of
+    # each other and the obstacle's measured edges move by about that much
+    # between frames, so a bare comparison flipped sides several times a
+    # second - and every flip is a completely different path, which the state
+    # machine then rejects because the car is not on it.
+    side_hysteresis_m: 0.10
 
     lookahead: 10.0
 

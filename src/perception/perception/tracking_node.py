@@ -38,6 +38,7 @@ class TrackingNode(Node):
             ('velocity_smoothing', 0.65), ('static_speed_threshold', 0.15),
             ('static_min_samples', 6), ('publish_static', True), ('measure', False),
             ('extent_max_m', 0.50), ('extent_decay_mps', 0.05),
+            ('static_position_samples', 10),
         ):
             self.declare_parameter(name, default)
         self.track_length = None
@@ -117,6 +118,20 @@ class TrackingNode(Node):
             abs(obstacle.d_left - obstacle.d_center),
         ]
 
+    def _filtered_center(self, track):
+        """Median of the recent measured positions, in Frenet."""
+        n = int(self.get_parameter('static_position_samples').value)
+        s_history = track.s_history[-n:]
+        d_history = track.d_history[-n:]
+        if len(s_history) < 2:
+            return s_history[-1], d_history[-1]
+        # s wraps, so take the median of the offsets from the newest sample
+        # rather than of the values themselves.
+        reference = s_history[-1]
+        offsets = [_circular_delta(s, reference, self.track_length) for s in s_history]
+        s_center = (reference + float(np.median(offsets))) % self.track_length
+        return float(s_center), float(np.median(d_history))
+
     def _hold_extents(self, track, measurement, dt):
         """Hold the largest extent this obstacle has ever shown.
 
@@ -185,15 +200,12 @@ class TrackingNode(Node):
         updated.id = track.track_id
         updated.vs = alpha * previous_vs + (1.0 - alpha) * measured_vs
         updated.vd = alpha * previous_vd + (1.0 - alpha) * measured_vd
-        self._apply_extents(updated, self._hold_extents(track, measurement, dt),
-                            self.track_length)
-        track.obstacle = updated
-        track.stamp = stamp
-        track.missed = 0
-        track.s_history.append(updated.s_center)
-        track.d_history.append(updated.d_center)
+
+        track.s_history.append(measurement.s_center)
+        track.d_history.append(measurement.d_center)
         track.s_history = track.s_history[-20:]
         track.d_history = track.d_history[-20:]
+
         min_samples = int(self.get_parameter('static_min_samples').value)
         speed_limit = float(self.get_parameter('static_speed_threshold').value)
         # bool(), and it is load-bearing. `a and b` returns b when a is truthy,
@@ -205,6 +217,26 @@ class TrackingNode(Node):
             len(track.s_history) >= min_samples
             and np.hypot(updated.vs, updated.vd) < speed_limit)
         updated.is_visible = True
+
+        # A static obstacle is not moving, so its position should not move
+        # either - but the L-shape fit lands a few centimetres differently
+        # every frame as the viewing angle changes. The planner puts the
+        # avoidance apex at the obstacle's edge, so that jitter propagates
+        # straight into the path, which is why the local path never looked
+        # settled. Take the median of the recent measurements instead: it is
+        # the same estimator the extents use, and it discards the occasional
+        # bad fit rather than averaging it in.
+        #
+        # Only for static tracks. A moving obstacle's position is supposed to
+        # change, and a median would lag it.
+        if updated.is_static:
+            updated.s_center, updated.d_center = self._filtered_center(track)
+
+        self._apply_extents(updated, self._hold_extents(track, measurement, dt),
+                            self.track_length)
+        track.obstacle = updated
+        track.stamp = stamp
+        track.missed = 0
 
     @staticmethod
     def _copy_obstacle(source):
