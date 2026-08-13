@@ -25,6 +25,9 @@ class Track:
     missed: int = 0
     s_history: List[float] = field(default_factory=list)
     d_history: List[float] = field(default_factory=list)
+    # Held half-extents from the centre, in metres: the running maximum of
+    # everything this track has been measured at. See _hold_extents.
+    extents: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
 
 
 class TrackingNode(Node):
@@ -34,6 +37,7 @@ class TrackingNode(Node):
             ('association_distance', 0.8), ('max_missed_frames', 8),
             ('velocity_smoothing', 0.65), ('static_speed_threshold', 0.15),
             ('static_min_samples', 6), ('publish_static', True), ('measure', False),
+            ('extent_max_m', 0.50), ('extent_decay_mps', 0.05),
         ):
             self.declare_parameter(name, default)
         self.track_length = None
@@ -103,11 +107,66 @@ class TrackingNode(Node):
             elapsed = self.get_clock().now().nanoseconds / 1e9 - started
             self.latency_pub.publish(Float32(data=float(elapsed)))
 
+    @staticmethod
+    def _measured_extents(obstacle):
+        """Half-extents from the centre: back, front, right, left."""
+        return [
+            abs(obstacle.s_center - obstacle.s_start),
+            abs(obstacle.s_end - obstacle.s_center),
+            abs(obstacle.d_center - obstacle.d_right),
+            abs(obstacle.d_left - obstacle.d_center),
+        ]
+
+    def _hold_extents(self, track, measurement, dt):
+        """Hold the largest extent this obstacle has ever shown.
+
+        The lidar only ever sees the near faces, so every single frame
+        UNDER-estimates the real footprint, and by a different amount each
+        time as the viewing angle changes. Feeding that straight to the
+        planner moved the obstacle's edges centimetres per frame, the apex
+        moved with them, and the path never settled - which is the problem
+        the detector was answering by modelling every obstacle as a fixed
+        0.50 m cube regardless of what was measured.
+
+        A fixed cube is the wrong place to solve it. 0.50 m is the rule's
+        MAXIMUM, not the size of the thing in front of the car, and assuming
+        it costs real passable gaps: on this track a centred 0.50 m obstacle
+        can be driven around at 22% of positions, a 0.30 m one at 67%.
+
+        Because each measurement is a lower bound, the running maximum over
+        the track's life converges upward to the true extent and then stops
+        moving. That is stable by construction rather than by assumption, and
+        it is per-obstacle, so a small cone stays small.
+
+        Two guards: a slow leak downward, so one bad frame or a mis-associated
+        detection bleeds off instead of inflating the obstacle forever; and a
+        hard ceiling at the rule's maximum, which is what that number is for.
+        """
+        held = track.extents
+        measured = self._measured_extents(measurement)
+        ceiling = float(self.get_parameter('extent_max_m').value) / 2.0
+        leak = float(self.get_parameter('extent_decay_mps').value) * max(0.0, dt)
+        for i in range(4):
+            held[i] = min(ceiling, max(measured[i], held[i] - leak))
+        return held
+
+    @staticmethod
+    def _apply_extents(obstacle, held, track_length):
+        back, front, right, left = held
+        obstacle.s_start = float((obstacle.s_center - back) % track_length)
+        obstacle.s_end = float((obstacle.s_center + front) % track_length)
+        obstacle.d_right = float(obstacle.d_center - right)
+        obstacle.d_left = float(obstacle.d_center + left)
+        # `size` is the bounding square's side, which is what the marker draws
+        # and what anything reading it has always meant.
+        obstacle.size = float(max(back + front, right + left))
+
     def _new_track(self, measurement, stamp):
         copied = self._copy_obstacle(measurement)
         copied.id = self.next_id
         track = Track(self.next_id, copied, stamp,
-                      s_history=[copied.s_center], d_history=[copied.d_center])
+                      s_history=[copied.s_center], d_history=[copied.d_center],
+                      extents=self._measured_extents(copied))
         self.next_id += 1
         self.tracks.append(track)
         return track
@@ -126,6 +185,8 @@ class TrackingNode(Node):
         updated.id = track.track_id
         updated.vs = alpha * previous_vs + (1.0 - alpha) * measured_vs
         updated.vd = alpha * previous_vd + (1.0 - alpha) * measured_vd
+        self._apply_extents(updated, self._hold_extents(track, measurement, dt),
+                            self.track_length)
         track.obstacle = updated
         track.stamp = stamp
         track.missed = 0

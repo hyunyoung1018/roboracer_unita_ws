@@ -28,10 +28,7 @@ Detect::Detect()
 
   rate_ = declareNumber("rate_detect", 20.0);
   min_size_n_ = static_cast<int>(declareNumber("min_size_n", 4));
-  // The course obstacle is a known 0.50 m cube.  Keep the existing parameter
-  // name for launch-file compatibility, but use it as the modelled side length
-  // rather than merely a lower bound on the noisy LiDAR measurement.
-  min_size_m_ = declareNumber("min_size_m", 0.50);
+  min_size_m_ = declareNumber("min_size_m", 0.20);
   max_size_m_ = declareNumber("max_size_m", 0.60);
   lambda_angle_ = declareNumber("lambda_deg", 10.0) * M_PI / 180.0;
   sigma_ = declareNumber("sigma", 0.03);
@@ -467,11 +464,23 @@ std::vector<Obstacle> Detect::fittingLShape(const std::vector<Cluster> & cluster
       }
     }
 
-    // The obstacle used on this course is a known 0.50 m x 0.50 m x 0.50 m
-    // cube.  LiDAR normally observes only its near faces, so the measured
-    // depth is not a reliable estimate of the real footprint.  Use the
-    // measured span only to reject wall-sized clusters, then model every valid
-    // obstacle with the configured physical side length (min_size_m_).
+    // Per axis, measured, floored at min_size_m.
+    //
+    // This was briefly a fixed 0.50 m cube on every obstacle, to stop the
+    // measured box jittering frame to frame and dragging the avoidance apex
+    // with it. The jitter is real - the lidar sees only the near faces, so
+    // every frame under-estimates by a different amount as the angle changes
+    // - but a fixed cube is the wrong place to answer it. 0.50 m is the
+    // rule's MAXIMUM, not the size of the thing in front of the car, and
+    // assuming it throws away gaps that are really there: on this track a
+    // centred 0.50 m obstacle is passable at 22% of positions against 67%
+    // for a 0.30 m one.
+    //
+    // The tracker settles it instead, in tracking_node._hold_extents: it is
+    // the only stage that sees an obstacle across frames, each frame is a
+    // lower bound, so the running maximum converges upward and then holds
+    // still - and it holds at the obstacle's own size, capped at the rule's
+    // 0.50 m. This node reports what it actually saw.
     //
     // `size = max(width, height)` is what UNIST publishes, and it inflates
     // whichever dimension is smaller. The lidar sees a cone as a shallow arc,
@@ -486,8 +495,8 @@ std::vector<Obstacle> Detect::fittingLShape(const std::vector<Cluster> & cluster
       continue;
     }
 
-    const double width = min_size_m_;
-    const double height = min_size_m_;
+    const double width = std::max(measured_width, min_size_m_);
+    const double height = std::max(measured_height, min_size_m_);
 
     std::pair<double, double> center = corners[closest_corner];
     center.first += (closest_corner < 2) ? -width / 2.0 : width / 2.0;

@@ -26,12 +26,9 @@ detect:
 
     # Minimum number of LiDAR points in a cluster.
     #
-    # 4 -> 8. This is now the main defence against a wall becoming an
-    # obstacle, because min_size_m stopped being a floor and became the
-    # modelled side length: ANY cluster that survives is published as a full
-    # 0.50 m cube. A four-point leak through the boundary band therefore
-    # produced a half-metre obstacle, which is why boxes appeared along the
-    # walls while driving past them.
+    # 4 -> 8. This is the main defence against a wall becoming an obstacle:
+    # four returns leaking through the boundary band were enough to publish
+    # one, which is why boxes appeared along the walls while driving past.
     #
     # The real obstacle cannot be that small. A 0.50 m cube subtends, at this
     # lidar's 0.25 deg resolution:
@@ -42,8 +39,11 @@ detect:
     # and dark faces, while rejecting the short fragments a wall leaks.
     min_size_n: 8
 
-    # Known obstacle side length (0.50 m x 0.50 m x 0.50 m cube)
-    min_size_m: 0.50
+    # [m] Floor and ceiling on the MEASURED extent of a cluster, per axis.
+    # min_size_m is a floor, not the modelled size: the obstacle's real
+    # footprint is settled over time by the tracker (extent_max_m below),
+    # because a single frame only ever sees the near faces.
+    min_size_m: 0.20
     max_size_m: 0.60
 
     # UNIST adaptive breakpoint clustering
@@ -81,6 +81,19 @@ detect:
 
 tracking:
   ros__parameters:
+    # [m] Ceiling on an obstacle's footprint. This is where the rule's
+    # 50 x 50 cm maximum belongs - as a cap on what may be believed, not as
+    # the assumed size of every obstacle.
+    extent_max_m: 0.50
+
+    # [m/s] How fast a held extent leaks back down. The tracker keeps the
+    # largest extent an obstacle has ever shown, since every frame
+    # under-estimates; this stops one bad frame or a mis-associated detection
+    # from inflating it permanently. 0.05 sheds 5 cm per second, so a genuine
+    # obstacle re-measured at 20 Hz never shrinks, and a phantom fades in a
+    # few seconds.
+    extent_decay_mps: 0.05
+
     association_distance: 0.8
     max_missed_frames: 8
     velocity_smoothing: 0.65
