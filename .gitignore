@@ -41,6 +41,14 @@ CLAUDE.md
 # Generated API docs inside the vendored simulator.
 src/f1tenth_gym_ros/f1tenth_gym/docs/html/
 
+# lap_analyser writes one timestamped file here per run, from its
+# constructor. Runtime output, one per launch, never read back.
+/data/
+
+# Left behind by adding Microsoft's apt repo when installing VS Code.
+# Nothing in the workspace uses it.
+packages.microsoft.gpg
+
 # Bags and recordings
 *.db3
 *.mcap
