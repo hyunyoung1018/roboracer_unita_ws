@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  DDS configuration for the car.
+
+  Two problems this is answering, both measured rather than assumed.
+
+  FastDDS is the default rmw on Humble and it busy-spins on a graph this
+  size. UNIST measured it taking a whole core against CycloneDDS idling at
+  ~21% on the same node set, and time_trials brings up 21 nodes. That is a
+  core we do not have: the particle filter is already scan-limited.
+
+  The bigger one is the network. /scan is published RELIABLE - deliberately,
+  because a best-effort publisher starves a reliable subscriber silently -
+  and reliable means the publisher retransmits until the subscriber
+  acknowledges. Over wifi to a laptop running RViz, that couples the laptop's
+  packet loss back into the car: /scan and /tf were seen freezing TOGETHER
+  for 0.3 s at a time, growing to 0.35 s over a run. At 3 m/s that is a metre
+  of unmodelled motion, which is what the particle filter was jumping on.
+
+  Interfaces are therefore listed explicitly rather than autodetected:
+
+    127.0.0.1   the whole stack is one host; this is the path that matters
+    wlan0       the laptop. RENAME IT if `ip -br link` says otherwise.
+
+  enP8p1s0 is deliberately absent. That is the lidar's private 192.168.0.x
+  link with nothing on it but the sensor, and discovery traffic there is
+  pure waste.
+
+  Used as:
+    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    export CYCLONEDDS_URI="file://$HOME/roboracer_unita_ws/cyclonedds.xml"
+
+  If the freezes persist with the laptop connected, the next step is to stop
+  sending /scan over the air at all - view it through the foxglove bridge,
+  which is one TCP connection that cannot push back into the publisher's DDS
+  the way a reliable DDS subscriber does.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+    <Domain id="any">
+        <General>
+            <Interfaces>
+                <NetworkInterface address="127.0.0.1" multicast="true"/>
+                <NetworkInterface name="wlan0" multicast="true" presence_required="false"/>
+            </Interfaces>
+            <AllowMulticast>true</AllowMulticast>
+        </General>
+        <Discovery>
+            <ParticipantIndex>none</ParticipantIndex>
+        </Discovery>
+        <Internal>
+            <SocketReceiveBufferSize min="default"/>
+            <SocketSendBufferSize min="default"/>
+        </Internal>
+    </Domain>
+</CycloneDDS>
