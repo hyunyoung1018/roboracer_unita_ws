@@ -1,6 +1,18 @@
 free_scaling_reference_distance_m: 1
 is_closed: true
-lateral_width_m: 0.15
+# [m] Clearance the RACELINE needs from an obstacle before the state machine
+# looks for a way around it. THIS is the parameter that decides it - not
+# lateral_width_gb_m, which is read into the node and then used by nothing but
+# a debug dump.
+#
+# 0.15 -> 0.10, so that
+#   gb_ego_width_m/2 + this = 0.14 + 0.10 = 0.24 = evasion_distance
+#                                                = raceline_clearance_m
+# and the raceline counts as blocked exactly when the spline planner would
+# start moving off it. At 0.15 the threshold was 0.29 against the planner's
+# 0.24, leaving a band where the state machine asked for an avoidance the
+# planner answered "nothing to avoid" to - and the car trailed the obstacle.
+lateral_width_m: 0.10
 latest_threshold: 0.1
 max_horizon: 20.0
 min_horizon: 0.0

@@ -51,17 +51,12 @@ state_machine:
     # safety
     volt_threshold: 11.0
     # dynamic (replaces dyn_statemachine_tuner.cfg)
-    # [m] Clearance the RACELINE needs from an obstacle before the state
-    # machine looks for a way around it.
-    #
-    # 0.36 -> 0.10, tied to the spline planner's evasion_distance:
-    #   gb_ego_width_m/2 + this = 0.14 + 0.10 = 0.24 = evasion_distance
-    #
-    # At 0.36 the threshold was 0.50, and between 0.24 and 0.50 the state
-    # machine demanded an avoidance for a situation the planner could not
-    # improve on - the apex it computed landed on the raceline itself. The
-    # two have to name the same distance or the car trails obstacles it
-    # could pass. See raceline_clearance_m in perception.yaml.
+    # [m] DEAD. Read into the node and used by nothing but a debug dump - the
+    # raceline's free check takes its margin from the global_tracking planner
+    # block, config/planners/global_tracking.yaml, like every other planner.
+    # Two rounds of tuning went into this value before the logs showed the
+    # check asking for a number it could not have come from. Left at the
+    # matching value so it does not mislead again; change global_tracking.yaml.
     lateral_width_gb_m: 0.10
     lateral_width_ot_m: 0.3
     splini_hyst_timer_sec: 0.7
