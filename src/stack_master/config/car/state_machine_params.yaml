@@ -13,8 +13,8 @@ state_machine:
     # geometry / horizons
     # [m] The car's overall width, as the free-space checks model it.
     #
-    # 0.4 -> 0.28. 0.28 is measured, and albomb_core.xacro agrees:
-    # wheel_track 0.235 + wheel_length 0.04 = 0.275. The old 0.4 was 12 cm of
+    # 0.4 -> 0.28. 0.28 is measured, and albomb_core.xacro agrees exactly:
+    # wheel_track 0.235 + wheel_length 0.045 = 0.280. The old 0.4 was 12 cm of
     # hidden padding, which made every clearance number mean something other
     # than it said. free_dist in _check_free_frenet is now the real gap
     # between the car's side and the obstacle's edge, so the margins on top

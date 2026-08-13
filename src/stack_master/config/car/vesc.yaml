@@ -113,7 +113,7 @@
     use_servo_cmd_to_calc_angular_velocity: true
 
     # From albomb_description/urdf/albomb_core.xacro (wheel_base).
-    wheelbase: 0.327
+    wheelbase: 0.324
 
 /**/vesc_driver_node:
   ros__parameters:
