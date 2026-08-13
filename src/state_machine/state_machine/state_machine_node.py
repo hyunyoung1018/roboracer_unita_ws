@@ -950,12 +950,30 @@ class StateMachine(Node):
 
                 if obs.is_static:
                     if not wpnts_data.is_closed and gap > max_gap:
-                        rec["branch"] = "static/beyond_path"
-                        is_free = False
-                        rec["blocked"] = True
-                        if closest_obs is None or min_gap > gap:
-                            closest_obs = obs
-                            min_gap = gap
+                        # An obstacle PAST THE END of this path is not on it.
+                        #
+                        # This branch used to set is_free = False, silently -
+                        # it is the one condition in this function with no log
+                        # line, which is why the refusals only ever named
+                        # global_tracking while path_free stayed False on the
+                        # avoidance cache with nothing to explain it.
+                        #
+                        # An avoidance path is about nine metres long on a
+                        # twenty metre loop, so on any lap there is always
+                        # something beyond its end - a wall false positive is
+                        # enough. Treating that as "the path is blocked" made
+                        # path_free permanently false and no static avoidance
+                        # could ever arm.
+                        #
+                        # The car does not follow this path forever. It runs
+                        # to the end and the state machine decides again, with
+                        # that obstacle then inside the horizon. Skip it here.
+                        rec["branch"] = "static/beyond_path (ignored)"
+                        self.get_logger().info(
+                            f"[{wpnts_data.name}] obs {int(obs.id)} is "
+                            f"{gap:.2f} m ahead, past the end of this path "
+                            f"at {max_gap:.2f} m - not this path's problem",
+                            throttle_duration_sec=5.0)
                     elif gap < max_horizon:
                         obs_d = obs.d_center
                         ot_d = 0
