@@ -729,13 +729,26 @@ void Detect::publishObstaclesMarkers()
     marker.type = visualization_msgs::msg::Marker::CUBE;
     marker.action = visualization_msgs::msg::Marker::ADD;
     marker.lifetime = rclcpp::Duration::from_seconds(lifetime);
-    marker.scale.x = marker.scale.y = marker.scale.z = obstacle.size;
+    // The per-axis extents, not a square of the longest one. `size` is the
+    // bounding square and is still what checkObstacles rejects on, but a
+    // marker drawn at `size` on both axes is wider than the obstacle this
+    // message reports - and the whole point of debugging from rviz is that
+    // the picture is the message.
+    //
+    // The box is drawn in the L-shape fit's own frame, which is what theta
+    // orients it by. The extents published on the message are Frenet, so the
+    // two are not the same rectangle when the track curves under the
+    // obstacle; this draws the fit, and /tracking/static_dynamic_marker_pub
+    // draws the Frenet width the planner actually divides by.
+    marker.scale.x = std::max(1e-3, obstacle.s_front + obstacle.s_back);
+    marker.scale.y = std::max(1e-3, obstacle.d_left + obstacle.d_right);
+    marker.scale.z = obstacle.size;
     marker.color.a = 0.8;
     marker.color.r = 1.0;
     marker.pose.position.x = obstacle.center_x;
     marker.pose.position.y = obstacle.center_y;
-    // Place the 0.50 m cube on the ground instead of centring it at z = 0,
-    // which would leave its lower half below the map plane in RViz.
+    // On the ground rather than centred at z = 0, which would leave the
+    // lower half below the map plane in RViz.
     marker.pose.position.z = obstacle.size / 2.0;
     tf2::Quaternion q;
     q.setRPY(0.0, 0.0, obstacle.theta);

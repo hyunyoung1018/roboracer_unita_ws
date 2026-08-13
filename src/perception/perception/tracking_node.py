@@ -244,6 +244,10 @@ class TrackingNode(Node):
         for field in (
             'id', 's_start', 's_end', 'd_right', 'd_left', 'is_actually_a_gap',
             's_center', 'd_center', 'size', 'vs', 'vd', 'is_static', 'is_visible',
+            # Carried so the marker can be drawn where the obstacle is. The
+            # detector fills these; without them every label stacked at the
+            # map origin.
+            'x_m', 'y_m', 'theta',
         ):
             setattr(target, field, getattr(source, field))
         return target
@@ -281,23 +285,65 @@ class TrackingNode(Node):
             marker.action = Marker.DELETEALL
             array.markers.append(marker)
             return array
+        # Draw what the PLANNER is given, not what the detector last saw.
+        #
+        # /detect/obstacles_markers_new draws the raw per-frame fit: a square
+        # of side max(width, height) at the L-shape centre. That is not what
+        # anything downstream acts on. The planner reads THIS topic, whose
+        # extents are the running maximum this track has ever shown and whose
+        # position, for a static obstacle, is the median of recent frames. So
+        # a box seen jittering in rviz says the detector is jittering - it
+        # does not say the planner is.
+        #
+        # A cylinder, because the number that decides everything is the
+        # LATERAL extent: the planner puts the avoidance apex evasion_distance
+        # beyond this edge, and the state machine subtracts this width from
+        # the room either side. Drawing it as a circle of that diameter is
+        # drawing the quantity, without implying an orientation the tracker
+        # does not have.
         for obstacle in obstacles.obstacles:
-            marker = Marker()
-            marker.header = obstacles.header
-            marker.header.frame_id = 'map'
-            marker.ns = 'tracked_obstacles'
-            marker.id = obstacle.id
-            marker.type = Marker.TEXT_VIEW_FACING
-            marker.action = Marker.ADD
-            # Frenet coordinates are intentionally shown as text-only metadata;
-            # detector markers provide the Cartesian obstacle positions.
-            marker.pose.position.z = 0.5
-            marker.scale.z = 0.18
-            marker.color.a = 1.0
-            marker.color.r = 0.2 if obstacle.is_static else 1.0
-            marker.color.g = 1.0 if obstacle.is_static else 0.2
-            marker.text = f'id={obstacle.id} s={obstacle.s_center:.2f} d={obstacle.d_center:.2f} v={obstacle.vs:.2f}'
-            array.markers.append(marker)
+            lateral = max(1e-3, float(obstacle.d_left) - float(obstacle.d_right))
+
+            body = Marker()
+            body.header = obstacles.header
+            body.header.frame_id = 'map'
+            body.ns = 'tracked_obstacles'
+            body.id = obstacle.id
+            body.type = Marker.CYLINDER
+            body.action = Marker.ADD
+            body.pose.position.x = float(obstacle.x_m)
+            body.pose.position.y = float(obstacle.y_m)
+            body.pose.position.z = 0.15
+            body.pose.orientation.w = 1.0
+            body.scale.x = body.scale.y = lateral
+            body.scale.z = 0.3
+            # Green static, red dynamic; hollow while the track is coasting on
+            # a missed detection rather than a current one.
+            body.color.a = 0.6 if obstacle.is_visible else 0.25
+            body.color.r = 0.2 if obstacle.is_static else 1.0
+            body.color.g = 1.0 if obstacle.is_static else 0.2
+            array.markers.append(body)
+
+            label = Marker()
+            label.header = obstacles.header
+            label.header.frame_id = 'map'
+            label.ns = 'tracked_obstacle_labels'
+            label.id = obstacle.id
+            label.type = Marker.TEXT_VIEW_FACING
+            label.action = Marker.ADD
+            label.pose.position.x = float(obstacle.x_m)
+            label.pose.position.y = float(obstacle.y_m)
+            label.pose.position.z = 0.5
+            label.pose.orientation.w = 1.0
+            label.scale.z = 0.14
+            label.color.a = 1.0
+            label.color.r = label.color.g = label.color.b = 1.0
+            label.text = (
+                f'id={obstacle.id} '
+                f's={obstacle.s_center:.2f} d={obstacle.d_center:+.2f} '
+                f'w={lateral:.2f} v={obstacle.vs:.2f}'
+                f'{"" if obstacle.is_visible else " (coasting)"}')
+            array.markers.append(label)
         return array
 
 
