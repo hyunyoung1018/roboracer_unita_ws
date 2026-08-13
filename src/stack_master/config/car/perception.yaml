@@ -130,6 +130,20 @@ spline_node:
     # machine then rejects because the car is not on it.
     side_hysteresis_m: 0.10
 
+    # [m] How far from the raceline an obstacle's near edge has to be before
+    # this planner says the line already clears it and publishes nothing.
+    #
+    # MUST match what the state machine calls a blocked raceline, which is
+    # gb_ego_width_m/2 + lateral_width_gb_m = 0.14 + 0.36 = 0.50. It used to
+    # test against evasion_distance instead, and the two disagreeing opened a
+    # dead zone: an obstacle whose edge sat between 0.24 and 0.50 m from the
+    # line had the state machine asking for an avoidance while this node
+    # answered "nothing to avoid", so the car trailed it forever. Measured on
+    # map_no, every refusal was in that band - edges of 0.37 to 0.48 m.
+    #
+    # Change this and lateral_width_gb_m together, or the dead zone reopens.
+    raceline_clearance_m: 0.50
+
     lookahead: 10.0
 
     # [m] How far the path passes the obstacle's edge. Squeezed from both

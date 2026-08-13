@@ -65,6 +65,7 @@ class SplineNode(Node):
             'rate_hz': 10.0,
             'path_hold_s': 0.3,
             'side_hysteresis_m': 0.10,
+            'raceline_clearance_m': 0.50,
             'measure': False,
         }
         for name, value in defaults.items():
@@ -93,6 +94,8 @@ class SplineNode(Node):
         self.resolution = float(self.get_parameter('spline_resolution').value)
         self.path_hold_s = float(self.get_parameter('path_hold_s').value)
         self.side_hysteresis_m = float(self.get_parameter('side_hysteresis_m').value)
+        self.raceline_clearance_m = float(
+            self.get_parameter('raceline_clearance_m').value)
         self.measure = bool(self.get_parameter('measure').value)
 
     def _parameter_cb(self, params):
@@ -104,6 +107,7 @@ class SplineNode(Node):
             'spline_resolution': 'resolution',
             'path_hold_s': 'path_hold_s',
             'side_hysteresis_m': 'side_hysteresis_m',
+            'raceline_clearance_m': 'raceline_clearance_m',
             'measure': 'measure',
         }
         for parameter in params:
@@ -241,21 +245,21 @@ class SplineNode(Node):
             bias = -self.side_hysteresis_m
 
         if left_room >= self.boundary_margin and left_room + bias >= right_room:
-            if left_apex <= 0.0:
+            if -obstacle.d_left >= self.raceline_clearance_m:
                 return self._bail(
                     out,
                     f"raceline already clears the obstacle at s={apex_s:.2f} on the "
                     f"left (its edge is {-obstacle.d_left:.2f} m to the right of the "
-                    f"line, evasion_distance {self.evasion_distance:.2f})")
-            side, apex_d = 'left', left_apex
+                    f"line, needs {self.raceline_clearance_m:.2f})")
+            side, apex_d = 'left', max(left_apex, 0.0)
         elif right_room >= self.boundary_margin:
-            if right_apex >= 0.0:
+            if obstacle.d_right >= self.raceline_clearance_m:
                 return self._bail(
                     out,
                     f"raceline already clears the obstacle at s={apex_s:.2f} on the "
                     f"right (its edge is {obstacle.d_right:.2f} m to the left of the "
-                    f"line, evasion_distance {self.evasion_distance:.2f})")
-            side, apex_d = 'right', right_apex
+                    f"line, needs {self.raceline_clearance_m:.2f})")
+            side, apex_d = 'right', min(right_apex, 0.0)
         else:
             return self._bail(
                 out,
