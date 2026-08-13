@@ -955,8 +955,19 @@ class StateMachine(Node):
                         if free_dist < lateral_width_m * scaling_factor:
                             is_free = False
                             rec["blocked"] = True
+                            # Which path, which obstacle, and what it needed.
+                            # Without the name this fires for the raceline
+                            # check and the avoidance check alike, and those
+                            # use different margins (lateral_width_gb_m vs
+                            # lateral_width_m) - so the same number can be a
+                            # correct "raceline is blocked, go around" or the
+                            # refusal that stops the car going around.
                             self.get_logger().info(
-                                "[State Machine] FREE False, obs dist to ot lane: {} m".format(free_dist),
+                                f"[{wpnts_data.name}] blocked by obs {int(obs.id)} "
+                                f"at d={obs.d_center:+.2f} ({gap:.2f} m ahead, "
+                                f"half width {self._lateral_half_width(obs):.2f}): "
+                                f"path is at d={ot_d:+.3f}, free {free_dist:+.3f} m, "
+                                f"needs {lateral_width_m * scaling_factor:.3f}",
                                 throttle_duration_sec=1.0,
                             )
                             if closest_obs is None or min_gap > gap:
