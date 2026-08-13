@@ -279,7 +279,33 @@ class SplineNode(Node):
 
         speed = max(1.0, abs(self.odom.twist.twist.linear.x))
         scale = np.clip(1.0 + speed / max(1.0, max(w.vx_mps for w in reference)), 1.0, 1.5)
-        offsets = np.asarray([-4.0, -3.0, -1.5, 0.0, 2.0, 3.0, 4.5]) * scale
+        # Control points around the apex, in metres of s. Only the apex is
+        # offset laterally; the rest hold the path on the raceline.
+        #
+        # Was [-4.0, -3.0, -1.5, 0.0, 2.0, 3.0, 4.5]. The return leg is
+        # shortened because it became the only remaining reason avoidance
+        # failed on map_no - every refusal read
+        #
+        #   path leaves the track at s=3.755 (+1.30 m from the apex)
+        #   path leaves the track at s=4.947 (+0.80 m from the apex)
+        #   path leaves the track at s=4.367 (+0.50 m from the apex)
+        #
+        # i.e. the car cleared the obstacle and then ran out of track while
+        # still displaced. With the first return point at +2.0 the apex is a
+        # local maximum of a cubic that decays slowly: measured 0.393 m of
+        # offset still remaining 1.30 m past an apex of 0.47 m, 84% of it.
+        # Bringing that point to +1.2 is what actually shortens the swerve;
+        # the outer two follow so the tail does not kink.
+        #
+        # The approach side is left long on purpose. There is time to move
+        # over before the obstacle and none to spare after it, so the two
+        # sides do not have to be symmetric.
+        #
+        # Do not shorten this much further without watching the speed: the
+        # controller reads the path's curvature and cuts speed for it, and a
+        # steeper return raises curvature at the point where the car is
+        # already committed.
+        offsets = np.asarray([-4.0, -3.0, -1.5, 0.0, 1.2, 2.0, 3.0]) * scale
         control_s = apex_s + offsets
         control_d = np.zeros_like(control_s)
         control_d[3] = apex_d
