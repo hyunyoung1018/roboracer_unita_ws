@@ -1,6 +1,7 @@
 #include "detect.hpp"
 
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -38,6 +39,21 @@ Detect::Detect()
   boundaries_inflation_ = declareNumber("boundaries_inflation", 0.10);
   detect_fov_deg_ = declareNumber("detect_fov_deg", 360.0);
   max_detect_d_m_ = declareNumber("max_detect_d_m", 0.90);
+
+  on_track_mode_ = this->declare_parameter<std::string>("on_track_mode", "grid");
+  map_name_ = this->declare_parameter<std::string>("map", "");
+  filter_kernel_size_ = static_cast<int>(declareNumber("filter_kernel_size", 2));
+  if (on_track_mode_ == "grid") {
+    grid_ready_ = loadGridFilter();
+    if (!grid_ready_) {
+      RCLCPP_ERROR(
+        this->get_logger(),
+        "on_track_mode is 'grid' but the map could not be loaded; falling back "
+        "to the frenet test. Check the `map` parameter.");
+      on_track_mode_ = "frenet";
+    }
+  }
+  RCLCPP_INFO(this->get_logger(), "on-track test: %s", on_track_mode_.c_str());
 
   breakpoints_markers_pub_ = this->create_publisher<visualization_msgs::msg::MarkerArray>(
     "/detect/breakpoints_markers", 5);
@@ -175,6 +191,25 @@ rcl_interfaces::msg::SetParametersResult Detect::dynParamCb(
   return result;
 }
 
+bool Detect::loadGridFilter()
+{
+  if (map_name_.empty()) {
+    RCLCPP_ERROR(this->get_logger(), "no `map` parameter, cannot load the grid");
+    return false;
+  }
+  const std::string base =
+    ament_index_cpp::get_package_share_directory("stack_master") + "/maps/" + map_name_ + "/" +
+    map_name_;
+  if (!grid_filter_.loadMapFromYAML(base + ".yaml", base + ".png")) {
+    return false;
+  }
+  grid_filter_.setErosionKernelSize(filter_kernel_size_);
+  RCLCPP_INFO(
+    this->get_logger(), "grid loaded from %s.yaml, erosion %d px (%.2f m)",
+    base.c_str(), filter_kernel_size_, filter_kernel_size_ * 0.05);
+  return true;
+}
+
 bool Detect::laserPointOnTrack(double d, int idx) const
 {
   if (idx < 0 || idx >= static_cast<int>(d_left_array_.size())) {
@@ -295,49 +330,45 @@ std::vector<Cluster> Detect::clustering(
     point.x = point_map.x();
     point.y = point_map.y();
 
-    // FULL search, not the proximity one, and this is not an optimisation
-    // that was overlooked.
+    // Two ways to ask "could the car be here", chosen by on_track_mode.
     //
-    // The proximity search seeds from the previous point's index, scans 20
-    // waypoints (about 2 m of track) and only falls back to a full sweep if
-    // nothing in that window is within 2 m. Where the track doubles back -
-    // the end of a straight, just before a corner - waypoints from the
-    // straight and from the corner ARE within 2 m of each other, so the
-    // fallback never fires and the point is assigned to the wrong branch.
-    // Its d is then measured in the wrong waypoint's frame and
-    // laserPointOnTrack throws it away.
+    // grid: look the point up in the eroded map. One array lookup, no
+    // waypoint, no coordinate transform - and no way to get the answer
+    // wrong because the track doubles back. It also stops the track
+    // boundary being used as a proxy: an obstacle against a wall is in free
+    // space and reads as such, where a lateral offset from the raceline
+    // cannot tell an obstacle near a wall from the wall itself.
     //
-    // That produced exactly the reported symptom, all three parts of it:
-    // a box at the end of a straight was invisible; the same box moved into
-    // the middle of the straight, where the track does not double back
-    // nearby, was seen; and turning the car at the original position made it
-    // appear, because the scan is walked in angular order and the heading
-    // decides which beams precede which - a different seed sequence
-    // mis-assigns a different set of points.
+    // frenet: the offset test. Kept so the two can be compared on the same
+    // track, and as the fallback if the map fails to load.
     //
-    // Nothing in the geometry was ambiguous. The search was.
-    //
-    // UNIST never hit this because they do not convert per point at all:
-    // grid_filter answers "is this on the track" from an eroded occupancy
-    // image. Replacing that with a Frenet test is what introduced the
-    // failure, so paying for the correct search is the cost of that choice.
-    // It is ~200 comparisons per surviving return, which is what moving this
-    // node to C++ bought.
-    frenet_converter_.GetFrenetPoint(
-      point.x, point.y, &point.s, &point.d, &closest_idx_, true);
-
-    if (!std::isfinite(point.s) || !std::isfinite(point.d)) {
-      continue;
+    // s and d stay zero in grid mode. Nothing downstream reads them - the
+    // obstacle's Frenet position and extents come from the fitted box's
+    // corners, not from the points.
+    if (on_track_mode_ == "grid") {
+      if (!grid_filter_.isPointInside(point.x, point.y)) {
+        continue;
+      }
+    } else {
+      // FULL search, not the proximity one. The proximity search seeds
+      // from the previous point's index and scans about 2 m of track,
+      // falling back to a full sweep only if nothing in that window is
+      // within 2 m. Where the track doubles back those two branches are
+      // themselves within 2 m, so the fallback never fires and the return
+      // is assigned to the wrong one - which is what made a box at the end
+      // of a straight invisible while the same box mid-straight was seen,
+      // and made turning the car reveal it. The grid test above has no
+      // equivalent failure because it never assigns a waypoint at all.
+      frenet_converter_.GetFrenetPoint(
+        point.x, point.y, &point.s, &point.d, &closest_idx_, true);
+      if (!std::isfinite(point.s) || !std::isfinite(point.d)) {
+        continue;
+      }
+      if (!laserPointOnTrack(point.d, closest_idx_)) {
+        continue;
+      }
+      point.s = wrap(point.s, track_length_);
     }
-
-    // Per point, before clustering. This is the whole reason a wall does not
-    // become an obstacle: its returns never enter a cluster, rather than
-    // forming one that is then judged by where its centre landed.
-    if (!laserPointOnTrack(point.d, closest_idx_)) {
-      continue;
-    }
-
-    point.s = wrap(point.s, track_length_);
 
     if (clusters.empty()) {
       clusters.push_back({point});

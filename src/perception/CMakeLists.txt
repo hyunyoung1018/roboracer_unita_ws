@@ -29,6 +29,8 @@ find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(f110_msgs REQUIRED)
 find_package(frenet_conversion REQUIRED)
+find_package(grid_filter REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 
 add_executable(detect src/detect.cpp)
 target_include_directories(detect PRIVATE
@@ -46,8 +48,13 @@ ament_target_dependencies(detect
   visualization_msgs
   f110_msgs
   frenet_conversion
+  grid_filter
+  ament_index_cpp
 )
-target_link_libraries(detect frenet_conversion::frenet_conversion_lib)
+target_link_libraries(detect
+  frenet_conversion::frenet_conversion_lib
+  grid_filter::grid_filter_lib
+)
 
 install(TARGETS detect
   DESTINATION lib/${PROJECT_NAME}

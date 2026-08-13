@@ -46,6 +46,7 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include "frenet_conversion.h"
+#include "grid_filter.hpp"
 
 #include <string>
 #include <vector>
@@ -113,6 +114,8 @@ private:
   // --- helpers ---
   /// True when (s, d) falls inside the inflated track boundaries.
   bool laserPointOnTrack(double d, int idx) const;
+  /// Load the occupancy grid for the grid on-track test.
+  bool loadGridFilter();
   /// Declare a numeric parameter that accepts an int or a double from yaml.
   double declareNumber(const std::string & name, double default_value);
   static double wrap(double value, double length);
@@ -153,6 +156,10 @@ private:
   double boundaries_inflation_{0.1};
   double detect_fov_deg_{360.0};
   double max_detect_d_m_{0.90};
+  /// "grid" or "frenet" - which question is asked of each lidar return.
+  std::string on_track_mode_{"grid"};
+  std::string map_name_;
+  int filter_kernel_size_{2};
   bool measuring_{false};
 
   // --- state ---
@@ -168,6 +175,8 @@ private:
   tf2::Vector3 sensor_origin_;
 
   frenet_conversion::FrenetConverter frenet_converter_;
+  grid_filter::GridFilter grid_filter_;
+  bool grid_ready_{false};
 };
 
 }  // namespace perception

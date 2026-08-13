@@ -167,8 +167,11 @@
 
   <!-- ===== static obstacle avoidance ===== -->
   <group if="$(var obstacles)">
+    <!-- map is passed because the grid on-track test loads that map's
+         image; on_track_mode:=frenet in perception.yaml makes it unused. -->
     <node pkg="perception" exec="detect" name="detect" output="screen">
       <param from="$(var config_dir)/perception.yaml"/>
+      <param name="map" value="$(var map)"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
     </node>
     <node pkg="perception" exec="tracking_node" name="tracking" output="screen">
