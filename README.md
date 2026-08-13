@@ -14,29 +14,89 @@ deployment target, so an x86-only wheel is never acceptable.
 
 ## Setup
 
+**Decide where the workspace lives before creating the venv.** A venv bakes
+absolute paths into `bin/activate`, every console script's shebang, and
+editable-install `.pth` files. Move it afterwards and `source
+.venv/bin/activate` appears to succeed while doing nothing.
+
 ```bash
-python3 -m venv --system-site-packages .venv && source .venv/bin/activate
-pip install -r requirements.txt
+# prerequisites: ROS 2 Humble, rosdep initialised
+sudo apt install python3-venv python3-pip
+
+git clone https://github.com/hyunyoung1018/roboracer_unita_ws.git
+cd roboracer_unita_ws
+
+# --system-site-packages is mandatory, or rclpy is invisible to the venv
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+
+# nav2, cartographer, urg_node, rviz, skimage, opencv, ...
+rosdep install --from-paths src --ignore-src -y
+
+# the vendored simulator, without its renderer
+pip install -e src/f1tenth_gym_ros/f1tenth_gym --no-deps
+pip install "numpy<2" "gymnasium>=0.29.1,<0.30" "numba>=0.59.0,<0.61" \
+            "pandas>=2.0.0" "pillow>=9.1.0" "requests>=2.31.0" \
+            "scipy>=1.13.0" "yamldataclassconfig>=1.5.0,<2"
+
+# the raceline optimiser's solvers
+pip install --no-deps -r requirements.txt
+
+# range_libc for the particle filter. A Cython extension, not a pip package.
+pip install cython
+git clone https://github.com/f1tenth/range_libc /tmp/range_libc
+cd /tmp/range_libc/pywrapper && pip install --no-build-isolation . && cd -
+
 python -m colcon build --symlink-install
 source install/setup.bash
+
+# verify
+python -c "from f1tenth_gym.envs import F110Env; print('gym OK')"
+python -c "from raceline.raceline_generator import trajectory_optimizer; print('raceline OK')"
 ```
 
-`python -m colcon build`, not `colcon build`. The plain form runs the system
-colcon outside the venv, installs against the wrong interpreter, and the nodes
-then fail on imports that work in the shell. Rebuilding does not undo it —
-`rm -rf build install log` and start again.
+Every pin and flag above is load-bearing:
+
+- **`numpy<2`.** `skimage` and `opencv` come from apt, built against numpy 1.x.
+  A pip numpy 2 in the venv shadows apt's copy and breaks all of them at
+  import — `numpy.dtype size changed` from skimage, `_ARRAY_API not found`
+  from cv2. Nothing here needs numpy 2.
+- **`numba<0.61`.** 0.61 requires numpy 2. 0.66 also wants a newer `coverage`
+  than apt ships and dies on `module 'coverage' has no attribute 'types'`.
+- **`transforms3d` from pip**, in `requirements.txt`: apt's copy uses
+  `np.float`, removed in numpy 1.24, and every node touching
+  `tf_transformations` dies on it.
+- **Both `--no-deps`.** Without them pip resolves the gym's and the
+  optimiser's declared ranges and pulls numpy 2 straight back in.
+- **`--no-build-isolation` for range_libc.** The repo has no `pyproject.toml`,
+  so pip would build in a clean environment where the cython just installed is
+  invisible. Do not use its `compile.sh` — it runs `sudo` and installs to the
+  system python. For the much faster GPU ray casting on the Jetson,
+  `WITH_CUDA=ON pip install --no-build-isolation .` and set
+  `range_method: 'rmgpu'` in `config/car/pf.yaml`.
+- **`python -m colcon build`, never bare `colcon`.** Bare colcon runs the
+  system install with a `/usr/bin/python3` shebang and bakes that interpreter
+  into every generated node script, which then cannot see the venv. Rebuilding
+  does not undo it — the wrong shebang is already written. Recover with
+  `rm -rf build install log` and build again.
 
 With `--symlink-install`, python and yaml edits take effect on the next launch
-with no rebuild. Adding a *new* file to a directory that is installed whole
-(`config/`, `launch/`, `maps/`) still needs one, and so does anything C++.
+with no rebuild. Adding a *new* file to a directory installed whole (`config/`,
+`launch/`, `maps/`) still needs one, and so does anything C++.
 
 ## Running
 
 ```bash
-# make a map
-ros2 launch stack_master mapping.launch.xml map:=<name>
+# simulator
+ros2 launch f1tenth_gym_ros unita_gym_bridge_launch.py
 
-# turn it into a raceline
+# map a track, then close it
+ros2 launch stack_master mapping.launch.xml map:=<name>
+ros2 service call /finish_mapping std_srvs/srv/Trigger {}
+
+# raceline from that map. The first run waits 30 s for an RViz
+# "2D Pose Estimate": click the start line pointing the way the car drives.
+# It is saved to track_meta.yaml and reused.
 ros2 launch stack_master raceline_generator.launch.xml map:=<name>
 
 # drive it
@@ -52,7 +112,14 @@ than repeating the last command, so a crashed node stops the car.
 
 Set the initial pose before expecting anything from perception — until the
 particle filter has one there is no `map` frame and the detector is blind.
-Publish `/initialpose` from RViz or Foxglove (`foxglove:=true`, port 8765).
+Publish `/initialpose` from RViz, or `foxglove:=true` and connect to port 8765.
+A tight particle cloud on `/pf/viz/particles` means it has converged.
+
+| Argument | Default | Notes |
+|---|---|---|
+| `safety_width` | `0.7` | `0.45` on `26_inu_track_6x12`, which is 0.9 m wide |
+| `sectors` | `true` | `false` to redo only the raceline |
+| `rviz` / `foxglove` | `true` / `false` | RViz on the Jetson costs real CPU |
 
 ## Watch out
 
