@@ -1,7 +1,11 @@
 state_machine:
   ros__parameters:
     # structural
-    rate: 80
+    # [Hz] 80 -> 50. Every tick re-walks each cached path and every obstacle
+    # in python. The controller runs at 50 and is what actually steers, so a
+    # state machine deciding faster than that only decides again before
+    # anything acted on the last decision.
+    rate: 50
     n_loc_wpnts: 80
     timetrials_only: false
     # Nothing declares this today, so it is inert either way - but a car

@@ -213,5 +213,18 @@ spline_node:
     # 5 cm from the wall, and 0.15 would put it 1 cm away. That 5 cm is where
     # localisation error lives, so this is the wrong parameter to spend.
     boundary_margin: 0.19
-    spline_resolution: 0.05
+
+    # [m] Spacing of the published avoidance path.
+    #
+    # 0.05 -> 0.10. At 0.05 the path is 255 points, and the state machine
+    # walks every point of it - _check_on_spline takes a norm over all of
+    # them, _check_free_frenet an argmin per obstacle - at its own 80 Hz,
+    # every tick. htop had state_machine at 96% of a core and top of the
+    # whole machine by accumulated cpu time, ahead of the particle filter.
+    # Halving the points halves that.
+    #
+    # Nothing needs 5 cm. The controller interpolates, the state machine
+    # measures distances, and the car covers 5 cm in 25 ms at the speed this
+    # branch arms at.
+    spline_resolution: 0.10
     measure: false
