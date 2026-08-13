@@ -100,6 +100,8 @@ class GaussianProcessOpponentTrajectory(Node):
             'opponent_width': 0.28,
             'boundary_margin': 0.03,
             'boundary_clipped_variance': 1.0,
+            # [Hz] How often the GP is refitted. See _fit_timer.
+            'fit_rate_hz': 3.0,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -107,6 +109,7 @@ class GaussianProcessOpponentTrajectory(Node):
         self.converter = None
         self.track_length = None
         self.latest_projected = None
+        self._pending_projected = None
 
         self.trajectory_pub = self.create_publisher(
             OpponentTrajectory, '/opponent_trajectory', 10)
@@ -114,6 +117,11 @@ class GaussianProcessOpponentTrajectory(Node):
             MarkerArray, '/opponent_traj_markerarray', 10)
         self.create_subscription(WpntArray, '/global_waypoints', self._global_cb, 10)
         self.create_subscription(ProjOppTraj, '/proj_opponent_trajectory', self._projected_cb, 10)
+        fit_rate = float(self.get_parameter('fit_rate_hz').value)
+        self.create_timer(1.0 / max(fit_rate, 0.1), self._fit_timer)
+        self.get_logger().info(
+            f'GP refit rate {fit_rate:.1f} Hz, '
+            f'{int(self.get_parameter("max_training_points").value)} training points max')
 
     def _global_cb(self, msg):
         if not msg.wpnts:
@@ -126,7 +134,39 @@ class GaussianProcessOpponentTrajectory(Node):
         self.converter = FrenetConverter(x, y, psi)
 
     def _projected_cb(self, msg):
+        """Store the newest observation set. Fitting happens on the timer."""
         self.latest_projected = msg
+        self._pending_projected = msg
+
+    def _fit_timer(self):
+        """Refit at a fixed, low rate instead of once per measurement.
+
+        This used to be the body of _projected_cb, so a GP fit ran for every
+        message opponent_trajectory published - and that node publishes on
+        every accepted sample, up to its 25 Hz loop rate. Each fit is two
+        Cholesky factorisations of a max_training_points square matrix plus
+        two dense cross-covariance blocks against every queried waypoint, so
+        the cost is cubic in a number that was set to 200.
+
+        Measured on the car: the particle filter reported
+        `iters per sec: 39, possible: 65` and was starved on 310 of 310
+        samples, with all six cores at 100%. A localisation filter dropping
+        40% of its scans is the failure that matters - it feeds cur_s, which
+        feeds the local path the controller follows.
+
+        Nothing downstream needs 25 Hz here. opp_prediction accepts a learned
+        trajectory up to trajectory_timeout (2.0 s) old, and the opponent's
+        line is a lap-scale quantity - it does not change between two
+        consecutive lidar frames. 3 Hz leaves an order of magnitude of margin
+        against that timeout.
+
+        Only the newest message is kept, so a burst of measurements collapses
+        into one fit rather than queueing.
+        """
+        msg = self._pending_projected
+        self._pending_projected = None
+        if msg is None:
+            return
         if self.converter is None or self.global_msg is None:
             return
         minimum = int(self.get_parameter('min_training_points').value)

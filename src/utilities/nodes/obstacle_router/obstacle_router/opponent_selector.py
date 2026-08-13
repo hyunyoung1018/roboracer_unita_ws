@@ -46,10 +46,18 @@ def inside_opponent_corridor(
 
 def inside_forward_window(
         obstacle, ego_s, track_length, minimum_distance, maximum_distance):
-    """Check the opponent is in the forward head-to-head observation window."""
+    """Check the opponent is in the forward head-to-head observation window.
+
+    ``minimum_distance`` may be negative, which extends the window behind the
+    ego car. A signed delta is used so that "0.4 m behind" is -0.4 rather than
+    ``track_length - 0.4``; on a 21 m lap the unsigned form makes anything
+    beside the car look like it is most of a lap ahead.
+    """
     if ego_s is None or not track_length:
         return False
     gap = circular_forward_delta(obstacle.s_center, ego_s, track_length)
+    if gap > 0.5 * float(track_length):
+        gap -= float(track_length)
     return float(minimum_distance) <= gap <= float(maximum_distance)
 
 

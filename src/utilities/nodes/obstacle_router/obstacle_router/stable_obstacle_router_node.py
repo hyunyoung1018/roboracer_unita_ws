@@ -52,6 +52,25 @@ class StableObstacleRouter(Node):
         "opponent_boundary_margin_m": 0.03,
         "opponent_forward_min_m": 0.2,
         "opponent_forward_max_m": 8.0,
+        # [m] Rear allowance for the opponent the router has ALREADY locked
+        # onto. Signed, so a negative value is behind the ego car.
+        #
+        # The forward window exists so that a person standing behind the car
+        # cannot become the opponent, and 0.2 m is right for acquiring one. It
+        # is wrong for keeping one. During an overtake the opponent's forward
+        # gap falls through 0.2 m and goes negative, it drops out of the
+        # candidate list, /tracking/dynamic_obstacles empties, opp_prediction
+        # reports NO_DYNAMIC_OBSTACLE and raises force_trailing, and the
+        # lane-change planner withdraws its path - at the exact moment the car
+        # is alongside and most needs it.
+        #
+        # -1.5 m covers the car's own length plus the opponent's. Beyond that
+        # the opponent really is behind and released normally. This applies
+        # only to the already-selected target, so acquisition is unchanged.
+        "opponent_active_rear_m": -1.5,
+        # Minimum observations before an UNKNOWN track may be published on
+        # /tracking/stable_obstacles. See the include_stable comment.
+        "min_unknown_samples": 4,
         "debug": True,
     }
 
@@ -97,6 +116,10 @@ class StableObstacleRouter(Node):
             self.get_parameter("opponent_forward_min_m").value)
         self.opponent_forward_max_m = float(
             self.get_parameter("opponent_forward_max_m").value)
+        self.opponent_active_rear_m = float(
+            self.get_parameter("opponent_active_rear_m").value)
+        self.min_unknown_samples = int(
+            self.get_parameter("min_unknown_samples").value)
 
         self.active_dynamic_id = None
         self.ego_s = None
@@ -142,11 +165,23 @@ class StableObstacleRouter(Node):
         )
 
     def _inside_forward_window(self, obstacle):
+        """Acquisition window, widened rearwards for the locked target.
+
+        Keeping the opponent through the moment the car draws level with it is
+        a different question from picking one out in the first place, so the
+        two get different minimums.
+        """
+        minimum = self.opponent_forward_min_m
+        if (
+            self.active_dynamic_id is not None
+            and int(obstacle.id) == self.active_dynamic_id
+        ):
+            minimum = min(minimum, self.opponent_active_rear_m)
         return inside_forward_window(
             obstacle,
             self.ego_s,
             self.classifier.track_length,
-            self.opponent_forward_min_m,
+            minimum,
             self.opponent_forward_max_m,
         )
 
@@ -182,6 +217,23 @@ class StableObstacleRouter(Node):
         for obstacle in obstacles:
             obstacle_id = int(obstacle.id)
             if obstacle_id == self.active_dynamic_id or not obstacle.is_visible:
+                continue
+            # An ID this router just handed the opponent AWAY from may not be
+            # handed it straight back. The retirement was already being written
+            # on every handoff, and obstacles_cb's classification loop already
+            # honours it - but this loop, which runs first and is the only
+            # thing that actually moves the lock, did not read it.
+            #
+            # The consequence on the car was an ID ping-pong: 7->8->7->8 with
+            # gaps as short as one detection period, 39 handoffs and 67 tracker
+            # IDs created in 75 seconds. Every flip wrote the OTHER cluster's
+            # s into last_dynamic_s, so the next sample went backwards, and
+            # opponent_trajectory rejected it - 35 BACKWARD_JUMPs, which is why
+            # `traversed` never accumulated, lap_count never reached
+            # min_training_laps, and the predictor sat in TRAINING with
+            # force_trailing raised for the whole run. No avoidance path was
+            # ever planned.
+            if obstacle_id in self.retired_dynamic_ids:
                 continue
             if not self._inside_corridor(obstacle):
                 continue
@@ -351,11 +403,27 @@ class StableObstacleRouter(Node):
             # Reject an object whose expected opponent footprint does not fit in
             # the track. This router only runs in head-to-head, so time-trials'
             # detector/tracker/static spline path is unchanged.
-            include_stable = (
-                in_static
-                or (history.stable_class == "UNKNOWN" and corridor_ok)
-                or is_selected
+            #
+            # UNKNOWN also has to have been SEEN. /tracking/stable_obstacles is
+            # what the state machine trails on, and it picks the nearest thing
+            # ahead regardless of class - so a track that has existed for one
+            # frame, with a velocity computed from a single difference, became
+            # the trailing target. The controller logged 32 opponent changes in
+            # 75 s across 17 raw IDs, reporting speeds of 3.05, 0.00 and
+            # -0.08 m/s for what was supposed to be one car.
+            #
+            # A track needs a few frames before anything about it is
+            # trustworthy. This is deliberately well below the classifier's own
+            # min_nb_meas (8): the point is to drop one-frame noise, not to
+            # hide a real object from the trailing logic while it is being
+            # classified. Confirmed statics and the selected opponent are
+            # unaffected.
+            unknown_is_settled = (
+                history.stable_class == "UNKNOWN"
+                and corridor_ok
+                and history.sample_count >= self.min_unknown_samples
             )
+            include_stable = in_static or unknown_is_settled or is_selected
             if include_stable:
                 output_obstacle = deepcopy(
                     selected_output if is_selected else stable_obstacle)

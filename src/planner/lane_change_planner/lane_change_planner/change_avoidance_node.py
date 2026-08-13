@@ -63,6 +63,12 @@ class ChangeAvoidanceNode(Node):
         'spline_bound_mindist': 0.05,
         'pred_timeout': 0.5,
         'max_evasion_start_offset': 0.8,
+        # [m] How much of the opponent's predicted future the evasion corridor
+        # has to span. See _considered_obstacles.
+        'prediction_span_m': 3.0,
+        # [m] Distance over which the published path is blended from the car's
+        # current d onto the planned lateral profile. See _plan.
+        'start_blend_m': 1.0,
         'path_resolution': 0.10,
         'side_switch_frames': 10,
         'map_erosion_kernel_size': 7,
@@ -82,6 +88,7 @@ class ChangeAvoidanceNode(Node):
         self.current_d = None
         self.global_msg = None
         self.scaled_msg = None
+        self._scaled_s = None
         self.updated_msg = None
         self.center_msg = None
         self.behavior = None
@@ -203,6 +210,12 @@ class ChangeAvoidanceNode(Node):
     def _scaled_cb(self, msg):
         if msg.wpnts:
             self.scaled_msg = msg
+            # Cached because _reference_at is the hottest call in the node:
+            # _select_side asks for one reference waypoint per predicted pose,
+            # and rebuilding this array inside it meant walking the whole
+            # scaled raceline hundreds of times a second on the jetson.
+            self._scaled_s = np.asarray(
+                [w.s_m for w in msg.wpnts], dtype=float)
 
     def _updated_cb(self, msg):
         if msg.wpnts:
@@ -258,8 +271,12 @@ class ChangeAvoidanceNode(Node):
         self._diagnostic_subscriber_count = count
 
     def _reference_at(self, s):
-        s_values = np.asarray([w.s_m for w in self.scaled_msg.wpnts])
-        return self.scaled_msg.wpnts[int(np.argmin(np.abs(s_values - (s % self.track_length))))]
+        s_values = self._scaled_s
+        if s_values is None:
+            s_values = np.asarray(
+                [w.s_m for w in self.scaled_msg.wpnts], dtype=float)
+        return self.scaled_msg.wpnts[
+            int(np.argmin(np.abs(s_values - (s % self.track_length))))]
 
     def _side_geometry(self, obstacle):
         reference = self._reference_at(obstacle.s_center)
@@ -274,8 +291,9 @@ class ChangeAvoidanceNode(Node):
             'right': (right_target, right_bound_room),
         }
 
-    def _available_sides(self, obstacle):
-        geometry = self._side_geometry(obstacle)
+    def _available_sides(self, obstacle, geometry=None):
+        if geometry is None:
+            geometry = self._side_geometry(obstacle)
         available = {}
         for side, (target, room) in geometry.items():
             if room >= self.spline_bound_mindist:
@@ -288,12 +306,15 @@ class ChangeAvoidanceNode(Node):
         side_rooms = {'left': [], 'right': []}
         available_for_all = {'left': [], 'right': []}
         for obstacle in obstacles:
+            # One _side_geometry per obstacle. It was called twice - once here
+            # and once inside _available_sides - and each call walked the whole
+            # scaled raceline through _reference_at.
             geometry = self._side_geometry(obstacle)
             for side in side_rooms:
                 side_rooms[side].append((
                     float(geometry[side][1]), int(obstacle.id),
                     float(obstacle.s_center), float(obstacle.d_center)))
-            available = self._available_sides(obstacle)
+            available = self._available_sides(obstacle, geometry)
             for side in list(available_for_all):
                 if side not in available:
                     available_for_all.pop(side, None)
@@ -316,20 +337,29 @@ class ChangeAvoidanceNode(Node):
             available_for_all,
             key=lambda side: min(room for _, room in available_for_all[side]),
         )
-        target = max(v[0] for v in available_for_all[raw_side]) if raw_side == 'left' \
-            else min(v[0] for v in available_for_all[raw_side])
         committed = self._apply_side_hysteresis(raw_side)
         if committed != raw_side:
-            # The old side is no longer guaranteed safe for every predicted pose.
-            self._side_failure_status = 'SIDE_SWITCH_PENDING'
-            self._side_failure_detail = {
-                'committed_side': committed,
-                'requested_side': raw_side,
-                'pending_frames': int(self.pending_count),
-                'required_frames': int(self.side_switch_frames),
-            }
-            return None, None
-        return committed, target
+            # A pending switch used to mean no path at all for
+            # side_switch_frames loops - half a second of blackout at 20 Hz,
+            # during which the state machine sees the planner stop publishing.
+            # The committed side is what the hysteresis exists to hold, so hold
+            # it: keep planning on it for as long as it is still safe for every
+            # pose, and only give up when it is not.
+            if committed not in available_for_all:
+                self._side_failure_status = 'SIDE_SWITCH_PENDING'
+                self._side_failure_detail = {
+                    'committed_side': committed,
+                    'requested_side': raw_side,
+                    'pending_frames': int(self.pending_count),
+                    'required_frames': int(self.side_switch_frames),
+                }
+                return None, None
+            chosen = committed
+        else:
+            chosen = raw_side
+        target = max(v[0] for v in available_for_all[chosen]) if chosen == 'left' \
+            else min(v[0] for v in available_for_all[chosen])
+        return chosen, target
 
     def _apply_side_hysteresis(self, raw_side):
         if self.committed_side is None:
@@ -375,7 +405,48 @@ class ChangeAvoidanceNode(Node):
             obs for obs in self.predicted_obstacles.obstacles
             if (obs.s_center - self.current_s) % self.track_length < self.lookahead
         ]
+        predicted = self._truncate_prediction(predicted)
         return predicted or [nearest], None, None
+
+    def _truncate_prediction(self, predicted):
+        """Keep only the near part of the opponent's predicted future.
+
+        _select_side requires ONE side to be clear at EVERY pose it is given,
+        and the predictor hands over n_time_steps * dt = 2 s of future. At
+        3 m/s that is a 6 m corridor which has to be clear on the same side end
+        to end, and the evasion offset it has to be clear BY is
+        opponent_half + vehicle_half + safety_margin + spline_bound_mindist.
+        Measured against the two maps in this workspace:
+
+            corridor   test_213        map_no
+            0 m        99 % of lap     100 %
+            3 m        53 %             65 %
+            6 m         2 %             10 %
+
+        So at racing speed the manoeuvre was refused almost everywhere, and the
+        refusal had nothing to do with the opponent - it was the track being
+        21 m long and 1.05 to 1.85 m wide.
+
+        The full span is not what the car needs. It replans at 20 Hz, so the
+        corridor only has to be clear over the stretch the car will actually
+        cover before the next decision, and it extends itself as the car moves.
+        Committing 6 m ahead on a track this size is committing a third of a
+        lap on one prediction.
+
+        Truncating here rather than in _plan keeps obs_end - and therefore the
+        path's ramp-out and its length - consistent with what was checked.
+        """
+        span = float(self.prediction_span_m)
+        if span <= 0.0 or len(predicted) < 2:
+            return predicted
+        origin = float(predicted[0].s_center)
+        kept = [
+            obs for obs in predicted
+            if (float(obs.s_center) - origin) % self.track_length <= span
+        ]
+        # Always keep at least the pose the opponent is at now plus one, so the
+        # corridor is never degenerate.
+        return kept if len(kept) >= 2 else predicted[:2]
 
     def _first_grid_failure(self, xy):
         """Return the first rejected sample so the failure is actionable."""
@@ -447,6 +518,21 @@ class ChangeAvoidanceNode(Node):
                 'limit_m': float(self.max_evasion_start_offset),
             })
             return None
+
+        # Start the path AT the car, not beside it. The ramp weight at index 0
+        # is whatever the raised-cosine happens to be there, so if the car has
+        # already passed obs_start - back_to_raceline_before, d[0] is a lateral
+        # offset the car is not at. The only guard was max_evasion_start_offset,
+        # which permitted a first waypoint up to 0.8 m to the side; the
+        # controller then cut straight across to it, inside a corridor barely a
+        # metre wide. Blending the discontinuity out over start_blend_m makes
+        # d[0] exactly current_d and leaves the rest of the profile alone.
+        blend_length = max(float(self.start_blend_m), self.path_resolution)
+        offset = float(self.current_d) - float(d[0])
+        if abs(offset) > 1e-6:
+            decay = np.clip(
+                1.0 - (s_unwrapped - path_start) / blend_length, 0.0, 1.0)
+            d = d + offset * decay
         xy = self.converter.get_cartesian(s_unwrapped % self.track_length, d).T
         if len(xy) < 5 or not np.all(np.isfinite(xy)):
             self._set_diagnostic('INVALID_RAW_PATH', {'point_count': len(xy)})

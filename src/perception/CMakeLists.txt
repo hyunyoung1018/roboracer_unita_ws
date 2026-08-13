@@ -59,8 +59,12 @@ ament_python_install_package(${PROJECT_NAME})
 # ament_python_install_package does not create console scripts, so the entry
 # point setup.py used to declare is installed as a program under the same
 # name, and `ros2 run perception tracking_node` still resolves.
+#
+# h2h_tracking_node is the head-to-head subclass. It is a separate executable
+# so that time_trials keeps running the unmodified tracking_node.
 install(PROGRAMS
   scripts/tracking_node
+  scripts/h2h_tracking_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -26,4 +26,11 @@ stable_obstacle_router:
     opponent_boundary_margin_m: 0.03
     opponent_forward_min_m: 0.2
     opponent_forward_max_m: 8.0
+    # Keep the locked opponent while the car draws level with it. Acquisition
+    # still needs 0.2 m ahead; see the node's PARAM_DEFAULTS comment.
+    opponent_active_rear_m: -1.5
+    # An UNKNOWN track must be seen this many times before the state machine
+    # is allowed to trail on it. One-frame tracks were becoming the trailing
+    # target with a velocity computed from a single difference.
+    min_unknown_samples: 4
     debug: true

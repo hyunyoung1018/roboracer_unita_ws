@@ -19,7 +19,16 @@ opponent_trajectory:
 gaussian_process_opp_traj:
   ros__parameters:
     min_training_points: 8
-    max_training_points: 200
+    # [Hz] Refit rate. Was effectively the publish rate of
+    # /proj_opponent_trajectory (up to 25 Hz) because the fit hung off the
+    # subscription. See _fit_timer for the measurement that forced this.
+    fit_rate_hz: 3.0
+    # 200 -> 80. The fit is two Cholesky factorisations of an NxN matrix, so
+    # this is the cube term: 80 costs about 1/15 of 200. The samples are
+    # binned to training_s_bin_size (0.15 m) before fitting anyway, and one
+    # lap of these 20-22 m tracks is ~140 bins, so 80 still covers well over
+    # half a lap of distinct observations.
+    max_training_points: 80
     # Collapse multiple measurements at nearly the same Frenet s before GP
     # fitting, then publish only the part of the lap supported by observations.
     training_s_bin_size: 0.15

@@ -19,5 +19,6 @@ setup(
     entry_points={'console_scripts': [
         'dynamic_avoidance_node = spline_planner.dynamic_avoidance_node:main',
         'update_waypoints = spline_planner.update_waypoints:main',
+        'recovery_node = spline_planner.recovery_node:main',
     ]},
 )

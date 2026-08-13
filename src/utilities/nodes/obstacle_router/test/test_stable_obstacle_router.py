@@ -136,6 +136,25 @@ def test_opponent_candidate_must_be_in_forward_window():
     assert not inside_forward_window(opponent, 1.1, 10.0, 0.2, 8.0)
 
 
+def test_locked_opponent_survives_being_drawn_level_with():
+    """A negative minimum keeps the target while the car passes it.
+
+    Acquisition asks for 0.2 m ahead; the already-selected opponent is allowed
+    behind, otherwise it drops out of the candidate list at the moment the two
+    cars are side by side and the whole prediction/planning chain unwinds.
+    """
+    alongside = SimpleNamespace(s_center=0.9)
+
+    assert not inside_forward_window(alongside, 1.0, 10.0, 0.2, 8.0)
+    assert inside_forward_window(alongside, 1.0, 10.0, -1.5, 8.0)
+
+
+def test_forward_window_rejects_a_target_beyond_the_rear_allowance():
+    behind = SimpleNamespace(s_center=0.0)
+
+    assert not inside_forward_window(behind, 2.0, 10.0, -1.5, 8.0)
+
+
 def test_initial_candidate_prefers_box_nearer_raceline():
     box = SimpleNamespace(id=9, s_center=3.0, d_center=0.04)
     operator = SimpleNamespace(id=10, s_center=2.8, d_center=0.28)

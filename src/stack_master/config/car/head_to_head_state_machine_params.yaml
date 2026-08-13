@@ -1,0 +1,80 @@
+# Head-to-head only overlay for state_machine_params.yaml.
+#
+# Loaded AFTER the shared file in head_to_head.launch.xml, so every key here
+# wins and every key NOT here keeps its shared value. time_trials.launch.xml
+# does not load this file, so static avoidance is untouched by anything below.
+#
+# The shared numbers were inherited from a much larger track. This workspace's
+# maps measure 20-22 m of centre line, so a 15-20 m horizon covers most of the
+# lap and every obstacle anywhere reads as "in front of us".
+state_machine:
+  ros__parameters:
+    # [Hz] Main loop. 80 -> 40.
+    #
+    # Head-to-head runs 27 processes on six cores and the measured result was
+    # all six at 100%, with the particle filter reporting
+    # `iters per sec: 39, possible: 65` - starved on 310 of 310 samples. This
+    # loop is one of the larger consumers: every iteration runs the free
+    # checks, and each of those walks the obstacle list against up to 20
+    # predicted poses with an argmin over the whole avoidance path.
+    #
+    # Nothing here needs 80 Hz. The planners publish at 20 Hz, the detector at
+    # 20, the predictor at 20; at 80 the state machine re-decided four times
+    # per input. The controller runs its own loop and is unaffected.
+    #
+    # Every derived counter scales with this automatically - overtaking_ttl,
+    # splini_ttl, the FTG timer and the blended-recovery grace are all
+    # `seconds * rate_hz` - so the timings in seconds are unchanged.
+    rate: 40
+
+    # [m] How far ahead an obstacle counts as interesting. Was 20.0 against a
+    # 21.9 m lap (test_213) - 91% of the track, so the only obstacle NOT in the
+    # list was one within 1.9 m BEHIND the car. That makes
+    # cur_obstacles_in_interest permanently non-empty and every
+    # RacelineTrackingTransition take the obstacle branch.
+    #
+    # 9.0 matches what the car can actually see: max_viewing_distance is 9.0 m
+    # and a 0.28 m wide opponent falls under min_size_n around 8 m, so nothing
+    # beyond this is observed anyway.
+    interest_horizon_m: 9.0
+
+    # [m] _check_enemy_in_front, which is what refreshes the OVERTAKE TTL. At
+    # 15.0 on a 21.9 m lap the answer was almost always yes, so the TTL never
+    # expired and OVERTAKE was held by a car on the far side of the track.
+    gb_horizon_m: 8.0
+
+    # --- dynamic avoidance planner (lane_change) -----------------------------
+    # These keys live in state_machine/config/planners/dynamic_avoidance_planner.yaml
+    # for both launches; overriding them here keeps that file - and therefore
+    # time_trials - unchanged. cur_avoidance_wpnts is never initialised in
+    # time_trials (nothing publishes /planner/avoidance/otwpnts there), but the
+    # overlay makes that independent of the argument.
+    dynamic_avoidance_planner:
+      # [s] How long a cached avoidance path keeps being sliced into
+      # local_waypoints after the planner stopped publishing. Was 6.0 / 10.0.
+      # On a 21.9 m lap at 3 m/s, 6 s is 18 m - most of a lap driven on a line
+      # planned for where the opponent used to be. The planner runs at 20 Hz,
+      # so 1 s is 20 missed frames: enough to ride out a detector dropout,
+      # short enough that a withdrawn path stops being followed.
+      hyst_timer_sec: 1.0
+      killing_timer_sec: 2.0
+
+      # [m/s] Ceiling on the avoidance path, the same knob static avoidance
+      # uses. Without it get_planner_param returns None, max_speed stays None
+      # and the ggv profile runs the evasion swerve at raceline speed through a
+      # metre-wide corridor. Static is held at 2.0; dynamic gets a little more
+      # because it also has to close on a moving car, not just pass a box.
+      max_speed_mps: 2.5
+
+      # [-] Scales motor accel/brake limits only - it does not bound cornering
+      # speed, max_speed_mps does. Static uses 0.6.
+      vel_planner_safety_factor: 0.7
+
+    # --- recovery planner ----------------------------------------------------
+    # recovery_node now publishes /planner/recovery/wpnts (it had no publisher
+    # at all before, so RECOVERY was unreachable). Its shared yaml still says
+    # latest_threshold 0.1, which is two cycles of a 20 Hz planner - the same
+    # slack the static planner already had to give up on this jetson, where a
+    # correctly planned path was refused as "0.171 s old".
+    recovery_planner:
+      latest_threshold: 0.25
