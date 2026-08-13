@@ -328,6 +328,14 @@ class StateMachineParams:
             if name == "use_force_trailing":
                 self.node.use_force_trailing = value
 
+            # Per-planner parameters are declared as "<planner>.<param>" and
+            # read by WaypointData.update_param, which ran once in its
+            # constructor. Setting one therefore succeeded and changed
+            # nothing, which is the worst of both: the tuning session looks
+            # like it is working. Re-read the block that owns the parameter.
+            if "." in name:
+                self.node.refresh_planner_params(name.split(".", 1)[0])
+
             self.node.get_logger().info(f"Parameter '{name}' was set to {value}")
 
         return SetParametersResult(successful=True)

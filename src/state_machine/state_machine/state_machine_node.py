@@ -807,6 +807,21 @@ class StateMachine(Node):
         self.ot_section_check_pub.publish(Bool(data=False))
         return False
 
+    def refresh_planner_params(self, planner_name: str) -> None:
+        """Re-read one planner's parameter block after a live `ros2 param set`.
+
+        WaypointData reads its block once, when it is constructed. Without
+        this, `ros2 param set /state_machine static_avoidance_planner.
+        max_speed_mps 1.5` reports success and changes nothing until the next
+        launch - which is a bad way to spend a tuning session.
+        """
+        for data in (self.cur_gb_wpnts, self.cur_recovery_wpnts,
+                     self.cur_avoidance_wpnts, self.cur_static_avoidance_wpnts):
+            if data is not None and data.name == planner_name:
+                data.update_param()
+                self.get_logger().info(f"{planner_name}: parameters re-read")
+                return
+
     def _check_getting_closer(self, threshold_m=3.0) -> bool:
         if (
             len(self.obstacles_in_interest) != 0
