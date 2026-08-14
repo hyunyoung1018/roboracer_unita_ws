@@ -219,66 +219,9 @@ class SplineNode(Node):
         ref_idx = int(np.argmin(np.abs(s_values - (apex_s % max_s))))
         ref = reference[ref_idx]
 
-        left_apex = obstacle.d_left + self.evasion_distance
-        right_apex = obstacle.d_right - self.evasion_distance
-        left_room = ref.d_left - left_apex
-        right_room = ref.d_right + right_apex
-        # A negative left_apex (or positive right_apex) means the obstacle's
-        # near edge is already further from the raceline than evasion_distance
-        # - the line clears it as it is. Clamping that to 0.0 published the
-        # raceline itself as an "avoidance path", which the state machine then
-        # measured against the obstacle and refused, over and over. Say so and
-        # publish nothing instead: there is nothing to avoid.
-        # Stick to the side already chosen unless the other is clearly better.
+        # How far the path reaches, which the side choice below needs: an apex
+        # is only usable if the rest of what this path drives through is clear.
         #
-        # The two are often within a couple of centimetres of each other, and
-        # the obstacle's measured edges move by about that much between frames,
-        # so a bare comparison flips sides several times a second. Each flip is
-        # a completely different path, the state machine sees a path the car is
-        # not on, and avoidance never settles. Requiring the other side to win
-        # by side_hysteresis_m makes the choice sticky without making it
-        # permanent - a genuinely wider gap still takes it.
-        bias = 0.0
-        if self.last_side == 'left':
-            bias = self.side_hysteresis_m
-        elif self.last_side == 'right':
-            bias = -self.side_hysteresis_m
-
-        if left_room >= self.boundary_margin and left_room + bias >= right_room:
-            # Bailing here and clamping the apex to the raceline are NOT the
-            # same thing. Clamping publishes the raceline as an avoidance
-            # path, the state machine measures it against the obstacle that
-            # made it plan in the first place, and refuses - which is what
-            # "apex d=0.00" in the logs was. If there is nothing to avoid,
-            # say so and publish nothing.
-            if -obstacle.d_left >= self.raceline_clearance_m:
-                return self._bail(
-                    out,
-                    f"raceline already clears the obstacle at s={apex_s:.2f} on the "
-                    f"left (its edge is {-obstacle.d_left:.2f} m to the right of the "
-                    f"line, needs {self.raceline_clearance_m:.2f})")
-            side, apex_d = 'left', left_apex
-        elif right_room >= self.boundary_margin:
-            if obstacle.d_right >= self.raceline_clearance_m:
-                return self._bail(
-                    out,
-                    f"raceline already clears the obstacle at s={apex_s:.2f} on the "
-                    f"right (its edge is {obstacle.d_right:.2f} m to the left of the "
-                    f"line, needs {self.raceline_clearance_m:.2f})")
-            side, apex_d = 'right', right_apex
-        else:
-            return self._bail(
-                out,
-                f"no room either side of obstacle at s={apex_s:.2f}: "
-                f"left {left_room:.2f} m, right {right_room:.2f} m, "
-                f"need {self.boundary_margin:.2f} "
-                f"(obstacle {obstacle.d_left - obstacle.d_right:.2f} m wide "
-                f"at d {obstacle.d_center:+.2f}, track "
-                f"{ref.d_left + ref.d_right:.2f} m, "
-                f"evasion_distance {self.evasion_distance:.2f})")
-
-        speed = max(1.0, abs(self.odom.twist.twist.linear.x))
-        scale = np.clip(1.0 + speed / max(1.0, max(w.vx_mps for w in reference)), 1.0, 1.5)
         # Control points around the apex, in metres of s. Only the apex is
         # offset laterally; the rest hold the path on the raceline.
         #
@@ -305,7 +248,113 @@ class SplineNode(Node):
         # controller reads the path's curvature and cuts speed for it, and a
         # steeper return raises curvature at the point where the car is
         # already committed.
+        speed = max(1.0, abs(self.odom.twist.twist.linear.x))
+        scale = np.clip(1.0 + speed / max(1.0, max(w.vx_mps for w in reference)), 1.0, 1.5)
         offsets = np.asarray([-4.0, -3.0, -1.5, 0.0, 1.2, 2.0, 3.0]) * scale
+
+        left_apex = obstacle.d_left + self.evasion_distance
+        right_apex = obstacle.d_right - self.evasion_distance
+        left_room = ref.d_left - left_apex
+        right_room = ref.d_right + right_apex
+
+        # Do not dodge into the next obstacle.
+        #
+        # Only the nearest obstacle shapes the path, but the path still has to
+        # get past everything inside its own span - and obstacles staggered on
+        # opposite sides are exactly the case where dodging the first aims at
+        # the second. Seen on the car: obs 1 at d -0.23 forced an apex of
+        # +0.14, which is inside obs 2 at d +0.03..+0.39 four metres later, so
+        # the state machine refused the path and the car stopped in front of
+        # both with the right-hand side of the track wide open.
+        #
+        # This does not make the planner a slalom. The path still holds one
+        # apex and returns to the raceline, so two obstacles that block both
+        # sides between them still cannot be solved here. It only stops a side
+        # being chosen when it is already occupied, which is enough whenever
+        # the other side is open.
+        obstacle_ahead = (obstacle.s_center - cur_s) % max_s
+        span_start = obstacle_ahead + offsets[0]
+        span_end = obstacle_ahead + offsets[-1]
+
+        def occupied_by(apex_d):
+            for other in candidates:
+                if other is obstacle:
+                    continue
+                ahead = (other.s_center - cur_s) % max_s
+                if not span_start <= ahead <= span_end:
+                    continue
+                if (other.d_right - self.evasion_distance < apex_d <
+                        other.d_left + self.evasion_distance):
+                    return other
+            return None
+
+        left_taken = occupied_by(left_apex)
+        right_taken = occupied_by(right_apex)
+        left_ok = left_room >= self.boundary_margin and left_taken is None
+        right_ok = right_room >= self.boundary_margin and right_taken is None
+        for taken, name, apex in ((left_taken, 'left', left_apex),
+                                  (right_taken, 'right', right_apex)):
+            if taken is not None:
+                self.get_logger().info(
+                    f"{name} of the obstacle at s={apex_s:.2f} is taken: an apex at "
+                    f"d={apex:+.2f} lands in the obstacle at s={taken.s_center:.2f} "
+                    f"(d {taken.d_right:+.2f}..{taken.d_left:+.2f})",
+                    throttle_duration_sec=2.0)
+        # A negative left_apex (or positive right_apex) means the obstacle's
+        # near edge is already further from the raceline than evasion_distance
+        # - the line clears it as it is. Clamping that to 0.0 published the
+        # raceline itself as an "avoidance path", which the state machine then
+        # measured against the obstacle and refused, over and over. Say so and
+        # publish nothing instead: there is nothing to avoid.
+        # Stick to the side already chosen unless the other is clearly better.
+        #
+        # The two are often within a couple of centimetres of each other, and
+        # the obstacle's measured edges move by about that much between frames,
+        # so a bare comparison flips sides several times a second. Each flip is
+        # a completely different path, the state machine sees a path the car is
+        # not on, and avoidance never settles. Requiring the other side to win
+        # by side_hysteresis_m makes the choice sticky without making it
+        # permanent - a genuinely wider gap still takes it.
+        bias = 0.0
+        if self.last_side == 'left':
+            bias = self.side_hysteresis_m
+        elif self.last_side == 'right':
+            bias = -self.side_hysteresis_m
+
+        if left_ok and (not right_ok or left_room + bias >= right_room):
+            # Bailing here and clamping the apex to the raceline are NOT the
+            # same thing. Clamping publishes the raceline as an avoidance
+            # path, the state machine measures it against the obstacle that
+            # made it plan in the first place, and refuses - which is what
+            # "apex d=0.00" in the logs was. If there is nothing to avoid,
+            # say so and publish nothing.
+            if -obstacle.d_left >= self.raceline_clearance_m:
+                return self._bail(
+                    out,
+                    f"raceline already clears the obstacle at s={apex_s:.2f} on the "
+                    f"left (its edge is {-obstacle.d_left:.2f} m to the right of the "
+                    f"line, needs {self.raceline_clearance_m:.2f})")
+            side, apex_d = 'left', left_apex
+        elif right_ok:
+            if obstacle.d_right >= self.raceline_clearance_m:
+                return self._bail(
+                    out,
+                    f"raceline already clears the obstacle at s={apex_s:.2f} on the "
+                    f"right (its edge is {obstacle.d_right:.2f} m to the left of the "
+                    f"line, needs {self.raceline_clearance_m:.2f})")
+            side, apex_d = 'right', right_apex
+        else:
+            return self._bail(
+                out,
+                f"no room either side of obstacle at s={apex_s:.2f}: "
+                f"left {left_room:.2f} m{' (taken)' if left_taken else ''}, "
+                f"right {right_room:.2f} m{' (taken)' if right_taken else ''}, "
+                f"need {self.boundary_margin:.2f} "
+                f"(obstacle {obstacle.d_left - obstacle.d_right:.2f} m wide "
+                f"at d {obstacle.d_center:+.2f}, track "
+                f"{ref.d_left + ref.d_right:.2f} m, "
+                f"evasion_distance {self.evasion_distance:.2f})")
+
         control_s = apex_s + offsets
         control_d = np.zeros_like(control_s)
         control_d[3] = apex_d

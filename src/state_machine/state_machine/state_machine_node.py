@@ -427,9 +427,30 @@ class StateMachine(Node):
             self.declare_parameter("viz_rate_hz", 10.0)
         self.viz_rate_hz = float(self.get_parameter("viz_rate_hz").value)
         self._last_viz_sec = 0.0
+        self._throttle_state = {}
 
         # MAIN LOOP at fixed rate
         self.main_loop = self.create_timer(1.0 / self.rate_hz, self.loop)
+
+    def _throttled_info(self, key, msg, period=1.0):
+        """Rate-limit a message per KEY rather than per call site.
+
+        rclpy's throttle_duration_sec is keyed on where the call is written, so
+        one line of code shared by several planners throttles across all of
+        them: the raceline check and the static-avoidance check are the same
+        statement with a different wpnts_data, and for a whole second only
+        whichever ran first is printed. The other is dropped silently.
+
+        That is precisely the message that explains a refusal - the log said
+        "[global_tracking] blocked by obs 1" and "path_free=False" with no line
+        naming what blocked the avoidance path, because the raceline check had
+        already spent the second.
+        """
+        now = self.now_sec()
+        if now - self._throttle_state.get(key, -1e9) < period:
+            return
+        self._throttle_state[key] = now
+        self.get_logger().info(msg)
 
     def _viz_due(self):
         """True when this tick should draw. Rate-limited, and skipped entirely
@@ -1015,11 +1036,12 @@ class StateMachine(Node):
                         # to the end and the state machine decides again, with
                         # that obstacle then inside the horizon. Skip it here.
                         rec["branch"] = "static/beyond_path (ignored)"
-                        self.get_logger().info(
+                        self._throttled_info(
+                            f"beyond/{wpnts_data.name}",
                             f"[{wpnts_data.name}] obs {int(obs.id)} is "
                             f"{gap:.2f} m ahead, past the end of this path "
                             f"at {max_gap:.2f} m - not this path's problem",
-                            throttle_duration_sec=5.0)
+                            5.0)
                     elif gap < max_horizon:
                         obs_d = obs.d_center
                         ot_d = 0
@@ -1040,13 +1062,14 @@ class StateMachine(Node):
                             # use different margins, so the same number can be a
                             # correct "raceline is blocked, go around" or the
                             # refusal that stops the car going around.
-                            self.get_logger().info(
+                            self._throttled_info(
+                                f"blocked/{wpnts_data.name}",
                                 f"[{wpnts_data.name}] blocked by obs {int(obs.id)} "
                                 f"at d={obs.d_center:+.2f} ({gap:.2f} m ahead, "
                                 f"half width {self._lateral_half_width(obs):.2f}): "
                                 f"path is at d={ot_d:+.3f}, free {free_dist:+.3f} m, "
                                 f"needs {lateral_width_m * scaling_factor:.3f}",
-                                throttle_duration_sec=1.0,
+                                1.0,
                             )
                             if closest_obs is None or min_gap > gap:
                                 closest_obs = obs
