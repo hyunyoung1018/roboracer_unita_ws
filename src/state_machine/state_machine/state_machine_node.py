@@ -28,7 +28,7 @@ from ament_index_python.packages import get_package_share_directory
 from scipy.interpolate import InterpolatedUnivariateSpline as Spline
 
 from std_msgs.msg import String, Float32, Float32MultiArray, Bool
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Point, PoseStamped
 from nav_msgs.msg import Odometry
 from visualization_msgs.msg import Marker, MarkerArray
 from f110_msgs.msg import (
@@ -413,8 +413,35 @@ class StateMachine(Node):
         if self.measuring:
             self.latency_pub = self.create_publisher(Float32, "/state_machine/latency", 10)
 
+        # Markers are for people, and people do not need 50 Hz. Profiling put
+        # 81% of loop() inside _pub_local_wpnts, almost all of it constructing
+        # and serialising visualization_msgs/Marker - a Marker in Humble carries
+        # a CompressedImage, a MeshFile and three arrays, so building one costs
+        # about 100 us before anything is drawn. Everything the car needs
+        # (behavior_strategy, local_waypoints, the state string) still goes out
+        # every tick; only the drawing is throttled.
+        self.viz_rate_hz = float(self.declare_parameter("viz_rate_hz", 10.0).value)
+        self._last_viz_sec = 0.0
+
         # MAIN LOOP at fixed rate
         self.main_loop = self.create_timer(1.0 / self.rate_hz, self.loop)
+
+    def _viz_due(self):
+        """True when this tick should draw. Rate-limited, and skipped entirely
+        when nothing is subscribed - with RViz closed the markers cost nothing
+        at all, which is how the car should normally race."""
+        if self.viz_rate_hz <= 0.0:
+            return False
+        if (self.vis_loc_wpnt_pub.get_subscription_count() == 0 and
+                self.state_mrk.get_subscription_count() == 0 and
+                self.overtaking_marker_pub.get_subscription_count() == 0 and
+                self.trailing_marker_pub.get_subscription_count() == 0):
+            return False
+        now = self.now_sec()
+        if now - self._last_viz_sec < 1.0 / self.viz_rate_hz:
+            return False
+        self._last_viz_sec = now
+        return True
 
     # ---------------------------------------------------------------------- #
     # SETUP HELPERS                                                           #
@@ -1457,6 +1484,12 @@ class StateMachine(Node):
         # recovery topic keeps advancing) leaking into local_wpnts, and the
         # controller-poisoning "car ran off the end of a frozen local path"
         # condition (idx near the tail -> empty curvature slice -> NaN).
+        # Building the snapshot runs two real checks and then json.dumps, every
+        # tick, for a topic nobody reads unless they are debugging. Skip it when
+        # nothing is listening.
+        if self.debug_pub.get_subscription_count() == 0:
+            return
+
         def s0(wpnts):
             return round(wpnts[0].s_m, 3) if wpnts else None
 
@@ -1523,38 +1556,48 @@ class StateMachine(Node):
         }
         self.debug_pub.publish(String(data=json.dumps(snap)))
 
-    def _pub_local_wpnts(self, wpts):
-        # DELETEALL as the first element of the SAME array (atomic clear+draw in
-        # one message) instead of a separate publish, so RViz2 doesn't flicker.
-        # Net result matches ROS1 (clear stale markers, then draw the new ones).
-        loc_markers = MarkerArray()
-        del_mrk = Marker()
-        del_mrk.header.stamp = self.get_clock().now().to_msg()
-        del_mrk.action = Marker.DELETEALL
-        loc_markers.markers.append(del_mrk)
-
+    def _pub_local_wpnts(self, wpts, draw=True):
         loc_wpnts = WpntArray()
         loc_wpnts.wpnts = wpts if wpts is not None else []
         loc_wpnts.header.stamp = self.get_clock().now().to_msg()
         loc_wpnts.header.frame_id = "map"
 
-        for i, wpnt in enumerate(loc_wpnts.wpnts):
-            mrk = Marker()
-            mrk.header.frame_id = "map"
-            mrk.type = mrk.SPHERE
-            mrk.scale.x = 0.15
-            mrk.scale.y = 0.15
-            mrk.scale.z = 0.15
-            mrk.color.a = 1.0
-            mrk.color.g = 1.0
-            mrk.id = i + 1  # 0 reserved for the DELETEALL marker (avoid duplicate id in the array)
-            mrk.pose.position.x = wpnt.x_m
-            mrk.pose.position.y = wpnt.y_m
-            mrk.pose.position.z = wpnt.vx_mps
-            mrk.pose.orientation.w = 1.0
-            loc_markers.markers.append(mrk)
-
+        # The path itself, every tick. This is what the controller drives.
         self.loc_wpnt_pub.publish(loc_wpnts)
+
+        if not draw:
+            return
+
+        # ONE marker, not one per waypoint. SPHERE_LIST draws a sphere at every
+        # entry of `points`, so the picture is identical while the message is a
+        # single Marker plus N Points instead of N Markers - and a Point is
+        # three floats where a Marker is a nested tree with a CompressedImage
+        # in it. py-spy had Marker.__init__ at 134 s of a 325 s run.
+        #
+        # z carries velocity, as before, so the path still stands up off the
+        # floor where the car is meant to be quick.
+        #
+        # A fixed id means each publish replaces the last, which is what the
+        # DELETEALL used to buy: no stale spheres when the path shortens, and
+        # no flicker from clearing and drawing in separate messages.
+        mrk = Marker()
+        mrk.header.frame_id = "map"
+        mrk.header.stamp = loc_wpnts.header.stamp
+        mrk.id = 0
+        mrk.type = Marker.SPHERE_LIST
+        mrk.action = Marker.ADD
+        mrk.scale.x = 0.15
+        mrk.scale.y = 0.15
+        mrk.scale.z = 0.15
+        mrk.color.a = 1.0
+        mrk.color.g = 1.0
+        mrk.pose.orientation.w = 1.0
+        mrk.points = [
+            Point(x=wpnt.x_m, y=wpnt.y_m, z=wpnt.vx_mps) for wpnt in loc_wpnts.wpnts
+        ]
+
+        loc_markers = MarkerArray()
+        loc_markers.markers.append(mrk)
         self.vis_loc_wpnt_pub.publish(loc_markers)
 
     def visualize_state(self, state: str):
@@ -1830,12 +1873,20 @@ class StateMachine(Node):
         self.behavior_strategy_pub.publish(self.behavior_strategy)
 
         self.state_pub.publish(String(data=self.cur_state.value))
-        self.visualize_state(state=self.cur_state.value)
 
-        self._pub_local_wpnts(local_wpnts)
+        draw = self._viz_due()
+        if draw:
+            self.visualize_state(state=self.cur_state.value)
+
+        self._pub_local_wpnts(local_wpnts, draw=draw)
 
         if self.cur_state != StateType.TRAILING and self.cur_state != StateType.ATTACK:
             self.ftg_counter = 0
+
+        if not draw:
+            if self.measuring:
+                self.latency_pub.publish(Float32(data=1.0 / (time.perf_counter() - start)))
+            return
 
         overtaking_target_mrk = Marker()
         overtaking_target_mrk.header.frame_id = "map"  # set always so the DELETEALL marker isn't dropped by RViz (empty frame)

@@ -7,6 +7,21 @@ state_machine:
     # anything acted on the last decision.
     rate: 50
     n_loc_wpnts: 80
+
+    # [Hz] How often the markers are DRAWN. Nothing the car does depends on
+    # this - local_waypoints, behavior_strategy and the state string all go
+    # out at `rate` regardless.
+    #
+    # py-spy on a 325 s run put 78% of the node inside loop(), and 81% of THAT
+    # inside _pub_local_wpnts: 80 waypoints x 50 Hz = 4000 Marker objects a
+    # second, and a Humble Marker is a nested tree with a CompressedImage and
+    # a MeshFile in it, so each one costs ~100 us to build before it is
+    # serialised. Marker.__init__ alone was 134 s of the run.
+    #
+    # The markers are now one SPHERE_LIST instead of 80 spheres, and they are
+    # skipped altogether while nothing is subscribed - so with RViz closed
+    # this costs nothing at all. 0 disables drawing outright.
+    viz_rate_hz: 10.0
     timetrials_only: false
     # Nothing declares this today, so it is inert either way - but a car
     # config that says sim: true is a trap for whoever reads it next.
