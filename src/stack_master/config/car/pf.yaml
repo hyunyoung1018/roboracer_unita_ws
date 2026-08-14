@@ -33,7 +33,15 @@ particle_filter:
     squash_factor: 2.2
 
     viz: 1
-    max_viz_particles: 60
+    # How many particles RViz gets, sampled UNIFORMLY. 0 draws all of them,
+    # which is what you want when the question is "has the cloud spread" -
+    # see visualize(). Costs a Pose per particle per frame, so it is throttled
+    # by viz_rate_hz rather than running at the scan rate.
+    max_viz_particles: 0
+
+    # [Hz] Drawing rate for every /pf/viz topic, the fake scan included. That
+    # one is a whole extra ray-cast pass, and at 0 it ran at 40 Hz.
+    viz_rate_hz: 10.0
 
     # Ray casting, and the filter's whole cost: 1081/angle_step beams times
     # max_particles times the scan rate, which is about 5 million casts a

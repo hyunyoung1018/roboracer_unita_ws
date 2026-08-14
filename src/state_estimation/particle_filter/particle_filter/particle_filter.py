@@ -98,6 +98,9 @@ class ParticleFiler(Node):
         # Where the motion model's YAW RATE comes from. Empty keeps it on the
         # odometry topic; see imuCB for why that is the wrong source on this car.
         self.declare_parameter('imu_topic', '')
+        # [Hz] How often the viz topics are drawn, independent of the scan
+        # rate. 0 draws on every iteration, the old behaviour.
+        self.declare_parameter('viz_rate_hz', 10.0)
 
         # parameters
         self.ANGLE_STEP           = self.get_parameter('angle_step').value
@@ -115,6 +118,7 @@ class ParticleFiler(Node):
         self.BASE_FRAME           = self.get_parameter('base_frame').value
         self.LASER_FRAME          = self.get_parameter('laser_frame').value
         self.DO_VIZ               = self.get_parameter('viz').value
+        self.VIZ_RATE_HZ          = float(self.get_parameter('viz_rate_hz').value)
 
         # sensor model constants
         self.Z_SHORT   = self.get_parameter('z_short').value
@@ -146,6 +150,7 @@ class ParticleFiler(Node):
         self.last_time = None
         self.last_stamp = None
         self.first_sensor_update = True
+        self.last_viz_sec = 0.0
         self.state_lock = Lock()
 
         # cache this to avoid memory allocation in motion model
@@ -374,6 +379,18 @@ class ParticleFiler(Node):
         if not self.DO_VIZ:
             return
 
+        # Drawing is not free and it is charged to this node. Every particle is
+        # a Pose and a Quaternion built in python, and the fake scan below is a
+        # whole extra calc_range_many pass - all of it at the scan rate, all of
+        # it inside the loop whose duration is reported as `possible`. Turning
+        # the full cloud on at 40 Hz would visibly depress the number being
+        # measured. Ten a second is plenty to watch a cloud with.
+        if self.VIZ_RATE_HZ > 0.0:
+            now = time.time()
+            if now - self.last_viz_sec < 1.0 / self.VIZ_RATE_HZ:
+                return
+            self.last_viz_sec = now
+
         if self.pose_pub.get_subscription_count() > 0 and isinstance(self.inferred_pose, np.ndarray):
             # Publish the inferred pose for visualization
             ps = PoseStamped()
@@ -385,12 +402,18 @@ class ParticleFiler(Node):
             self.pose_pub.publish(ps)
 
         if self.particle_pub.get_subscription_count() > 0:
-            # publish a downsampled version of the particle distribution to avoid a lot of latency
-            if self.MAX_PARTICLES > self.MAX_VIZ_PARTICLES:
-                # randomly downsample particles
-                proposal_indices = np.random.choice(self.particle_indices, self.MAX_VIZ_PARTICLES, p=self.weights)
-                # proposal_indices = np.random.choice(self.particle_indices, self.MAX_VIZ_PARTICLES)
-                self.publish_particles(self.particles[proposal_indices,:])
+            # UNIFORM downsampling, and max_viz_particles: 0 draws every one.
+            #
+            # This used to sample with p=self.weights, which draws the sixty
+            # BEST particles and therefore always looks tight - it showed a
+            # converged cloud through an entire run that ended in a wall with
+            # the cloud actually falling apart. The inferred pose is already
+            # published separately, so a weighted sample showed nothing that
+            # was not already on screen and hid the one thing worth seeing.
+            if 0 < self.MAX_VIZ_PARTICLES < self.MAX_PARTICLES:
+                indices = np.random.choice(
+                    self.particle_indices, self.MAX_VIZ_PARTICLES, replace=False)
+                self.publish_particles(self.particles[indices, :])
             else:
                 self.publish_particles(self.particles)
 
