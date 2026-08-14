@@ -24,7 +24,7 @@ particle_filter:
     # Every 18th beam. The UST-10LX returns 1081, so the filter weighs ~60 per
     # particle - enough to localise, cheap enough to run 2000 particles.
     angle_step: 18
-    max_particles: 2000
+    max_particles: 1000
     squash_factor: 2.2
 
     viz: 1
@@ -55,7 +55,7 @@ particle_filter:
 
     # Matches the UST-10LX's guaranteed range.
     max_range: 10
-    fine_timing: 0
+    fine_timing: 1
     publish_odom: 1
 
     z_short: 0.01
@@ -72,4 +72,22 @@ particle_filter:
     motion_dispersion_y: 0.05
     motion_dispersion_theta: 0.25
 
+    # Leave this at 2 - calc_range_repeat_angles.
+    #
+    # Variant 4, the CDDT radial optimisation, looks like free speed and is not.
+    # It is 24% faster at ray casting (13.2 -> 10.1 ms per scan for 2000x61 on
+    # this Jetson) and its ranges are as accurate: they differ from variant 2 on
+    # 0.055% of rays, against the 34% that pcddt already differs from exact ray
+    # marching by at theta_discretization 112. But
+    # calc_range_many_radial_optimized has no bounds check on the query x. A
+    # particle one hundredth of a metre past the map's x edge segfaults the
+    # process; variant 2 clamps the same query and returns a range. Every map in
+    # stack_master/maps has drivable space within 1.05 m of that edge, and the
+    # 26_* competition maps within 0.10 m, so the motion model's 0.05 m
+    # per-scan dispersion walks particles over it routinely - a 400-step run on
+    # 26_track_22x8 crashed on 6 of 6 seeds. initialize_particles_pose spreads
+    # particles with sigma 0.5 m, which puts one outside on the first update.
+    #
+    # It becomes usable if the particles are clamped to the map bounds before
+    # the sensor model, which is a code change, not a config change.
     rangelib_variant: 2

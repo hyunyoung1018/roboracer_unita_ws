@@ -610,8 +610,11 @@ class ParticleFiler(Node):
 
                 # evaluate the sensor model
                 self.range_method.eval_sensor_model(obs, self.ranges, self.weights, num_rays, self.MAX_PARTICLES)
-                # apply the squash factor
-                self.weights = np.power(self.weights, self.INV_SQUASH_FACTOR)
+                # apply the squash factor. In place, like the other variants
+                # below: rebinding self.weights allocated a fresh array every
+                # scan for no reason - nothing else holds the old one, and the
+                # `weights` argument above is only read by variant 0.
+                np.power(self.weights, self.INV_SQUASH_FACTOR, self.weights)
             else:
                 self.get_logger().info('Cannot use radial optimizations with non-CDDT based methods, use rangelib_variant 2')
         elif self.RANGELIB_VAR == VAR_REPEAT_ANGLES_EVAL_SENSOR_ONE_SHOT:
