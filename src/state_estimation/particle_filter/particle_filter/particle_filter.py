@@ -23,6 +23,7 @@
 # ros2 python
 import rclpy
 from rclpy.node import Node
+from rcl_interfaces.msg import ParameterDescriptor
 
 # libraries
 import numpy as np
@@ -65,16 +66,22 @@ class ParticleFiler(Node):
         super().__init__('particle_filter')
 
         # declare parameters
-        self.declare_parameter('angle_step')
-        self.declare_parameter('max_particles')
-        self.declare_parameter('max_viz_particles')
-        self.declare_parameter('squash_factor')
-        self.declare_parameter('max_range')
-        self.declare_parameter('theta_discretization')
-        self.declare_parameter('range_method')
-        self.declare_parameter('rangelib_variant')
-        self.declare_parameter('fine_timing')
-        self.declare_parameter('publish_odom')
+        #
+        # dynamic_typing because every one of these gets its value and its type
+        # from pf.yaml. Declaring a bare name means the same thing, but Humble
+        # deprecated it and prints a six-line warning for each - twenty-two of
+        # them, which buried the startup lines worth reading.
+        dyn = ParameterDescriptor(dynamic_typing=True)
+        self.declare_parameter('angle_step', descriptor=dyn)
+        self.declare_parameter('max_particles', descriptor=dyn)
+        self.declare_parameter('max_viz_particles', descriptor=dyn)
+        self.declare_parameter('squash_factor', descriptor=dyn)
+        self.declare_parameter('max_range', descriptor=dyn)
+        self.declare_parameter('theta_discretization', descriptor=dyn)
+        self.declare_parameter('range_method', descriptor=dyn)
+        self.declare_parameter('rangelib_variant', descriptor=dyn)
+        self.declare_parameter('fine_timing', descriptor=dyn)
+        self.declare_parameter('publish_odom', descriptor=dyn)
         # Default matters: the parameter must not be required. False is also the
         # right default here - the EKF downstream owns map -> base_link, and if
         # the filter published map -> laser as well, laser would have two parents
@@ -84,17 +91,17 @@ class ParticleFiler(Node):
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('base_frame', 'ego_racecar/base_link')
         self.declare_parameter('laser_frame', 'ego_racecar/laser')
-        self.declare_parameter('viz')
-        self.declare_parameter('z_short')
-        self.declare_parameter('z_max')
-        self.declare_parameter('z_rand')
-        self.declare_parameter('z_hit')
-        self.declare_parameter('sigma_hit')
-        self.declare_parameter('motion_dispersion_x')
-        self.declare_parameter('motion_dispersion_y')
-        self.declare_parameter('motion_dispersion_theta')
-        self.declare_parameter('scan_topic')
-        self.declare_parameter('odometry_topic')
+        self.declare_parameter('viz', descriptor=dyn)
+        self.declare_parameter('z_short', descriptor=dyn)
+        self.declare_parameter('z_max', descriptor=dyn)
+        self.declare_parameter('z_rand', descriptor=dyn)
+        self.declare_parameter('z_hit', descriptor=dyn)
+        self.declare_parameter('sigma_hit', descriptor=dyn)
+        self.declare_parameter('motion_dispersion_x', descriptor=dyn)
+        self.declare_parameter('motion_dispersion_y', descriptor=dyn)
+        self.declare_parameter('motion_dispersion_theta', descriptor=dyn)
+        self.declare_parameter('scan_topic', descriptor=dyn)
+        self.declare_parameter('odometry_topic', descriptor=dyn)
         # Where the motion model's YAW RATE comes from. Empty keeps it on the
         # odometry topic; see imuCB for why that is the wrong source on this car.
         self.declare_parameter('imu_topic', '')
