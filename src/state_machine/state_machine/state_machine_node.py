@@ -420,7 +420,12 @@ class StateMachine(Node):
         # about 100 us before anything is drawn. Everything the car needs
         # (behavior_strategy, local_waypoints, the state string) still goes out
         # every tick; only the drawing is throttled.
-        self.viz_rate_hz = float(self.declare_parameter("viz_rate_hz", 10.0).value)
+        # has_parameter first: the node is built with
+        # automatically_declare_parameters_from_overrides, so anything in the
+        # yaml is already declared and declaring it again raises.
+        if not self.has_parameter("viz_rate_hz"):
+            self.declare_parameter("viz_rate_hz", 10.0)
+        self.viz_rate_hz = float(self.get_parameter("viz_rate_hz").value)
         self._last_viz_sec = 0.0
 
         # MAIN LOOP at fixed rate
