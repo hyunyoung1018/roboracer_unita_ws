@@ -174,6 +174,22 @@ rcl_interfaces::msg::SetParametersResult Detect::dynParamCb(
       min_2_points_dist_ = as_number(param);
     } else if (name == "measure") {
       measuring_ = param.as_bool();
+    } else if (name == "filter_kernel_size") {
+      // The only knob the grid has. Re-eroding the map costs one cv::erode
+      // over the whole image, which is worth paying here so the wall/obstacle
+      // trade-off can be found on the car instead of over a rebuild.
+      filter_kernel_size_ = static_cast<int>(as_number(param));
+      if (grid_ready_) {
+        grid_filter_.setErosionKernelSize(filter_kernel_size_);
+        RCLCPP_INFO(
+          this->get_logger(), "erosion now %d px (%.2f m)",
+          filter_kernel_size_, filter_kernel_size_ * 0.05);
+      } else {
+        RCLCPP_WARN(
+          this->get_logger(),
+          "filter_kernel_size set, but the on-track test is '%s' - no effect",
+          on_track_mode_.c_str());
+      }
     } else if (name == "boundaries_inflation") {
       // Only takes effect on the next /global_waypoints_scaled message: the
       // inflated bounds are precomputed in pathCb, which is a latched topic

@@ -44,6 +44,13 @@ detect:
     # 2 px = 10 cm, matching what boundaries_inflation was doing. Raise it if
     # walls still become obstacles; lower it if an obstacle parked against a
     # wall disappears.
+    #
+    # Tunable live - it re-erodes the map on the spot:
+    #   ros2 param set /detect filter_kernel_size 3
+    #
+    # This is the grid's ONLY parameter. Everything else it needs - resolution,
+    # origin, and what counts as free - is read from the map's own yaml, so a
+    # grid that behaves oddly is a map problem, not a tuning one.
     filter_kernel_size: 2
 
     # Minimum number of LiDAR points in a cluster.
