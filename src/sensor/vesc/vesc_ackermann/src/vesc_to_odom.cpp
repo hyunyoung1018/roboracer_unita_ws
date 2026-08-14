@@ -76,6 +76,16 @@ VescToOdom::VescToOdom(const rclcpp::NodeOptions & options)
     wheelbase_ = get_parameter("wheelbase").get_value<double>();
   }
 
+  // Where the yaw rate comes from.
+  //
+  // Without this the only source is the bicycle model below: the SERVO
+  // COMMAND, telling us how fast the car would turn if the tyres never
+  // slipped. They do, the error is systematic rather than noise, and this
+  // node integrates it into the odom -> base_link transform that carries the
+  // car between localisation updates. The particle filter and the EKF have
+  // both already been moved onto the gyro; this was the last place left.
+  imu_topic_ = declare_parameter("imu_topic", std::string(""));
+
   publish_tf_ = declare_parameter("publish_tf", publish_tf_);
 
   // create odom publisher
@@ -94,6 +104,21 @@ VescToOdom::VescToOdom(const rclcpp::NodeOptions & options)
     servo_sub_ = create_subscription<Float64>(
       "sensors/servo_position_command", 10, std::bind(&VescToOdom::servoCmdCallback, this, _1));
   }
+
+  if (!imu_topic_.empty()) {
+    imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+      imu_topic_, rclcpp::SensorDataQoS(), std::bind(&VescToOdom::imuCallback, this, _1));
+    RCLCPP_INFO(
+      get_logger(), "yaw rate from %s, not the steering command", imu_topic_.c_str());
+  }
+}
+
+void VescToOdom::imuCallback(const sensor_msgs::msg::Imu::SharedPtr imu)
+{
+  // The gyro's z axis is the car's yaw axis whatever the mounting yaw is - a
+  // rotation about z cannot move z - so this needs no transform.
+  gyro_yaw_rate_ = imu->angular_velocity.z;
+  have_gyro_ = true;
 }
 
 void VescToOdom::vescStateCallback(const VescStateStamped::SharedPtr state)
@@ -114,6 +139,11 @@ void VescToOdom::vescStateCallback(const VescStateStamped::SharedPtr state)
       (last_servo_cmd_->data - steering_to_servo_offset_) / steering_to_servo_gain_;
     current_angular_velocity = current_speed * tan(current_steering_angle) / wheelbase_;
   }
+  // Measured beats modelled. The steering angle is still computed above
+  // because the odometry message reports it.
+  if (have_gyro_) {
+    current_angular_velocity = gyro_yaw_rate_;
+  }
 
   // use current state as last state if this is our first time here
   if (!last_state_) {
@@ -130,7 +160,7 @@ void VescToOdom::vescStateCallback(const VescStateStamped::SharedPtr state)
   double y_dot = current_speed * sin(yaw_);
   x_ += x_dot * dt.seconds();
   y_ += y_dot * dt.seconds();
-  if (use_servo_cmd_) {
+  if (use_servo_cmd_ || have_gyro_) {
     yaw_ += current_angular_velocity * dt.seconds();
   }
 

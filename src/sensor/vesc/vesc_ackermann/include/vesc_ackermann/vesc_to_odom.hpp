@@ -33,6 +33,7 @@
 
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/float64.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 #include <vesc_msgs/msg/vesc_state_stamped.hpp>
@@ -58,6 +59,10 @@ private:
   std::string base_frame_;
   /** State message does not report servo position, so use the command instead */
   bool use_servo_cmd_;
+  /** Topic carrying a real yaw rate. Empty leaves the bicycle model in charge. */
+  std::string imu_topic_;
+  bool have_gyro_{false};
+  double gyro_yaw_rate_{0.0};
   // conversion gain and offset
   double speed_to_erpm_gain_, speed_to_erpm_offset_;
   double steering_to_servo_gain_, steering_to_servo_offset_;
@@ -73,11 +78,13 @@ private:
   rclcpp::Publisher<Odometry>::SharedPtr odom_pub_;
   rclcpp::Subscription<VescStateStamped>::SharedPtr vesc_state_sub_;
   rclcpp::Subscription<Float64>::SharedPtr servo_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   std::shared_ptr<tf2_ros::TransformBroadcaster> tf_pub_;
 
   // ROS callbacks
   void vescStateCallback(const VescStateStamped::SharedPtr state);
   void servoCmdCallback(const Float64::SharedPtr servo);
+  void imuCallback(const sensor_msgs::msg::Imu::SharedPtr imu);
 };
 
 }  // namespace vesc_ackermann
