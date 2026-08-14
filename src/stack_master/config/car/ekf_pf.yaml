@@ -93,4 +93,37 @@ ekf_localization:
     odom1_queue_size: 5
     odom1_nodelay: true
 
+    # --- the gyro: yaw rate only ---
+    #
+    # /vesc/odom's yaw rate is not measured. vesc_to_odom takes the servo
+    # COMMAND, puts it through a bicycle model, and reports the result - so it
+    # says how fast the car would be turning if the tyres never slipped. They
+    # do, and the error is systematic rather than noise, so it accumulates in
+    # one direction and drags odom away from map exactly the way it was seen
+    # to in RViz.
+    #
+    # The car has a real gyro and until now nothing in localisation used it.
+    # Mapping does: cartographer runs on it (tracking_frame is the imu link,
+    # use_imu_data is true) and deliberately ignores wheel odometry
+    # altogether. Racing was leaning on the source mapping had rejected.
+    #
+    # Yaw rate ONLY. The orientation quaternion is the VESC's own AHRS and
+    # nothing has ever consumed it; the accelerations are noisy at this scale
+    # and the EKF has no use for them with two_d_mode on. Sparse, like the
+    # other two.
+    #
+    # The frame is ego_racecar/imu (vesc.yaml's imu_frame_id) and the URDF
+    # describes its mounting, so robot_localization rotates it through TF -
+    # do not pre-rotate anything here.
+    imu0: /vesc/sensors/imu/raw
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_differential: false
+    imu0_queue_size: 10
+    imu0_nodelay: true
+    imu0_remove_gravitational_acceleration: false
+
     use_control: false
