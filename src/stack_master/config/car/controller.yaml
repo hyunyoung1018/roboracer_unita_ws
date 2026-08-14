@@ -25,14 +25,14 @@ controller_manager:
     # Paired with the scaling in the map's speed_scaling.yaml. Each row keeps
     # the lookahead pinned for ~75-80% of the lap on test_213:
     #
-    #   scale 0.3 -> 0.7    scale 0.4 -> 1.0    scale 0.5 -> 1.2
+    #   scale 0.3 -> 0.7    scale 0.4 -> 1.0    scale 0.5 -> 1.05
     #   scale 0.6 -> 1.4    scale 0.7 -> 1.6
     #
     # This does not hold indefinitely. The curvature term goes as v^2, so the
     # lookahead's swing over a lap grows anyway: 0.16 m at scale 0.3, 0.37 m at
     # 0.5, 0.67 m at 0.7. Past about 0.5, weaving is curvature_factor's to fix,
     # not this one's.
-    t_clip_min: 1.05
+    t_clip_min: 1.1
     t_clip_max: 8.0
     m_l1: 0.47
     q_l1: -0.2

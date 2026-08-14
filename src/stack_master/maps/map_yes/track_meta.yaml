@@ -1,0 +1,6 @@
+start_pose:
+  x: -5.8472185134887695
+  y: 5.347082138061523
+  theta: -1.6470346794973185
+reverse: false
+start_pose_source: rviz
