@@ -44,6 +44,28 @@ ekf_localization:
     base_link_frame: ego_racecar/base_link
     world_frame:     map
 
+    # Apply the particle filter's pose at the time it BELONGS to, not at the
+    # time it arrives.
+    #
+    # /pf/pose/odom is stamped with the scan it was computed from, and it
+    # reaches this node one full MCL update later. That delay is exactly what
+    # the filter prints as `possible` - the number is one over the wall time
+    # of a single MCL step, so possible 100 is 10 ms late and possible 45 is
+    # 22 ms late, on top of the 25 ms the scan itself took to sweep.
+    #
+    # Without these two, robot_localization has no state history to rewind
+    # into, so it corrects the CURRENT state with a pose the car held 40 ms
+    # ago. At 5 m/s that is 22 cm behind. The velocity prediction pushes
+    # forward, the stale correction pulls back, and base_link oscillates on
+    # the map while the particle cloud itself sits tight and correct on the
+    # car - which is exactly what was seen, and why the wobble tracked
+    # `possible` so closely. The amplitude is latency times speed.
+    #
+    # history_length only has to cover the worst latency. 0.2 s is eight
+    # times the scan period and still only ten filter steps to replay.
+    smooth_lagged_data: true
+    history_length: 0.2
+
     # --- wheel odometry: velocities only ---
     #             x      y      z
     #             roll   pitch  yaw
