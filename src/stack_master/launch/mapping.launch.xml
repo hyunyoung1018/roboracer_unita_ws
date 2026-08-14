@@ -69,8 +69,12 @@
               --minloglevel 2">
     <param name="use_sim_time" value="$(var use_sim_time)"/>
     <!-- The sensor_msgs/Imu output, not the VESC-native vesc_msgs one on
-         /vesc/sensors/imu. No odom remap: use_odometry is false. -->
+         /vesc/sensors/imu. odom is subscribed too, since use_odometry is
+         now true - the wheels are the only thing that knows how far the car
+         actually went, and without them the scan matcher slid along the
+         straights and every map came back short. -->
     <remap from="imu" to="/vesc/sensors/imu/raw"/>
+    <remap from="odom" to="/vesc/odom"/>
   </node>
 
   <node pkg="cartographer_ros" exec="cartographer_occupancy_grid_node"

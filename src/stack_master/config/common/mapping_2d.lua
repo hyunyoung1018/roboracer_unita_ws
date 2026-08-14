@@ -1,13 +1,29 @@
 -- Cartographer 2D SLAM config for MAPPING (real car only).
 --
--- LiDAR + IMU. No wheel odometry.
+-- LiDAR + IMU + wheel odometry, each for the one thing it is good at.
 --
--- The VESC is sensorless: speed comes from a back-EMF flux observer, which
--- degrades as the motor slows, and vesc_to_odom clamps anything under 0.05 m/s
--- to exactly zero. Yaw is not measured at all - it is integrated from the servo
--- COMMAND through a bicycle model. Mapping is driven slowly, in tight turns,
--- which is precisely where both of those are worst. So the odometry is dropped
--- and the IMU is the motion prior instead.
+-- Odometry was dropped here for a long time, for a real reason: the VESC is
+-- sensorless, speed comes from a back-EMF flux observer that degrades as the
+-- motor slows, vesc_to_odom clamps anything under 0.05 m/s to zero, and yaw
+-- is not measured at all - it is integrated from the servo COMMAND through a
+-- bicycle model. Creeping round tight turns is where all of that is worst.
+--
+-- What that left behind was a scan matcher with NO translation prior, and on
+-- a track of long parallel walls it cannot tell 30 cm of travel from none.
+-- Every lap came back short: the map compressed along its own length. That is
+-- the failure use_online_correlative_scan_matching below was added to fight,
+-- and it was not enough on its own.
+--
+-- Two things changed and both are needed:
+--
+--   * Mapping is now driven at a constant 0.8 m/s (hold A - see
+--     joy_teleop.yaml), three times the openloop threshold, so the observer
+--     is never in the region where it is untrusted.
+--   * Cartographer only takes the MAGNITUDE from odometry. PoseExtrapolator
+--     rotates the odometry velocity into the tracking frame using its own
+--     orientation, which comes from the IMU whenever use_imu_data is true -
+--     so the bicycle model's yaw never enters. Wheels say how far, the gyro
+--     says which way.
 --
 -- tracking_frame must be the IMU frame. Cartographer hard-CHECKs that the IMU
 -- is colocated with the tracking frame:
@@ -36,7 +52,7 @@ options = {
   odom_frame = "odom",
   provide_odom_frame = false,
 
-  use_odometry = false,
+  use_odometry = true,
   use_nav_sat = false,
   use_landmarks = false,
 
@@ -111,9 +127,14 @@ POSE_GRAPH.constraint_builder.sampling_ratio = 0.3
 POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher.linear_search_window = 1.5
 POSE_GRAPH.constraint_builder.fast_correlative_scan_matcher.angular_search_window = math.rad(30.)
 
--- Odometry is not used at all, so these are belt-and-braces: if someone turns
--- use_odometry back on, it stays a front-end hint and never becomes a back-end
--- constraint.
+-- Zero ON PURPOSE, with use_odometry on. Odometry is a FRONT-END hint only:
+-- it steadies the local scan matcher and never becomes a back-end constraint.
+--
+-- The back end is where loop closure lives, and a wheel odometry with any
+-- scale error would pull against the closure that is meant to correct it -
+-- the map would come back consistent with the wheels rather than with the
+-- track. Raise these only with a measured reason to trust the distance the
+-- wheels report to better than a percent.
 POSE_GRAPH.optimization_problem.odometry_translation_weight = 0
 POSE_GRAPH.optimization_problem.odometry_rotation_weight = 0
 
