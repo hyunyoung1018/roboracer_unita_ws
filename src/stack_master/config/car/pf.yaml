@@ -16,6 +16,11 @@ particle_filter:
     # Wheel odometry drives the motion model; the scan corrects it.
     odometry_topic: '/vesc/odom'
 
+    # Yaw rate for the motion model. Empty falls back to the odometry twist,
+    # which on this car is the servo COMMAND through a bicycle model rather
+    # than a measurement - see imuCB. Set it back to '' to A/B this.
+    imu_topic: '/vesc/sensors/imu/raw'
+
     publish_tf: false
     map_frame: 'map'
     base_frame: 'ego_racecar/base_link'

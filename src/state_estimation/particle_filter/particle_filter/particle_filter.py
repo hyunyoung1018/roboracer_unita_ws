@@ -40,7 +40,7 @@ import tf_transformations
 # messages
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import String, Header, Float32MultiArray
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import Imu, LaserScan
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped, Polygon, Point32, PoseWithCovarianceStamped, PointStamped, TransformStamped
 from nav_msgs.msg import Odometry
@@ -80,7 +80,7 @@ class ParticleFiler(Node):
         # the filter published map -> laser as well, laser would have two parents
         # (the URDF already gives base_link -> laser) and TF would reject it.
         self.declare_parameter('publish_tf', False)
-        # Frame names come from albomb_description, not from upstream's defaults.
+        # Frame names come from the racecar description, not from upstream's defaults.
         self.declare_parameter('map_frame', 'map')
         self.declare_parameter('base_frame', 'ego_racecar/base_link')
         self.declare_parameter('laser_frame', 'ego_racecar/laser')
@@ -95,6 +95,9 @@ class ParticleFiler(Node):
         self.declare_parameter('motion_dispersion_theta')
         self.declare_parameter('scan_topic')
         self.declare_parameter('odometry_topic')
+        # Where the motion model's YAW RATE comes from. Empty keeps it on the
+        # odometry topic; see imuCB for why that is the wrong source on this car.
+        self.declare_parameter('imu_topic', '')
 
         # parameters
         self.ANGLE_STEP           = self.get_parameter('angle_step').value
@@ -202,11 +205,18 @@ class ParticleFiler(Node):
             self.get_parameter('scan_topic').value,
             self.lidarCB,
             qos_profile_sensor_data)
+        # Before odom_sub: odomCB reads it to decide whether it owns the yaw rate.
+        self.imu_sub = None
         self.odom_sub = self.create_subscription(
             Odometry,
             self.get_parameter('odometry_topic').value,
             self.odomCB,
             1)
+        imu_topic = self.get_parameter('imu_topic').value
+        if imu_topic:
+            self.imu_sub = self.create_subscription(
+                Imu, imu_topic, self.imuCB, qos_profile_sensor_data)
+            self.get_logger().info(f'yaw rate from {imu_topic}, not the odometry twist')
         self.pose_sub = self.create_subscription(
             PoseWithCovarianceStamped,
             '/initialpose',
@@ -450,9 +460,33 @@ class ParticleFiler(Node):
         twist. The motion is integrated over the scan interval in lidarCB, so this
         callback no longer computes position deltas or triggers an MCL update.
         '''
-        self.current_speed   = msg.twist.twist.linear.x
-        self.current_angular = msg.twist.twist.angular.z
+        self.current_speed = msg.twist.twist.linear.x
+        if self.imu_sub is None:
+            self.current_angular = msg.twist.twist.angular.z
         self.odom_initialized = True
+
+    def imuCB(self, msg):
+        '''
+        Take the yaw rate from the gyro instead of the odometry twist.
+
+        /vesc/odom's angular.z is not measured. vesc_to_odom takes the servo
+        COMMAND and puts it through a bicycle model, so it reports how fast the
+        car would be turning if the tyres never slipped. The error is
+        systematic, not noise, and the motion model injects it on every scan.
+
+        That is what runs the filter down over a lap. Each step starts the
+        cloud off in the wrong direction, the sensor model has to drag it back,
+        and when it cannot keep up the cloud spreads. A spread cloud makes
+        every ray cast slower - the whole point of `possible` - which lengthens
+        the interval, which makes the next motion step wronger still. Resetting
+        the pose from RViz breaks the loop and `possible` jumps straight back
+        up, which is how this was found.
+
+        The gyro measures the rate the car ACTUALLY turns. Its z axis is the
+        car's yaw axis whatever the mounting yaw is - a rotation about z cannot
+        move z - so no transform is needed here.
+        '''
+        self.current_angular = msg.angular_velocity.z
 
     def clicked_pose(self, msg):
         '''
