@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'lap_analyser = lap_analyser.lap_analyser:main', # runs main in lap_analyser.py
+            'relocalizer = lap_analyser.relocalizer:main', # runs main in relocalizer.py
         ],
     },
 )
