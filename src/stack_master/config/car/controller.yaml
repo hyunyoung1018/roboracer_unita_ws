@@ -32,7 +32,7 @@ controller_manager:
     # lookahead's swing over a lap grows anyway: 0.16 m at scale 0.3, 0.37 m at
     # 0.5, 0.67 m at 0.7. Past about 0.5, weaving is curvature_factor's to fix,
     # not this one's.
-    t_clip_min: 1.4
+    t_clip_min: 1.1
     t_clip_max: 8.0
     m_l1: 0.47
     q_l1: -0.2

@@ -5,7 +5,7 @@ sector_tuner:
     Sector0:
       start: 0
       end: 87
-      scaling: 0.8
+      scaling: 0.6
       only_FTG: false
       no_FTG: false
     Sector1:
