@@ -122,3 +122,58 @@ def test_held_target_is_propagated_but_invisible_frames_do_not_extend_ttl():
     HeadToHeadStateMachine._remember_trailing_target(machine, held)
     clock.now = 0.8
     assert HeadToHeadStateMachine._held_trailing_target(machine) is None
+
+
+def free_dbg(*records):
+    return {"is_init": True, "n_obs": len(records), "obs": list(records)}
+
+
+def blocked(branch, obstacle_id=1):
+    return {"id": obstacle_id, "branch": branch, "blocked": True}
+
+
+def cleared(branch, obstacle_id=2):
+    return {"id": obstacle_id, "branch": branch, "blocked": False}
+
+
+def test_beyond_path_only_block_is_ignored():
+    # The whole point of the fix: with prediction off every dynamic obstacle
+    # takes dyn/nopred, and one past the end of a non-closed avoidance path
+    # must not refuse that path.
+    wpnts = SimpleNamespace(free_dbg=free_dbg(blocked("dyn/nopred/beyond_path")))
+    assert HeadToHeadStateMachine._blocked_only_beyond_path(None, wpnts) is True
+
+
+def test_real_block_alongside_beyond_path_still_refuses():
+    wpnts = SimpleNamespace(free_dbg=free_dbg(
+        blocked("dyn/nopred/beyond_path", 1),
+        blocked("static/geom", 2),
+    ))
+    assert HeadToHeadStateMachine._blocked_only_beyond_path(None, wpnts) is False
+
+
+def test_predicted_opponent_block_still_refuses():
+    # dyn/pred is the branch a running predictor uses; it must be untouched so
+    # relaunching with prediction:=true behaves exactly as before.
+    wpnts = SimpleNamespace(free_dbg=free_dbg(blocked("dyn/pred")))
+    assert HeadToHeadStateMachine._blocked_only_beyond_path(None, wpnts) is False
+
+
+def test_nothing_blocked_is_not_a_correction():
+    wpnts = SimpleNamespace(free_dbg=free_dbg(cleared("static/geom")))
+    assert HeadToHeadStateMachine._blocked_only_beyond_path(None, wpnts) is False
+
+
+def test_uninitialised_or_missing_debug_is_not_a_correction():
+    assert HeadToHeadStateMachine._blocked_only_beyond_path(
+        None, SimpleNamespace(free_dbg=None)) is False
+    assert HeadToHeadStateMachine._blocked_only_beyond_path(
+        None, SimpleNamespace()) is False
+    assert HeadToHeadStateMachine._blocked_only_beyond_path(
+        None, SimpleNamespace(free_dbg={"is_init": False, "obs": [
+            blocked("dyn/nopred/beyond_path")]})) is False
+
+
+def test_dynamic_overtake_refused_when_planner_not_launched():
+    machine = SimpleNamespace(dynamic_avoidance_enabled=False)
+    assert HeadToHeadStateMachine._check_overtaking_mode(machine) is False

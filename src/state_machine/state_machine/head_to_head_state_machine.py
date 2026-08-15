@@ -63,6 +63,22 @@ class HeadToHeadStateMachine(StateMachine):
         # noise on cur_d.
         self.raceline_return_tolerance_m = float(
             self._get_or_declare("raceline_return_tolerance_m", 0.15))
+        # Mirror of head_to_head.launch.xml's `dynamic_avoidance` argument. The
+        # GP predictor chain is too heavy for the Orin Nano, so it is launched
+        # with prediction:=false dynamic_avoidance:=false and nothing publishes
+        # /planner/avoidance/otwpnts. _check_latest_wpnts already refuses a
+        # topic with no publisher, but it refuses it every tick, after running
+        # _check_ot_sector and _check_getting_closer first. Saying so once here
+        # is both cheaper and honest about which branch is switched off.
+        #
+        # Declared on the wrapper rather than as dynamic_avoidance_planner.
+        # enabled, because _load_planner_configs only declares the keys that
+        # exist in config/planners/dynamic_avoidance_planner.yaml - an `enabled`
+        # key in the head-to-head overlay alone is never declared, so
+        # get_planner_param would fall back to the package yaml and silently
+        # keep the planner on.
+        self.dynamic_avoidance_enabled = bool(
+            self._get_or_declare("dynamic_avoidance_enabled", True))
         self._last_gb_blocked_at = None
         self._last_trailing_target = None
         self._last_trailing_target_at = None
@@ -140,7 +156,14 @@ class HeadToHeadStateMachine(StateMachine):
         window, which is when the car is alongside it - the worst possible
         moment to abandon a half-finished manoeuvre. Leaving OVERTAKE there is
         the job of the TTL and of the free checks, which still run.
+
+        With dynamic avoidance switched off at the launch there is no planner
+        to enter OVERTAKE on, so refuse before the shared checks run at all.
+        Static avoidance goes through _check_static_overtaking_mode and is
+        untouched by this.
         """
+        if not self.dynamic_avoidance_enabled:
+            return False
         allowed = super()._check_overtaking_mode()
         if allowed and self.force_trailing:
             self.get_logger().info(
@@ -265,6 +288,42 @@ class HeadToHeadStateMachine(StateMachine):
         wpnts_data.closest_gap = gap
         return False
 
+    def _blocked_only_beyond_path(self, wpnts_data) -> bool:
+        """Was the path refused solely by obstacles past its own end?
+
+        The shared free check already answers this correctly for STATIC
+        obstacles: an obstacle beyond the end of a non-closed path is not that
+        path's problem, the car drives to the end and the state machine decides
+        again with the obstacle then inside the horizon. That branch is tagged
+        `static/beyond_path (ignored)` and the comment above it records what
+        happened before it existed - path_free was permanently false and no
+        static avoidance could ever arm.
+
+        The DYNAMIC branch of the same function still sets is_free False in
+        exactly that situation, tagged `dyn/nopred/beyond_path`. It stayed
+        invisible because a running predictor sends the opponent down the
+        `dyn/pred` branch instead. Launched with prediction:=false there are no
+        predictions at all, so every dynamic obstacle takes `dyn/nopred`, and an
+        opponent farther ahead than the static avoidance path's end - while
+        still inside interest_horizon_m - refuses that path on every tick. The
+        car then trails the static obstacle it should have driven around, and
+        per _check_static_overtaking_mode's own comment a stopped car in front
+        of a stationary obstacle is a fixed point that does not recover.
+
+        Read back off free_dbg, which the shared check fills in per obstacle,
+        rather than reimplementing the geometry: this stays correct if the
+        branch conditions there change. Corrected in the wrapper because
+        state_machine_node.py is what time_trials.launch.xml runs.
+        """
+        debug = getattr(wpnts_data, "free_dbg", None)
+        if not isinstance(debug, dict) or not debug.get("is_init"):
+            return False
+        blocked = [rec for rec in debug.get("obs", []) if rec.get("blocked")]
+        if not blocked:
+            return False
+        return all(
+            rec.get("branch") == "dyn/nopred/beyond_path" for rec in blocked)
+
     def _check_free_frenet(self, wpnts_data):
         """Use physical body width and debounce only the global-path result."""
         configured_width = self.gb_ego_width_m
@@ -276,6 +335,19 @@ class HeadToHeadStateMachine(StateMachine):
         finally:
             # Keep the legacy value for close-to-raceline state semantics.
             self.gb_ego_width_m = configured_width
+
+        # Never fires for the raceline (global_tracking is is_closed: true), so
+        # the trailing target this same function picks off cur_gb_wpnts is not
+        # affected - only the avoidance and recovery caches are.
+        if not is_free and self._blocked_only_beyond_path(wpnts_data):
+            self.get_logger().info(
+                f"[{wpnts_data.name}] only blocked by dynamic obstacles past "
+                f"the end of this path - not this path's problem",
+                throttle_duration_sec=5.0)
+            is_free = True
+            wpnts_data.closest_target = None
+            wpnts_data.closest_gap = None
+            wpnts_data.free_dbg["is_free"] = True
 
         # An overtaking path the shared check called free may only have been
         # free because the arrival-time window it examined was empty.

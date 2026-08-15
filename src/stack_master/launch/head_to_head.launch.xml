@@ -10,9 +10,15 @@
   <arg name="map" description="Map name (folder under stack_master/maps/)"/>
   <arg name="localization" default="true"
        description="Bring up localization and hardware; false if already running."/>
-  <arg name="prediction" default="true"
+  <!-- Both default false. The GP chain (opponent_trajectory ->
+       gaussian_process_opp_traj -> opp_prediction) plus the lane-change
+       planner's grid filter is more than the Orin Nano has left once the
+       particle filter is fed, so head-to-head currently runs as "avoid the
+       static obstacles, trail the dynamic one". Pass true to bring the
+       overtaking path back up. -->
+  <arg name="prediction" default="false"
        description="Run opponent trajectory learning and prediction."/>
-  <arg name="dynamic_avoidance" default="true"
+  <arg name="dynamic_avoidance" default="false"
        description="Run the UNICORN-derived lane-change planner."/>
   <arg name="joy_max_speed" default="5.0"/>
   <arg name="use_sim_time" default="false"/>
@@ -133,6 +139,9 @@
     <param name="map_dir" value="$(var map_dir)"/>
     <param name="timetrials_only" value="false"/>
     <param name="ot_planner" value="lane_change"/>
+    <!-- Kept in step with the argument above so the state machine never offers
+         OVERTAKE on a planner that was not launched. -->
+    <param name="dynamic_avoidance_enabled" value="$(var dynamic_avoidance)"/>
     <param name="use_force_trailing" value="true"/>
     <!-- Physical width is used only in collision clearance checks. The
          legacy 0.40 m gb_ego_width_m remains the raceline-state tolerance. -->

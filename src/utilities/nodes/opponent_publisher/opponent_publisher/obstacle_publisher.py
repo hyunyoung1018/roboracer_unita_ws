@@ -334,7 +334,10 @@ class ObstaclePublisher(Node):
             opponent_traj_msg = OpponentTrajectory()
             opponent_traj_msg.header.stamp = self.get_clock().now().to_msg()
             opponent_traj_msg.header.frame_id = 'frenet'
-            opponent_traj_msg.lap_count = 2
+            # float, not int: OpponentTrajectory.lap_count is a float64 and
+            # rosidl asserts on the type, so the node died the first time it
+            # published a trajectory.
+            opponent_traj_msg.lap_count = 2.0
             opponent_traj_msg.oppwpnts = self.opponent_wpnts.oppwpnts
             self.opponent_traj_pub.publish(opponent_traj_msg)
             self.counter = 0
