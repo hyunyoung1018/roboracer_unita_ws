@@ -16,7 +16,7 @@ from frenet_conversion.frenet_converter import FrenetConverter
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu
-from std_msgs.msg import Float32, Bool
+from std_msgs.msg import Float32, Bool, Float32MultiArray
 from tf_transformations import euler_from_quaternion, quaternion_from_euler, quaternion_matrix
 import tf2_ros
 from visualization_msgs.msg import Marker, MarkerArray
@@ -93,6 +93,7 @@ class ControllerManager(Node):
         self.waypoints = None
         self.track_length = None
         self.timer = None
+        self.sector_t_clip_min = None
 
         self.use_sim = self._get_param('sim', False)
         self.wheelbase = self._get_param('wheelbase', 0.321)
@@ -171,6 +172,9 @@ class ControllerManager(Node):
         self.create_subscription(Bool, '/save_start_traj', self.save_start_traj_cb, 10)
         # global waypoints to build the FrenetConverter + Controller lazily
         self.create_subscription(WpntArray, '/global_waypoints', self.global_wpnts_cb, 10)
+        # per-sector L1 lookahead floor, if the map carries one (see _apply_sector_t_clip_min)
+        self.create_subscription(Float32MultiArray, '/sector_t_clip_min',
+                                 self.sector_t_clip_min_cb, 10)
 
         # live param tuning (ROS1 dynamic_reconfigure)
         self.add_on_set_parameters_callback(self.dyn_param_cb)
@@ -244,6 +248,9 @@ class ControllerManager(Node):
 
     def scan_cb(self, data: LaserScan):
         self.scan = data
+
+    def sector_t_clip_min_cb(self, data: Float32MultiArray):
+        self.sector_t_clip_min = list(data.data)
 
     def dyn_param_cb(self, params):
         # ROS2 replacement for /dyn_controller/parameter_updates: live-update the
@@ -482,7 +489,28 @@ class ControllerManager(Node):
         ack_msg = self.create_ack_msg(speed, acceleration, jerk, steering_angle)
         self.drive_pub.publish(ack_msg)
 
+    def _apply_sector_t_clip_min(self):
+        """Take the L1 lookahead floor from the map, if the map defines one.
+
+        sector_tuner publishes one value per global waypoint, already blended
+        across sector boundaries, so this is a lookup and not a second copy of
+        the sector logic. The car's frenet s picks the entry.
+
+        self.t_clip_min - the controller.yaml value - is deliberately left alone:
+        it stays the fallback for maps without the field, and it is what
+        save_params writes back. The consequence is that on a map that does carry
+        t_clip_min, tuning t_clip_min in rqt does nothing; tune it on the sector.
+        """
+        arr = self.sector_t_clip_min
+        if not arr or not self.track_length:
+            self.controller.t_clip_min = self.t_clip_min
+            return
+        s = float(self.position_in_map_frenet[0]) % self.track_length
+        idx = int(np.clip(int(s / self.track_length * len(arr)), 0, len(arr) - 1))
+        self.controller.t_clip_min = float(arr[idx])
+
     def controller_cycle(self):
+        self._apply_sector_t_clip_min()
         speed, acceleration, jerk, steering_angle, L1_point, L1_distance, idx_nearest_waypoint, curvature_waypoints, future_position = self.controller.main_loop(
             self.state,
             self.position_in_map,

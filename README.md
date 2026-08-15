@@ -128,7 +128,10 @@ A tight particle cloud on `/pf/viz/particles` means it has converged.
   regenerating from a different start pose moves every boundary.
 - **`t_clip_min` moves with the speed scaling.** The L1 lookahead sits on that
   floor for most of a lap, which is what makes the line steady; leave it
-  behind and the car weaves. The pairing is in `config/car/controller.yaml`.
+  behind and the car weaves. Give each sector its own `t_clip_min` in
+  `maps/<name>/speed_scaling.yaml` (all sectors or none) and the pairing holds
+  per sector; otherwise the single fallback in `config/car/controller.yaml`
+  applies to the whole lap.
 - **One distance, three names.** `evasion_distance`, `raceline_clearance_m`
   and `gb_ego_width_m/2 + lateral_width_m` all describe when the car should
   leave the raceline. They must agree, or it trails obstacles it could pass.

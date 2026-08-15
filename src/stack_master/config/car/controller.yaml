@@ -32,6 +32,11 @@ controller_manager:
     # lookahead's swing over a lap grows anyway: 0.16 m at scale 0.3, 0.37 m at
     # 0.5, 0.67 m at 0.7. Past about 0.5, weaving is curvature_factor's to fix,
     # not this one's.
+    #
+    # This value is now the FALLBACK. A map whose speed_scaling.yaml gives every
+    # sector a t_clip_min drives the floor per sector instead, and then tuning
+    # this in rqt does nothing - tune the sector. Maps without the field (all of
+    # them except map_yes) behave exactly as before and use this number.
     t_clip_min: 1.1
     t_clip_max: 8.0
     m_l1: 0.47

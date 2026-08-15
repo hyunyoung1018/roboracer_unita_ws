@@ -1,3 +1,11 @@
+# t_clip_min is the controller's L1 lookahead floor [m], paired with this
+# sector's scaling. It lives here rather than in controller.yaml because the
+# pairing is per speed, and the speed is per sector. Measured pairs:
+#
+#   scaling 0.5 -> 1.10   0.6 -> 1.10   0.7 -> 1.15   0.8 -> 1.20
+#
+# All sectors carry it or none do: a partial set is treated as a typo and
+# ignored, and the controller falls back to controller.yaml's single value.
 sector_tuner:
   ros__parameters:
     global_limit: 1.0
@@ -6,23 +14,27 @@ sector_tuner:
       start: 0
       end: 87
       scaling: 0.6
+      t_clip_min: 1.10
       only_FTG: false
       no_FTG: false
     Sector1:
       start: 88
       end: 176
       scaling: 0.6
+      t_clip_min: 1.10
       only_FTG: false
       no_FTG: false
     Sector2:
       start: 177
       end: 265
       scaling: 0.8
+      t_clip_min: 1.20
       only_FTG: false
       no_FTG: false
     Sector3:
       start: 266
       end: 349
       scaling: 0.6
+      t_clip_min: 1.10
       only_FTG: false
       no_FTG: false

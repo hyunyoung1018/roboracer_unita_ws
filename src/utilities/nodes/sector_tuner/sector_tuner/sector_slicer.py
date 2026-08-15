@@ -36,6 +36,12 @@ class SectorSlicer(Node):
         # than unable to go fast without an edit and a rebuild.
         self.speed_limit = 1.0
         self.speed_scaling = 0.5
+        # Written alongside the scaling because the controller's L1 lookahead floor
+        # is paired with it - see controller.yaml. This has to be emitted here: the
+        # dump below rewrites speed_scaling.yaml whole, so a field the slicer does
+        # not know about disappears every time the sectors are re-cut. 1.1 is the
+        # value that goes with a 0.5 scaling.
+        self.t_clip_min = 1.1
         self.glob_slider_s = 0
         self.sector_pnts = [0] #Sector always has tostart at 0
         
@@ -168,7 +174,8 @@ class SectorSlicer(Node):
             #Add sectors with scaling field
             dict_file['Sector' + str(i)] = {'start':self.sector_pnts[i] if i == 0 else self.sector_pnts[i] + 1,
                                             'end':self.sector_pnts[i+1],
-                                            'scaling':self.speed_scaling}
+                                            'scaling':self.speed_scaling,
+                                            't_clip_min':self.t_clip_min}
             #Add only_FTG field to sector
             dict_file['Sector' + str(i)].update({'only_FTG': False})
             #Add no_FTG field to sector
