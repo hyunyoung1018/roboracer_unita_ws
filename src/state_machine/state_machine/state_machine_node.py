@@ -1348,8 +1348,43 @@ class StateMachine(Node):
         # which comes from ggv and the path's curvature. On an evasion swerve
         # through a metre-wide corridor that limit is still far too quick, so
         # the planner gets to state a ceiling outright.
+        #
+        # The ceiling follows the path SIDEWAYS, though, not along it.
+        #
+        # It used to be flat over the whole path, and the whole path is about
+        # six metres of approach before the apex - so spotting an obstacle
+        # early meant crawling the entire way to it. What is actually narrow is
+        # the gap beside the obstacle, and the car is only in it at the apex.
+        # On the raceline there is nothing to slow down for.
+        #
+        # So the ceiling scales with how far off the raceline each point is:
+        # untouched at d = 0, max_speed at full displacement. No new field
+        # needed, the waypoints already carry d_m.
         if max_speed is not None:
-            vx_profile = np.minimum(vx_profile, float(max_speed))
+            max_speed = float(max_speed)
+            d = np.array([abs(wp.d_m) for wp in wpnts])
+            d_apex = d.max()
+            if d_apex > 1e-3:
+                ceiling = vx_profile - (vx_profile - max_speed) * (d / d_apex)
+                vx_profile = np.minimum(vx_profile, ceiling)
+            else:
+                vx_profile = np.minimum(vx_profile, max_speed)
+
+            # Then make the deceleration into the apex something the car can
+            # actually do. calc_vel_profile has a backward pass for exactly
+            # this, but capping afterwards happens behind its back, and a
+            # ceiling imposed after the fact is a speed cliff the controller
+            # is asked to track and cannot. Walk back from the end braking at
+            # the machine limit and take whichever is lower.
+            #
+            # b_ax_max_machines is the braking table, in m/s^2 against speed,
+            # already scaled by safety_factor above.
+            for i in range(len(vx_profile) - 2, -1, -1):
+                a_brake = abs(np.interp(
+                    vx_profile[i + 1], b_ax_max_machines_sf[:, 0], b_ax_max_machines_sf[:, 1]))
+                reachable = np.sqrt(
+                    vx_profile[i + 1] ** 2 + 2.0 * a_brake * el_lengths[i])
+                vx_profile[i] = min(vx_profile[i], reachable)
 
         for i in range(len(vx_profile)):
             wpnts_msg.wpnts[i].vx_mps = vx_profile[i]
