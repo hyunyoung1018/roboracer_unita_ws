@@ -22,7 +22,14 @@
   <arg name="map"                       description="Map name (folder in stack_master/maps/)"/>
   <arg name="mode"    default="car"     description="Vehicle parameter set: 'car' or 'sim'"/>
   <arg name="reverse" default="false"   description="Drive the track the other way round"/>
-  <arg name="rviz"    default="true"    description="Launch RViz"/>
+  <!-- false like every other launch, but this is the one place RViz is an
+       INPUT rather than a view: the first run on a new map waits 30 s for a
+       "2D Pose Estimate" to set where the raceline starts. That is saved to
+       track_meta.yaml and reused, so only a NEW MAP needs rviz:=true. -->
+  <arg name="rviz"    default="false"   description="Launch RViz. Needed the
+                                                     first time a map is used -
+                                                     the start pose is clicked
+                                                     in it."/>
   <arg name="sectors" default="true"
        description="Also slice the speed / overtaking sectors after planning"/>
   <arg name="show_plots" default="false"

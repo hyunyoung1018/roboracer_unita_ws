@@ -34,7 +34,7 @@
 -->
 <launch>
   <arg name="map" description="Name of the map to create (folder under stack_master/maps/)"/>
-  <arg name="rviz" default="true"
+  <arg name="rviz" default="false"
        description="Needs a display. On a headless car use foxglove instead."/>
   <arg name="foxglove" default="false"
        description="Serve the topics over websocket so a laptop can watch the map build"/>

@@ -123,10 +123,15 @@
        description="Static obstacle avoidance: perception + the spline planner"/>
 
   <!-- ===== race day ===== -->
+  <arg name="relocalize" default="true"
+       description="Count laps and re-seed the particle filter at the finish
+                    line every N laps. On by default - it is what keeps the
+                    particle cloud from spreading over a long run, and it costs
+                    one message every few laps."/>
   <arg name="qual" default="false"
-       description="Qualifying run: lap counting, periodic re-localisation, and
-                    a two-phase speed schedule. false is the ordinary practice
-                    stack, unchanged."/>
+       description="Qualifying run: the two-phase speed schedule on top. Lap
+                    counting and re-localisation are `relocalize` and come up
+                    on their own."/>
   <arg name="qual_switch_lap" default="10"
        description="[laps] Phase 1 runs to the end of this lap, phase 2 after."/>
   <arg name="qual_phase1_scaling" default="0.5"/>
@@ -141,7 +146,7 @@
        description="[m/s] full stick on the manual override. The controller is
                     capped separately, by global_limit in speed_scaling.yaml."/>
   <arg name="use_sim_time" default="false"/>
-  <arg name="rviz" default="true"/>
+  <arg name="rviz" default="false"/>
   <arg name="foxglove" default="false"/>
 
   <!-- Derived, not a second switch: looking at obstacles and having something
@@ -243,7 +248,12 @@
        waypoint 0, so lap 1 starts where the car is placed. The relocalizer
        republishes /initialpose to re-seed the particle filter and lap_analyser
        ignores those - only the first one moves the line. -->
-  <group if="$(var qual)">
+  <!-- Lap counting and re-seeding, on by default. Both are cheap - the
+       relocalizer subscribes to lap_data and publishes one pose every N laps -
+       and the cloud spreading over a run is the failure they exist to stop.
+       lap_analyser is here because it publishes the lap_data the other one
+       counts, not for the lap times. -->
+  <group if="$(var relocalize)">
     <node pkg="lap_analyser" exec="lap_analyser" name="lap_analyser" output="screen">
       <param name="lap_start_from_initialpose" value="true"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
@@ -253,7 +263,11 @@
       <param name="relocalize_every_n_laps" value="$(var relocalize_every_n_laps)"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
     </node>
+  </group>
 
+  <!-- The speed schedule alone. It needs lap_data, so it needs relocalize on
+       too - which it is, by default. -->
+  <group if="$(var qual)">
     <node pkg="lap_analyser" exec="qual_scheduler" name="qual_scheduler" output="screen">
       <param name="switch_lap" value="$(var qual_switch_lap)"/>
       <param name="phase1_scaling" value="$(var qual_phase1_scaling)"/>

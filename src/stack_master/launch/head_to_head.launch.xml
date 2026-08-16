@@ -27,7 +27,7 @@
 
   <arg name="joy_max_speed" default="5.0"/>
   <arg name="use_sim_time" default="false"/>
-  <arg name="rviz" default="true"/>
+  <arg name="rviz" default="false"/>
   <arg name="foxglove" default="false"/>
 
   <let name="config_dir" value="$(find-pkg-share stack_master)/config/car"/>
