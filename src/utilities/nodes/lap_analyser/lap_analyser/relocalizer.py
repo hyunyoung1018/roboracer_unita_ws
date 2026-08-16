@@ -32,6 +32,20 @@ class AutoRelocalizer(Node):
 
         self.RELOCALIZE_EVERY_N_LAPS = int(
             self.declare_parameter('relocalize_every_n_laps', 10).value)
+        # [s] A lap shorter than this did not happen.
+        #
+        # Re-seeding is not free: it scatters the particles 0.5 m and 0.4 rad,
+        # and the cloud is bad until it reconverges - `possible` measured 32 to
+        # 42 immediately after, against 130 once settled. That is a fair price
+        # once every few laps and a disaster several times a second.
+        #
+        # And several times a second is what happened. lap_analyser reported
+        # "completed lap #1 in 0.034", "#2 in 0.029", "#3 in 0.032" - three
+        # laps in a tenth of a second, straight into a re-seed - because the
+        # finish line retriggers while the car sits on it. The counter is not
+        # something to trust unguarded.
+        self.MIN_LAP_TIME_S = float(
+            self.declare_parameter('min_lap_time_s', 2.0).value)
 
         self.wp_flag = False
         self.global_waypoints = None  # [s_m, x_m, y_m, psi_rad] per row
@@ -65,6 +79,13 @@ class AutoRelocalizer(Node):
                 "lap completed but /global_waypoints not received yet, skipping relocalize")
             return
         if self.RELOCALIZE_EVERY_N_LAPS <= 0:
+            return
+        if msg.lap_time < self.MIN_LAP_TIME_S:
+            self.get_logger().warn(
+                f"ignoring lap {msg.lap_count}: {msg.lap_time:.3f} s is under "
+                f"min_lap_time_s ({self.MIN_LAP_TIME_S:.1f}) - the finish line "
+                f"is retriggering, not a lap. Not re-seeding.",
+                throttle_duration_sec=5.0)
             return
         if msg.lap_count > 0 and msg.lap_count % self.RELOCALIZE_EVERY_N_LAPS == 0:
             self.publish_relocalize_pose(msg.lap_count)
