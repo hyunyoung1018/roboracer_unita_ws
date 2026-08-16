@@ -20,6 +20,11 @@
        description="Run opponent trajectory learning and prediction."/>
   <arg name="dynamic_avoidance" default="false"
        description="Run the UNICORN-derived lane-change planner."/>
+  <arg name="relocalize" default="true"
+       description="Re-seed the particle filter at the finish line every N laps."/>
+  <arg name="relocalize_every_n_laps" default="3"
+       description="How often. Live: ros2 param set /auto_relocalizer relocalize_every_n_laps N"/>
+
   <arg name="joy_max_speed" default="5.0"/>
   <arg name="use_sim_time" default="false"/>
   <arg name="rviz" default="true"/>
@@ -163,6 +168,35 @@
     <param name="use_sim_time" value="$(var use_sim_time)"/>
     <remap from="/imu/data" to="/vesc/sensors/imu/raw"/>
   </node>
+
+  <!-- ===== re-seeding the particle filter ===== -->
+  <!-- Two nodes, neither of which the driving stack depends on: kill them
+       mid-race and the car keeps driving. relocalizer publishes /initialpose
+       at the finish-line waypoint's KNOWN map pose every N laps, which is the
+       same path an RViz "2D Pose Estimate" takes, so nothing else changes.
+       lap_analyser is here because that is what publishes the lap_data it
+       counts - not for the lap times.
+       qual_scheduler is deliberately NOT here. It steps the speed schedule up
+       partway through a qualifying run, which is not a thing during a race.
+
+       WORTH RE-TESTING NOW. This was a workaround for the particle cloud
+       spreading over a run - which is also what a pose reset repaired, taking
+       `possible` from 45 straight back to 160. The cause of that spread was
+       the motion model's yaw rate coming from the servo command, and all three
+       consumers are on the gyro now. If the cloud no longer degrades, the
+       re-seed is pure cost: it scatters particles 0.5 m and 0.4 rad around the
+       line and the estimate is briefly worse, at racing speed, right where
+       the car is committed. A/B it with relocalize:=false. -->
+  <group if="$(var relocalize)">
+    <node pkg="lap_analyser" exec="lap_analyser" name="lap_analyser" output="screen">
+      <param name="lap_start_from_initialpose" value="true"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+    <node pkg="lap_analyser" exec="relocalizer" name="auto_relocalizer" output="screen">
+      <param name="relocalize_every_n_laps" value="$(var relocalize_every_n_laps)"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+  </group>
 
   <node pkg="stack_master" exec="simple_mux_node.py" name="simple_mux" output="screen">
     <param name="in_topic" value="/vesc/high_level/ackermann_cmd"/>
