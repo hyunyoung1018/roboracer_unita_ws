@@ -5,7 +5,7 @@ from rclpy.node import Node
 from f110_msgs.msg import LapData, WpntArray
 from std_msgs.msg import Float32, Empty
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, PoseWithCovarianceStamped
 from visualization_msgs.msg import Marker
 
 import time
@@ -24,6 +24,30 @@ class LapAnalyser(Node):
                          automatically_declare_parameters_from_overrides=True)
 
         self.get_logger().info("Lap_analyser node started")
+
+        # Where a lap begins.
+        #
+        # The lap boundary used to be the wrap of the Frenet s, which is
+        # waypoint 0 - the raceline's start pose, and the start of sector 0.
+        # That is wherever raceline_generator happened to be told to start, and
+        # on race day it is not where the car is placed. Counting from the
+        # first "2D Pose Estimate" instead makes lap 1 start where the run
+        # starts, which is what the timing sheet means by a lap.
+        #
+        # FIRST pose estimate only. The relocalizer republishes /initialpose
+        # every N laps to re-seed the particle filter, and moving the finish
+        # line under a run in progress would restart the count each time.
+        #
+        # Until one arrives s_finish stays 0.0, so with no pose estimate at all
+        # this behaves exactly as it did before.
+        self.lap_start_from_initialpose = bool(
+            self._get_or_declare('lap_start_from_initialpose', True))
+        self.s_finish = 0.0
+        self.track_length = None
+        self.last_rel = 0.0
+        self._finish_latched = False
+        self.initialpose_sub = self.create_subscription(
+            PoseWithCovarianceStamped, '/initialpose', self.initialpose_cb, 10)
 
         # Wait for state machine to start to figure out where to place the visualization message
         self.vis_pos = Pose()
@@ -92,8 +116,50 @@ class LapAnalyser(Node):
         with open(self.logfile_dir, 'w') as f:
             f.write(f"Laps done on " + datetime.now().strftime('%d %b %H:%M:%S') + '\n')
 
+    def _get_or_declare(self, name, default):
+        # The node declares parameters from overrides automatically, so a value
+        # passed at launch is already declared by the time __init__ runs.
+        if not self.has_parameter(name):
+            self.declare_parameter(name, default)
+        return self.get_parameter(name).value
+
     def marker_cb(self, data: Marker):
             self.state_marker = data
+
+    def initialpose_cb(self, msg: PoseWithCovarianceStamped):
+        """Latch the lap boundary at the first pose estimate of the run."""
+        if not self.lap_start_from_initialpose or self._finish_latched:
+            return
+        if not self.wp_flag:
+            self.get_logger().warn(
+                "pose estimate received before /global_waypoints - "
+                "keeping the raceline start as the lap boundary")
+            return
+
+        xy = self.global_lateral_waypoints[:, 3:5]
+        target = np.array([msg.pose.pose.position.x, msg.pose.pose.position.y])
+        idx = int(np.argmin(np.linalg.norm(xy - target, axis=1)))
+        self.s_finish = float(self.global_lateral_waypoints[idx, 0])
+        self._finish_latched = True
+
+        # Re-base. The car has usually not moved yet, but if a pose estimate
+        # lands mid-run the count restarts from here rather than reporting a
+        # partial lap against the old boundary.
+        self.last_rel = 0.0
+        self.lap_count = -1
+        self.accumulated_error = 0
+        self.max_error = 0
+        self.n_datapoints = 0
+        self.car_distance_to_boundary = []
+        self.get_logger().warn(
+            f"LapAnalyser: lap boundary set at the pose estimate, "
+            f"s={self.s_finish:.2f} m (waypoint {idx}). Laps are counted from here.")
+
+    def _relative_s(self, current_s):
+        """Distance travelled since the lap boundary, wrapping once per lap."""
+        if not self.track_length:
+            return current_s - self.s_finish
+        return (current_s - self.s_finish) % self.track_length
 
 
 
@@ -108,10 +174,13 @@ class LapAnalyser(Node):
         """
            
         if not self.wp_flag:
-            # Store original waypoint array
+            # Store original waypoint array. x_m/y_m are carried so a pose
+            # estimate in map coordinates can be turned into an s.
             self.global_lateral_waypoints = np.array([
-                [w.s_m, w.d_right, w.d_left] for w in data.wpnts
+                [w.s_m, w.d_right, w.d_left, w.x_m, w.y_m] for w in data.wpnts
             ])
+            # The last waypoint repeats the first, so its s is the lap length.
+            self.track_length = float(data.wpnts[-1].s_m)
             self.wp_flag = True
         else:
             pass
@@ -123,7 +192,8 @@ class LapAnalyser(Node):
 
         current_s = msg.pose.pose.position.x
         current_d = msg.pose.pose.position.y
-        if self.check_for_finish_line_pass(current_s):
+        current_rel = self._relative_s(current_s)
+        if self.check_for_finish_line_pass(current_rel):
             if (self.lap_count == -1):
                 self.lap_start_time = self.get_clock().now()
                 self.get_logger().info("LapAnalyser: started first lap")
@@ -167,6 +237,7 @@ class LapAnalyser(Node):
             if self.max_error < abs(current_d):
                 self.max_error = abs(current_d)
         self.last_s = current_s
+        self.last_rel = current_rel
 
         # search for closest s value: s values of global waypoints do not match the s values of car position exactly
         s_ref_line_values = np.array(self.global_lateral_waypoints)[:, 0]
@@ -187,9 +258,11 @@ class LapAnalyser(Node):
         self.lap_count = -1
         self.n_datapoints = 0
 
-    def check_for_finish_line_pass(self, current_s):
-        # detect wrapping of the track, should happen exactly once per round
-        if (self.last_s - current_s) > 1.0:
+    def check_for_finish_line_pass(self, current_rel):
+        # Detect the wrap of the distance since the lap boundary, which happens
+        # exactly once per round. With s_finish = 0 this is the old test on the
+        # raw s; with the boundary at the pose estimate it moves with it.
+        if (self.last_rel - current_rel) > 1.0:
             return True
         else:
             return False
@@ -209,8 +282,14 @@ class LapAnalyser(Node):
 
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.lap_count = self.lap_count
-        msg.average_lateral_error_to_global_waypoints = self.accumulated_error / self.n_datapoints
-        msg.max_lateral_error_to_global_waypoints = self.max_error
+        # float(), because the accumulators start as int 0 and only become
+        # floats once a non-zero lateral error is seen. LapData's fields are
+        # float32 and rclpy asserts on the type, so a lap driven exactly on the
+        # line - which happens in sim, and on the first lap after a reset -
+        # killed the node here.
+        msg.average_lateral_error_to_global_waypoints = float(
+            self.accumulated_error / max(1, self.n_datapoints))
+        msg.max_lateral_error_to_global_waypoints = float(self.max_error)
         self.lap_data_pub.publish(msg)
 
         # append to deques for statistics

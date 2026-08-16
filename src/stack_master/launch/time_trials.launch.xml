@@ -45,6 +45,30 @@
   (it waits on /ot_section_check, which an empty ot_sectors.yaml never grants)
   and everything under prediction. Both belong to head-to-head.
 
+  qual:=true is the race-day qualifying run:
+
+      ros2 launch stack_master time_trials.launch.xml map:=<name> qual:=true
+
+  It adds three nodes that watch the run rather than drive it. Laps are counted
+  from the first "2D Pose Estimate", the particle filter is re-seeded every
+  relocalize_every_n_laps laps, and the speed schedule steps up once:
+
+      laps 1..qual_switch_lap    scaling 0.5, t_clip_min 1.05
+      after that                 scaling 0.6, t_clip_min 1.10
+
+  Every number is an argument, and every one is also live on the running node:
+
+      ros2 param set /qual_scheduler switch_lap 12
+      ros2 param set /qual_scheduler phase2_scaling 0.65
+      ros2 param set /auto_relocalizer relocalize_every_n_laps 5
+      ros2 service call /qual_scheduler/reapply std_srvs/srv/Trigger
+
+  The schedule works by setting sector_tuner's own Sector*.scaling and
+  Sector*.t_clip_min, which is what a human dragging the rqt sliders does, so
+  the map's speed_scaling.yaml is never written and a run left half-finished
+  leaves nothing behind. Killing any of the three nodes mid-run is safe - the
+  car keeps driving on whatever sector_tuner last had.
+
   RACELINE was formerly called GB_TRACK; see state_machine/states_types.py.
 
   No node started here publishes a transform. The chain is unchanged from
@@ -97,6 +121,21 @@
        description="Bring up localisation too. false if it is already running."/>
   <arg name="obstacles" default="false"
        description="Static obstacle avoidance: perception + the spline planner"/>
+
+  <!-- ===== race day ===== -->
+  <arg name="qual" default="false"
+       description="Qualifying run: lap counting, periodic re-localisation, and
+                    a two-phase speed schedule. false is the ordinary practice
+                    stack, unchanged."/>
+  <arg name="qual_switch_lap" default="10"
+       description="[laps] Phase 1 runs to the end of this lap, phase 2 after."/>
+  <arg name="qual_phase1_scaling" default="0.5"/>
+  <arg name="qual_phase1_t_clip_min" default="1.05"/>
+  <arg name="qual_phase2_scaling" default="0.6"/>
+  <arg name="qual_phase2_t_clip_min" default="1.10"/>
+  <arg name="relocalize_every_n_laps" default="3"
+       description="[laps] Re-seed the particle filter this often. 0 disables
+                    it without taking the node out of the launch."/>
 
   <arg name="joy_max_speed" default="5.0"
        description="[m/s] full stick on the manual override. The controller is
@@ -187,6 +226,41 @@
       <param from="$(var config_dir)/perception.yaml"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
       <remap from="/planner/avoidance/otwpnts" to="/planner/avoidance/static_otwpnts"/>
+    </node>
+  </group>
+
+  <!-- ===== qualifying ===== -->
+  <!-- Three nodes, none of which the driving stack depends on: kill any of
+       them mid-run and the car keeps driving on whatever sector_tuner last
+       had. They are only in the launch so that starting a qualifying run is
+       one command rather than four terminals.
+
+       lap_analyser      /car_state/odom_frenet -> lap_data, one per lap
+       relocalizer       lap_data -> /initialpose every N laps
+       qual_scheduler    lap_data -> sector_tuner's scaling and t_clip_min
+
+       The lap boundary is the FIRST "2D Pose Estimate" of the run, not
+       waypoint 0, so lap 1 starts where the car is placed. The relocalizer
+       republishes /initialpose to re-seed the particle filter and lap_analyser
+       ignores those - only the first one moves the line. -->
+  <group if="$(var qual)">
+    <node pkg="lap_analyser" exec="lap_analyser" name="lap_analyser" output="screen">
+      <param name="lap_start_from_initialpose" value="true"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+
+    <node pkg="lap_analyser" exec="relocalizer" name="auto_relocalizer" output="screen">
+      <param name="relocalize_every_n_laps" value="$(var relocalize_every_n_laps)"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+
+    <node pkg="lap_analyser" exec="qual_scheduler" name="qual_scheduler" output="screen">
+      <param name="switch_lap" value="$(var qual_switch_lap)"/>
+      <param name="phase1_scaling" value="$(var qual_phase1_scaling)"/>
+      <param name="phase1_t_clip_min" value="$(var qual_phase1_t_clip_min)"/>
+      <param name="phase2_scaling" value="$(var qual_phase2_scaling)"/>
+      <param name="phase2_t_clip_min" value="$(var qual_phase2_t_clip_min)"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
     </node>
   </group>
 

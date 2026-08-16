@@ -25,6 +25,7 @@ setup(
         'console_scripts': [
             'lap_analyser = lap_analyser.lap_analyser:main', # runs main in lap_analyser.py
             'relocalizer = lap_analyser.relocalizer:main', # runs main in relocalizer.py
+            'qual_scheduler = lap_analyser.qual_scheduler:main', # runs main in qual_scheduler.py
         ],
     },
 )
