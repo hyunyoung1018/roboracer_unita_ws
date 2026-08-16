@@ -606,6 +606,23 @@ class SplineNode(Node):
                 f"tightest track {bound_left + bound_right:.2f} m, "
                 f"evasion_distance {self.evasion_distance:.2f})")
 
+        # An offset of nothing is the raceline, and the raceline is what the
+        # state machine already said was blocked.
+        #
+        # _raceline_clears bails when the near edge is raceline_clearance_m off
+        # the line, and the offset is that same edge plus evasion_distance -
+        # the two numbers are equal on purpose, so an obstacle a millimetre
+        # inside the bail threshold produces an offset of a millimetre. The log
+        # showed exactly that: "corridor d=0.00 m", published, then refused as
+        # "path is at d=+0.005, free -0.169". Say there is nothing to avoid
+        # instead of publishing the line and having it thrown back.
+        if abs(apex_d) < 0.02:
+            return self._bail(
+                out,
+                f"the offset needed at s={apex_s:.2f} is only {apex_d:+.3f} m - "
+                f"that is the raceline, which the state machine has already "
+                f"called blocked. Nothing to publish")
+
         control_d = np.where(hold_mask > 0.5, apex_d, 0.0)
         spline = CubicSpline(control_s, control_d, bc_type='natural')
         sample_unwrapped = np.arange(control_s[0], control_s[-1], self.resolution)

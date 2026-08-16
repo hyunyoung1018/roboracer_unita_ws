@@ -692,6 +692,24 @@ void Detect::checkObstacles(std::vector<Obstacle> * obstacles)
     if (obstacle.size > max_size_m_) {
       continue;
     }
+    // max_detect_d_m, applied to the FITTED obstacle rather than to each
+    // return, so it works in grid mode as well.
+    //
+    // It used to gate the per-point Frenet test, which grid mode does not run
+    // at all - so on a wide map the detector published whatever the eroded
+    // grid called free space, and a log of five obstacles at d = +1.09, +1.15,
+    // -1.73 and -2.33 is what that looks like. Those are walls and far scenery.
+    // The planner throws them out on trajectory_threshold, so they never
+    // reached a path, but they each took an L-shape fit, a tracker slot and an
+    // id - and ids running 446, 453, 494 inside twenty seconds is a tracker
+    // spending its association budget on scenery instead of on the box in
+    // front of the car.
+    //
+    // The obstacle's own d is already computed by this point, so this costs
+    // one comparison.
+    if (std::fabs(obstacle.d_center) > max_detect_d_m_) {
+      continue;
+    }
     obstacle.id = id++;
     tracked_obstacles_.push_back(obstacle);
   }
