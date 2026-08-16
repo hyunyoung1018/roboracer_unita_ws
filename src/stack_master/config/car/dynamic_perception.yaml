@@ -1,0 +1,84 @@
+# Perception and planning overrides for the DYNAMIC obstacle - the opponent.
+#
+# Layered on top of perception.yaml, which stays the base and is all
+# time_trials loads. Everything here exists because the opponent is not a box:
+#
+#   the box       0.50 x 0.50, stationary, placed near the middle of the track
+#   the opponent  a 0.12 x 0.12 detection pillar on a car our own size,
+#                 moving, and racing - so it uses the walls
+#
+# Split out from head_to_head_perception.yaml and head_to_head_spline.yaml,
+# which were two files for one idea and, more to the point, were never loaded
+# by `detect` at all. The detector ran on box parameters against a 12 cm
+# target for as long as head to head has existed.
+
+detect:
+  ros__parameters:
+    # A 12 cm pillar at this lidar's 0.25 deg resolution:
+    #
+    #   1 m -> 27 beams   3 m -> 9   3.4 m -> 8   5 m -> 5.5   9 m -> 3
+    #
+    # so the box's min_size_n of 8 made the opponent vanish beyond 3.4 m -
+    # while the state machine looks 8 to 9 m ahead (gb_horizon_m,
+    # interest_horizon_m). It only existed once it was nearly under the wheels,
+    # which is not something trailing can be built on. 3 carries it to 9 m and
+    # matches those horizons.
+    #
+    # The cost is that three stray returns can become an obstacle. What makes
+    # that affordable is max_detect_d_m being enforced on the fitted obstacle
+    # rather than per point - without that, this number would fill the tracker
+    # with scenery.
+    min_size_n: 3
+
+    # The pillar measures 0.12. Flooring a MEASUREMENT at 0.20 throws away the
+    # one honest thing about it; the believed footprint is set below, in
+    # tracking, where it belongs.
+    min_size_m: 0.10
+
+    # 0.30 m of erosion erases anything within 30 cm of a wall. A box we place
+    # in the middle of the track; an opponent racing us uses every centimetre
+    # of the outside line, which is exactly where it disappears.
+    filter_kernel_size: 3
+
+tracking:
+  ros__parameters:
+    # A FLOOR, and the reason this file exists.
+    #
+    # dynamic_extent_max_m below is a ceiling, and a ceiling over a 12 cm
+    # measurement leaves a believed footprint far smaller than the car it is
+    # bolted to. We know what a dynamic obstacle is here - there is one other
+    # car on the track - so believe the car rather than the pillar.
+    #
+    # 0.29 is the circumscribed radius of a 0.28 x 0.50 car: sqrt(0.28^2 +
+    # 0.50^2)/2. A disc, so no yaw estimate is needed and no orientation
+    # under-reads - a car at 45 deg to the track tangent presents 0.28 in both
+    # Frenet axes where head-on it presents 0.14 and 0.25. Trailing is the
+    # first goal and this is the conservative way round; lower it when
+    # overtaking wants the gap back.
+    dynamic_extent_min_m: 0.29
+
+    # Raised from 0.34 to match: the floor above would otherwise fight it.
+    dynamic_extent_max_m: 0.60
+
+    # A car's Frenet extents change with its yaw against the track tangent, not
+    # with how much of it the lidar has seen, so the running maximum has to
+    # bleed off within a tick rather than the six seconds a static box gets.
+    dynamic_extent_decay_mps: 0.5
+
+spline_node:
+  ros__parameters:
+    # WAS 0.19 with raceline_clearance_m left at the base 0.24, which broke the
+    # agreement the whole static stack is built on: the state machine's floor
+    # is gb_ego_width_m/2 + lateral_width_m = 0.14 + 0.05 = 0.19, so an evasion
+    # of 0.19 left exactly ZERO slack and one centimetre of measurement noise
+    # was enough for the car to refuse its own path.
+    #
+    # time_trials runs 0.24 against the same 0.19 floor - five centimetres of
+    # slack. Same here, and raceline_clearance_m matches it, as it must.
+    evasion_distance: 0.24
+    raceline_clearance_m: 0.24
+
+    # The one number that stays tighter than time_trials. An opponent is not
+    # something to give a wide berth on a track this width, and unlike the
+    # obstacle's edge this is a bound against the WALL, which does not move.
+    boundary_margin: 0.18

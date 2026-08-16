@@ -20,7 +20,7 @@ Two fixes, both about the opponent car:
 2. ``_hold_extents`` keeps the largest extent a track has ever shown. Correct
    for a box - see the docstring it inherits - and wrong for a car, whose
    Frenet extents grow with its yaw relative to the track tangent rather than
-   with how much of it the lidar has seen. See head_to_head_perception.yaml.
+   with how much of it the lidar has seen. See dynamic_perception.yaml.
 """
 
 import rclpy
@@ -41,6 +41,7 @@ class HeadToHeadTrackingNode(TrackingNode):
     def __init__(self):
         super().__init__()
         for name, default in (
+            ('dynamic_extent_min_m', 0.29),
             ('dynamic_extent_max_m', 0.34),
             ('dynamic_extent_decay_mps', 0.5),
         ):
@@ -95,10 +96,20 @@ class HeadToHeadTrackingNode(TrackingNode):
         held = track.extents
         measured = self._measured_extents(measurement)
         ceiling = float(self.get_parameter('dynamic_extent_max_m').value) / 2.0
+        # A floor as well as a ceiling, and it is the floor that matters.
+        #
+        # The opponent is detected off a 0.12 m pillar bolted to a car of our
+        # own size, so the measurement is honest about the pillar and useless
+        # about the car. There is one other car on the track - believe the car.
+        #
+        # 0.29 is the circumscribed radius of 0.28 x 0.50, i.e. a disc, so no
+        # yaw estimate is needed and no orientation under-reads: side on, a car
+        # fills 0.28 of BOTH Frenet axes where head on it fills 0.14 and 0.25.
+        floor = float(self.get_parameter('dynamic_extent_min_m').value)
         leak = float(
             self.get_parameter('dynamic_extent_decay_mps').value) * max(0.0, dt)
         for i in range(4):
-            held[i] = min(ceiling, max(measured[i], held[i] - leak))
+            held[i] = min(ceiling, max(floor, measured[i], held[i] - leak))
         return held
 
 

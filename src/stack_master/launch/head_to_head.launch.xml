@@ -56,18 +56,24 @@
 
   <!-- Existing perception and tracking remain untouched.  This head-to-head-only
        adapter stabilizes classification after tracking. -->
+  <!-- dynamic_perception.yaml on the DETECTOR too. It was missing, and that
+       is why the opponent behaved nothing like a static box: a 12 cm pillar
+       against min_size_n 8 stops existing beyond 3.4 m, while the state
+       machine here looks 8 to 9 m ahead. -->
   <node pkg="perception" exec="detect" name="detect" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
+    <param from="$(var config_dir)/dynamic_perception.yaml"/>
+    <param name="map" value="$(var map)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
   <!-- h2h_tracking_node, not tracking_node: a subclass that publishes the
        obstacle fields the shared tracker drops (x_m/y_m/theta and the
        variances) and sizes a confirmed-moving target like a car rather than
        like a static box. time_trials keeps running the unmodified
-       tracking_node, and head_to_head_perception.yaml only adds keys. -->
+       tracking_node, and dynamic_perception.yaml only adds keys. -->
   <node pkg="perception" exec="h2h_tracking_node" name="tracking" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
-    <param from="$(var config_dir)/head_to_head_perception.yaml"/>
+    <param from="$(var config_dir)/dynamic_perception.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
   <node pkg="obstacle_router" exec="stable_obstacle_router_node"
@@ -80,7 +86,7 @@
        are redirected for this mode. -->
   <node pkg="spline" exec="spline_node" name="spline_node" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
-    <param from="$(var config_dir)/head_to_head_spline.yaml"/>
+    <param from="$(var config_dir)/dynamic_perception.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
     <remap from="/tracking/obstacles" to="/tracking/static_obstacles"/>
     <remap from="/planner/avoidance/otwpnts" to="/planner/avoidance/static_otwpnts"/>
