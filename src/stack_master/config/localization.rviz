@@ -94,6 +94,16 @@ Visualization Manager:
         Durability Policy: Transient Local
         Reliability Policy: Reliable
       Value: true
+    - Class: rviz_default_plugins/Marker
+      Name: Qual HUD
+      Enabled: true
+      Namespaces: {}
+      Topic:
+        Value: /qual_hud
+        Depth: 10
+        Durability Policy: Volatile
+        Reliability Policy: Reliable
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

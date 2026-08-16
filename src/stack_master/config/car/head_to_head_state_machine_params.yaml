@@ -70,6 +70,24 @@ state_machine:
       # speed, max_speed_mps does. Static uses 0.6.
       vel_planner_safety_factor: 0.7
 
+      # [m] Clearance the state machine demands beyond half the car's width
+      # before it calls the lane-change path free. 0.08 -> 0.05.
+      #
+      # The planner draws the path at the obstacle's edge + vehicle_width/2 +
+      # safety_margin = 0.14 + 0.10 = 0.24 m. This check demands the obstacle's
+      # half width + gb_ego_width_m/2 + this = 0.14 + 0.08 = 0.22 m. Two
+      # centimetres of agreement, and the two are not even measured at the same
+      # instant: the planner validates against the poses it truncated to, this
+      # samples pred_d wherever the prediction happens to be. Two centimetres of
+      # drift in the opponent's estimated d refuses a correctly planned path.
+      #
+      # 0.05 is what static avoidance already uses, and its comment explains
+      # why that is a real margin rather than padding: gb_ego_width_m is now the
+      # car's true 0.28 m, so free_dist is the actual gap between the car's side
+      # and the obstacle's edge. Dynamic had no reason to be stricter than
+      # static - the planner applies its own 0.10 m safety_margin on top.
+      lateral_width_m: 0.05
+
     # --- recovery planner ----------------------------------------------------
     # recovery_node now publishes /planner/recovery/wpnts (it had no publisher
     # at all before, so RECOVERY was unreachable). Its shared yaml still says

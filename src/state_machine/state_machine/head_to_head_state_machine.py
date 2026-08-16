@@ -186,6 +186,60 @@ class HeadToHeadStateMachine(StateMachine):
             self.static_overtaking_mode = False
         return allowed
 
+    def _check_overtaking_mode_sustainability(self) -> bool:
+        """Hand the manoeuvre over instead of abandoning it on a reclassification.
+
+        ``static_overtaking_mode`` decides which planner's cache OVERTAKE
+        slices, and it is only ever set by the two ENTRY checks - which
+        OvertakingTransition does not call. So the source is chosen once, on
+        entry, and cannot change until the car has left OVERTAKE.
+
+        That is wrong for exactly one situation, and it is a situation this
+        workspace is built to meet: the opponent stops behind a static
+        obstacle, is reclassified STATIC after about a second, and the car
+        begins a static evasion around it - and then it drives off again. The
+        router moves it to /tracking/dynamic_obstacles within about 0.1 s
+        (dynamic_confirm_count is 2 against a full history window for the other
+        direction), spline_node stops seeing it and stops refreshing the static
+        path, and the free check now watches the opponent drive along the very
+        line the car is committed to. Sustainability fails and the car drops to
+        TRAILING mid-evasion, off the raceline and alongside a moving car.
+
+        The other planner has a live path for precisely that case, because the
+        object is now dynamic. Switch to it rather than giving up. Both the
+        availability and the free check still have to pass on the new source -
+        this defers the decision to them, it does not override either.
+        """
+        if super()._check_overtaking_mode_sustainability():
+            return True
+
+        target_static = not self.static_overtaking_mode
+        if target_static:
+            wpnts, data = self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts
+        else:
+            if not self.dynamic_avoidance_enabled:
+                return False
+            wpnts, data = self.avoidance_wpnts, self.cur_avoidance_wpnts
+        if not getattr(data, "enabled", True):
+            return False
+
+        # _check_latest_wpnts, not _check_availability. Two reasons, and the
+        # first one is fatal: availability reads wpnts_data.stamp, which is None
+        # until initialize_traj has run, and the cache being handed TO may never
+        # have been initialised - time_to_float(None) took the node down.
+        # Second, handing over is an entry into that source, not the
+        # continuation of one, so it should demand a fresh path the way
+        # _check_overtaking_mode does rather than accept a stale cache.
+        if self._check_latest_wpnts(wpnts, data) and self._check_free_frenet(data):
+            self.static_overtaking_mode = target_static
+            self.get_logger().info(
+                "overtake source handed over to "
+                f"{'static' if target_static else 'dynamic'} avoidance - the "
+                "committed cache stopped being usable, this one is",
+                throttle_duration_sec=1.0)
+            return True
+        return False
+
     def _remember_trailing_target(self, target):
         if target is None or not bool(target.is_visible):
             return
@@ -220,6 +274,24 @@ class HeadToHeadStateMachine(StateMachine):
         )
         return gap, target
 
+    def _planner_validated_span(self, wpnts_data):
+        """Distance ahead over which the lane-change planner checked its path.
+
+        Only the dynamic planner publishes /planner/avoidance/merger, and only
+        its own cache is bounded by it. The static spline planner avoids a
+        stationary obstacle and its path is checked to its end, as before.
+
+        merger carries no stamp, but it is published in the same callback as
+        the path it describes, so it is exactly as fresh as the cache being
+        judged - and that cache's own staleness is already the job of
+        _check_availability.
+        """
+        if wpnts_data is not self.cur_avoidance_wpnts:
+            return None
+        if not self.merger or len(self.merger) < 1 or not self.max_s:
+            return None
+        return (float(self.merger[0]) - self.cur_s) % self.max_s
+
     def _ot_path_clears_prediction(self, wpnts_data) -> bool:
         """Check an overtaking path against EVERY predicted opponent pose.
 
@@ -245,6 +317,16 @@ class HeadToHeadStateMachine(StateMachine):
         the evasion offset across the opponent's whole predicted span, so a path
         that is genuinely safe passes this, and one that was only ever safe at
         an optimistic arrival time does not.
+
+        Poses past the end of what the PLANNER validated are dropped. The
+        lane-change planner only holds its evasion offset over
+        prediction_span_m of the opponent's future (3 m; its own measurement
+        says a 6 m corridor is clear on 2% of test_213 against 53% at 3 m), and
+        it publishes the s it validated to as obs_end on
+        /planner/avoidance/merger. The shared state machine has always
+        subscribed to that topic and stored it in self.merger without ever
+        reading it. Checking further out than the planner promised refuses
+        paths that were correctly planned.
         """
         if not wpnts_data.is_init or not len(self.obstacles_prediction):
             return True
@@ -274,6 +356,13 @@ class HeadToHeadStateMachine(StateMachine):
             [p.pred_s for p in self.obstacles_prediction], dtype=float)
         pred_d = np.asarray(
             [p.pred_d for p in self.obstacles_prediction], dtype=float)
+
+        validated = self._planner_validated_span(wpnts_data)
+        if validated is not None:
+            within = ((pred_s - self.cur_s) % self.max_s) <= validated
+            if np.any(within):
+                pred_s, pred_d = pred_s[within], pred_d[within]
+
         nearest = np.argmin(np.abs(path_s[None, :] - pred_s[:, None]), axis=1)
         worst = float(np.min(np.abs(path_d[nearest] - pred_d) - occupied))
         if worst >= required:

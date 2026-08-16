@@ -125,6 +125,14 @@ class LapAnalyser(Node):
 
     def marker_cb(self, data: Marker):
             self.state_marker = data
+            # Follow the state marker. __init__ computed vis_pos before this
+            # topic had ever published, so the branch that reads state_marker
+            # there never ran and the lap text sat at the map origin for the
+            # whole run - 1.5 m above (0, 0), wherever the car happened to be.
+            self.vis_pos = Pose()
+            self.vis_pos.position.x = data.pose.position.x
+            self.vis_pos.position.y = data.pose.position.y
+            self.vis_pos.position.z = data.pose.position.z + 1.5
 
     def initialpose_cb(self, msg: PoseWithCovarianceStamped):
         """Latch the lap boundary at the first pose estimate of the run."""

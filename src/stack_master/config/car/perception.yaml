@@ -214,7 +214,7 @@ spline_node:
     # It is a reachability limit first. Shifting 0.5 m sideways at 3 m/s needs
     # about 6.8 m/s2 of lateral grip over 2 m and 1.7 over 4, so obstacles
     # closer than roughly 3 m cannot be passed at different offsets anyway.
-    corridor_link_gap_m: 3.0
+    corridor_link_gap_m: 5.0
 
     # [m] How far the next obstacle's d may differ FROM THE LEADER'S and still
     # join. Signed, so opposite sides fall out by themselves: -0.10 and -0.15

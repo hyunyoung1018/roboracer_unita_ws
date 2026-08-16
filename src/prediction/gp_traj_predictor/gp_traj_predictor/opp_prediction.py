@@ -69,6 +69,29 @@ def validate_learned_profile(
     global_s = np.asarray([point.s_m for point in global_waypoints], dtype=float)
     half_width = 0.5 * float(opponent_width)
     clearance = half_width + float(boundary_margin)
+    return profile_inside_track(
+        profile_s, profile_d, global_waypoints, track_length,
+        opponent_width, boundary_margin, 'TRAJECTORY_OUT_OF_BOUNDS')
+
+
+def profile_inside_track(profile_s, profile_d, global_waypoints, track_length,
+                         opponent_width, boundary_margin, status):
+    """Check a predicted profile against the drivable corridor.
+
+    Split out of validate_learned_profile because it is the only one of its
+    three tests that needs no learned trajectory - it reads the global
+    waypoints' own d_left/d_right. A constant-velocity prediction has no
+    observation coverage and no GP variance to check, but it can and must
+    still be checked against the track.
+    """
+    profile_s = np.asarray(profile_s, dtype=float)
+    profile_d = np.asarray(profile_d, dtype=float)
+    if not global_waypoints or len(profile_s) != len(profile_d):
+        return False, 'INVALID_LEARNED_TRAJECTORY', {}
+    if not np.all(np.isfinite(profile_s + profile_d)):
+        return False, 'INVALID_LEARNED_TRAJECTORY', {'reason': 'non_finite'}
+    global_s = np.asarray([point.s_m for point in global_waypoints], dtype=float)
+    clearance = 0.5 * float(opponent_width) + float(boundary_margin)
     for index, (s, d) in enumerate(zip(profile_s, profile_d)):
         distance = np.abs(global_s - (s % track_length))
         distance = np.minimum(distance, track_length - distance)
@@ -76,7 +99,7 @@ def validate_learned_profile(
         lower = -float(waypoint.d_right) + clearance
         upper = float(waypoint.d_left) - clearance
         if lower >= upper or d < lower - 1e-6 or d > upper + 1e-6:
-            return False, 'TRAJECTORY_OUT_OF_BOUNDS', {
+            return False, status, {
                 'query_s_m': round(float(s % track_length), 3),
                 'd_m': round(float(d), 3),
                 'right_limit_m': round(float(lower), 3),
@@ -108,11 +131,37 @@ class OpponentPredictor(Node):
             'max_trajectory_query_gap': 0.15,
             'max_trajectory_d_variance': 0.80,
             'speed_offset': 0.0,
+            # --- constant-velocity authorization -------------------------------
+            # force_trailing used to be `not learned`, so overtaking required the
+            # whole GP chain to be green. On this workspace's 20-22 m tracks that
+            # gate is close to unsatisfiable: the GP stamps every point it had to
+            # clip at the track boundary with boundary_clipped_variance 1.0, and
+            # the acceptance limit is 0.80, so one wall-hugging section of the
+            # opponent's line refuses the whole prediction. That is why the car
+            # has never overtaken.
+            #
+            # With this true the predictor may also authorize an overtake on the
+            # fallback profile - constant velocity from the tracker's own vs,
+            # blended onto the centreline. That is a weaker claim than a learned
+            # trajectory, so it is gated on the things constant velocity actually
+            # needs to hold, and the horizon is meant to be shortened to about a
+            # second (see n_time_steps in the launch).
+            #
+            # False reproduces the original behaviour exactly.
+            'authorize_on_fallback': False,
+            # [m/s] Below this the opponent is not worth a lane change; it is
+            # about to be reclassified STATIC by the router anyway, and static
+            # avoidance is the correct planner for a stopped car.
+            'fallback_min_opponent_speed_mps': 0.30,
+            # [m/s] Ego must actually be closing. Without this the car commits to
+            # an evasion it cannot complete and rides the corridor for a whole lap.
+            'fallback_min_closing_mps': 0.25,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
 
         self.ego_s = None
+        self.ego_vs = None
         self.global_msg = None
         self.updated_msg = None
         self.center_msg = None
@@ -163,6 +212,8 @@ class OpponentPredictor(Node):
 
     def _odom_cb(self, msg):
         self.ego_s = float(msg.pose.pose.position.x)
+        # Frenet forward speed, for the closing test in _fallback_authorized.
+        self.ego_vs = float(msg.twist.twist.linear.x)
 
     def _global_cb(self, msg):
         if not msg.wpnts:
@@ -298,6 +349,61 @@ class OpponentPredictor(Node):
             'deviation_m': round(deviation, 3),
         }
 
+    def _fallback_authorized(self, obstacle, profile_s, profile_d):
+        """Decide whether a constant-velocity prediction may authorize passing.
+
+        The learned gate answered "do I know where the opponent will be over the
+        next two seconds". Constant velocity cannot answer that, and pretending
+        otherwise is how a prediction-free stack drives into a corner. What it
+        can answer is "is this a confirmed, moving opponent that I am closing on,
+        whose next second stays on the track" - so that is what is checked, and
+        the horizon is expected to be short enough that the answer stays true.
+
+        Being on this topic at all is already evidence: the router only puts the
+        selected, DYNAMIC-confirmed opponent on /tracking/dynamic_obstacles, and
+        stamps it with logical_opponent_id. An UNKNOWN or unselected track never
+        reaches here, so there is no separate classification test to run.
+        """
+        speed = float(obstacle.vs)
+        minimum = float(self.get_parameter(
+            'fallback_min_opponent_speed_mps').value)
+        if speed < minimum:
+            return False, 'CONSTVEL_OPPONENT_TOO_SLOW', {
+                'opponent_vs': round(speed, 3),
+                'limit_mps': minimum,
+            }
+
+        if self.ego_vs is None:
+            return False, 'CONSTVEL_NO_EGO_SPEED', {}
+        closing = float(self.ego_vs) - speed
+        min_closing = float(self.get_parameter('fallback_min_closing_mps').value)
+        if closing < min_closing:
+            return False, 'CONSTVEL_NOT_CLOSING', {
+                'closing_mps': round(closing, 3),
+                'limit_mps': min_closing,
+            }
+
+        inside, _, detail = profile_inside_track(
+            profile_s,
+            profile_d,
+            self.global_msg.wpnts if self.global_msg is not None else [],
+            self.track_length,
+            self.get_parameter('opponent_width').value,
+            self.get_parameter('trajectory_boundary_margin').value,
+            'CONSTVEL_OUT_OF_BOUNDS',
+        )
+        if not inside:
+            return False, 'CONSTVEL_OUT_OF_BOUNDS', detail or {}
+
+        return True, 'CONSTVEL_READY', {
+            'obstacle_id': int(obstacle.id),
+            'opponent_vs': round(speed, 3),
+            'closing_mps': round(closing, 3),
+            'horizon_s': round(
+                int(self.get_parameter('n_time_steps').value)
+                * float(self.get_parameter('dt').value), 2),
+        }
+
     def _reset_learned_gate(self):
         self._learned_gate_open = False
         self._learned_ready_count = 0
@@ -403,12 +509,26 @@ class OpponentPredictor(Node):
                 status = invalid_status
                 detail = invalid_detail
                 self._reset_learned_gate()
+        authorized = learned
         if not learned:
             s, d, speed, vd = self._fallback_profile(obstacle, count, dt)
+            if bool(self.get_parameter('authorize_on_fallback').value):
+                # Report the constant-velocity verdict rather than the learned
+                # gate's reason: with the GP chain not launched that reason is
+                # permanently NO_TRAJECTORY, which says nothing about whether
+                # this particular overtake is allowed.
+                authorized, status, detail = self._fallback_authorized(
+                    obstacle, s, d)
         self._set_diagnostic(status, detail)
-        self._publish_prediction(obstacle, s, d, speed, vd, dt, learned)
+        self._publish_prediction(
+            obstacle, s, d, speed, vd, dt, learned, authorized)
 
-    def _publish_prediction(self, source, s, d, speed, vd, dt, learned):
+    def _publish_prediction(self, source, s, d, speed, vd, dt, learned,
+                            authorized=None):
+        # authorized defaults to learned so the original contract - and every
+        # caller that predates constant-velocity mode - is unchanged.
+        if authorized is None:
+            authorized = learned
         header = Header(stamp=self.get_clock().now().to_msg(), frame_id='map')
         xy = self.converter.get_cartesian(s % self.track_length, d).T
         reference_s = np.asarray([w.s_m for w in self.updated_msg.wpnts])
@@ -453,13 +573,18 @@ class OpponentPredictor(Node):
             ))
         self.obstacle_pub.publish(obstacle_array)
         self.prediction_pub.publish(prediction_array)
-        self.force_trailing_pub.publish(Bool(data=not learned))
+        self.force_trailing_pub.publish(Bool(data=not authorized))
+        # Three states now, so the marker has to distinguish them: red is a
+        # learned prediction, amber a constant-velocity one that is authorized
+        # to pass, green one that is only good enough to trail behind.
+        if learned:
+            namespace, colour = 'learned_prediction', (1.0, 0.0, 0.0)
+        elif authorized:
+            namespace, colour = 'constvel_prediction', (1.0, 0.65, 0.0)
+        else:
+            namespace, colour = 'fallback_prediction', (0.0, 1.0, 0.0)
         self.marker_pub.publish(trajectory_markers(
-            header,
-            [(x, y, 0.15) for x, y in xy],
-            'learned_prediction' if learned else 'fallback_prediction',
-            (1.0, 0.0, 0.0) if learned else (0.0, 1.0, 0.0),
-        ))
+            header, [(x, y, 0.15) for x, y in xy], namespace, colour))
 
     def _publish_empty(self):
         header = Header(stamp=self.get_clock().now().to_msg(), frame_id='map')

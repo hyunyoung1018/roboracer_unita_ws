@@ -141,6 +141,16 @@
   <arg name="relocalize_every_n_laps" default="3"
        description="[laps] Re-seed the particle filter this often. 0 disables
                     it without taking the node out of the launch."/>
+  <arg name="qual_hud" default="true"
+       description="Draw lap / speed / phase / re-localisations as an RViz text
+                    marker on /qual_hud. Read-only."/>
+  <arg name="qual_hud_frame" default="ego_racecar/base_link"
+       description="Frame the overlay is drawn in. The car's frame makes it
+                    follow the car; use map to pin it somewhere fixed."/>
+  <arg name="qual_hud_height" default="0.8"
+       description="[m] How far above the frame's origin the text sits."/>
+  <arg name="qual_hud_text_size" default="0.28"
+       description="[m] Cap height of the overlay text."/>
 
   <arg name="joy_max_speed" default="5.0"
        description="[m/s] full stick on the manual override. The controller is
@@ -274,6 +284,16 @@
       <param name="phase1_t_clip_min" value="$(var qual_phase1_t_clip_min)"/>
       <param name="phase2_scaling" value="$(var qual_phase2_scaling)"/>
       <param name="phase2_t_clip_min" value="$(var qual_phase2_t_clip_min)"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+
+    <!-- Read-only overlay: lap, speed, phase and re-localisations as one
+         RViz text marker on /qual_hud. Rides in the car's frame so it
+         follows the car instead of sitting at the map origin. -->
+    <node pkg="lap_analyser" exec="qual_hud" name="qual_hud" output="screen" if="$(var qual_hud)">
+      <param name="frame_id" value="$(var qual_hud_frame)"/>
+      <param name="offset_z" value="$(var qual_hud_height)"/>
+      <param name="text_height" value="$(var qual_hud_text_size)"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
     </node>
   </group>

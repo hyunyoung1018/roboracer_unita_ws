@@ -37,6 +37,8 @@ from rcl_interfaces.msg import ParameterType, ParameterValue
 from rcl_interfaces.srv import GetParameters, SetParameters
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from f110_msgs.msg import LapData
@@ -67,6 +69,14 @@ class QualScheduler(Node):
 
         self.create_subscription(LapData, 'lap_data', self.lap_data_cb, 10)
         self.create_service(Trigger, '~/reapply', self.reapply_cb)
+
+        # What is actually in force, for anything that wants to display it.
+        # Latched, because the phase changes twice in a run and a viewer
+        # started in between would otherwise see nothing until the next one.
+        self.status_pub = self.create_publisher(
+            String, 'qual_status',
+            QoSProfile(depth=1, history=HistoryPolicy.KEEP_LAST,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL))
 
         # sector_tuner comes up in the same launch, so the first attempt is
         # usually too early. Retry until it answers rather than failing the run
@@ -153,6 +163,10 @@ class QualScheduler(Node):
         self.get_logger().warn(
             f"=== QUAL PHASE {phase}: scaling {scaling:.2f}, "
             f"t_clip_min {t_clip_min:.2f} on all {self.n_sectors} sector(s) ===")
+        # Only after sector_tuner has accepted it - the overlay should show what
+        # the car is driving on, not what was asked for.
+        self.status_pub.publish(String(
+            data=f"PHASE {phase}  x{scaling:.2f}  t{t_clip_min:.2f}"))
 
     # ------------------------------------------------------------------ #
     # triggers                                                           #

@@ -10,15 +10,32 @@
   <arg name="map" description="Map name (folder under stack_master/maps/)"/>
   <arg name="localization" default="true"
        description="Bring up localization and hardware; false if already running."/>
-  <!-- Both default false. The GP chain (opponent_trajectory ->
-       gaussian_process_opp_traj -> opp_prediction) plus the lane-change
-       planner's grid filter is more than the Orin Nano has left once the
-       particle filter is fed, so head-to-head currently runs as "avoid the
-       static obstacles, trail the dynamic one". Pass true to bring the
-       overtaking path back up. -->
-  <arg name="prediction" default="false"
-       description="Run opponent trajectory learning and prediction."/>
-  <arg name="dynamic_avoidance" default="false"
+  <!-- Overtaking runs on a constant-velocity prediction, not a learned one.
+       Three booleans rather than one mode string, because ROS 2 launch XML has
+       no string comparison (see base_system.launch.xml):
+
+         prediction    opp_prediction, which turns the tracked opponent into
+                       the PredictionArray the lane-change planner needs.
+         gp_learning   the two nodes that learn the opponent's line -
+                       opponent_trajectory and gaussian_process_opp_traj.
+                       Off: opp_prediction finds no trajectory and falls back
+                       to constant velocity from the tracker's own vs.
+         dynamic_avoidance  the lane-change planner itself.
+
+       Learned prediction is off because its authorization gate is close to
+       unsatisfiable on a 21.9 m track, not because it is expensive - measured
+       here, the GP refit is 1.5% of one core at 3 Hz. See
+       authorize_on_fallback in opp_prediction.py.
+
+       To get the original learned behaviour back:
+         gp_learning:=true authorize_on_fallback:=false -->
+  <arg name="prediction" default="true"
+       description="Run opp_prediction (needed for any dynamic overtaking)."/>
+  <arg name="gp_learning" default="false"
+       description="Also learn the opponent's line with the GP pair."/>
+  <arg name="authorize_on_fallback" default="true"
+       description="Let a constant-velocity prediction authorize an overtake."/>
+  <arg name="dynamic_avoidance" default="true"
        description="Run the UNICORN-derived lane-change planner."/>
   <arg name="relocalize" default="true"
        description="Re-seed the particle filter at the finish line every N laps."/>
@@ -107,7 +124,7 @@
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 
-  <group if="$(var prediction)">
+  <group if="$(var gp_learning)">
     <node pkg="gp_traj_predictor" exec="opponent_trajectory"
           name="opponent_trajectory" output="screen">
       <param from="$(find-pkg-share gp_traj_predictor)/config/prediction.yaml"/>
@@ -119,9 +136,22 @@
       <param from="$(find-pkg-share gp_traj_predictor)/config/prediction.yaml"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
     </node>
+  </group>
+
+  <group if="$(var prediction)">
     <node pkg="gp_traj_predictor" exec="opp_prediction"
           name="opp_prediction" output="screen">
       <param from="$(find-pkg-share gp_traj_predictor)/config/prediction.yaml"/>
+      <param name="authorize_on_fallback" value="$(var authorize_on_fallback)"/>
+      <!-- 2 s -> 1 s. Constant velocity is a straight line and this track is
+           not; extrapolating the opponent two seconds through a corner puts it
+           somewhere it will not be. One second is also 3 m at racing speed,
+           which is exactly the lane-change planner's prediction_span_m, so the
+           span the planner validates and the span the state machine re-checks
+           finally cover the same ground - see _planner_validated_span.
+           Overridden here rather than in prediction.yaml so gp_learning:=true
+           still gets the 2 s horizon the learned profile was tuned for. -->
+      <param name="n_time_steps" value="10"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
       <remap from="/tracking/obstacles" to="/tracking/dynamic_obstacles"/>
     </node>

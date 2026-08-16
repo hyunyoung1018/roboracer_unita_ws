@@ -53,6 +53,11 @@ DIAGNOSTIC_DESCRIPTIONS = {
         "TRAJECTORY_OUT_OF_BOUNDS": "학습 예측이 트랙 경계를 벗어남 (force_trailing)",
         "LEARNED_CONFIRMING": "학습 예측 사용 조건 확인 중 (force_trailing)",
         "LEARNED_READY": "학습 예측 사용 가능 (force_trailing 해제)",
+        "CONSTVEL_READY": "등속 예측으로 추월 허가 (force_trailing 해제)",
+        "CONSTVEL_OPPONENT_TOO_SLOW": "상대가 너무 느림, 정적 회피 대상 (force_trailing)",
+        "CONSTVEL_NOT_CLOSING": "상대에게 접근하고 있지 않음 (force_trailing)",
+        "CONSTVEL_NO_EGO_SPEED": "자차 속도 미수신 (force_trailing)",
+        "CONSTVEL_OUT_OF_BOUNDS": "등속 예측이 트랙 경계를 벗어남 (force_trailing)",
     },
     "planner": {
         "NOT_READY": "planner 입력 준비 대기",

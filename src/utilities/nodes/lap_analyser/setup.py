@@ -26,6 +26,7 @@ setup(
             'lap_analyser = lap_analyser.lap_analyser:main', # runs main in lap_analyser.py
             'relocalizer = lap_analyser.relocalizer:main', # runs main in relocalizer.py
             'qual_scheduler = lap_analyser.qual_scheduler:main', # runs main in qual_scheduler.py
+            'qual_hud = lap_analyser.qual_hud:main', # runs main in qual_hud.py
         ],
     },
 )
