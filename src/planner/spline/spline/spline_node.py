@@ -81,6 +81,27 @@ class SplineNode(Node):
             # this holds an offset across more track than the boundary check
             # can be expected to admit on a 1.0 to 1.9 m wide map.
             'corridor_max_len_m': 8.0,
+            # [m] How far past the PREVIOUS member the next obstacle may sit
+            # and still join the corridor, scaled by speed the same way the
+            # return leg is. 3.0 is what the code did implicitly before it was
+            # a parameter - it used retreat[-1], the end of the return leg -
+            # so the default changes nothing and raising it is the knob.
+            #
+            # It is a reachability limit before it is a tuning one. Shifting
+            # 0.5 m sideways at 3 m/s needs roughly 6*dd*v^2/L^2 of lateral
+            # grip, which is 6.8 m/s^2 over 2 m and 1.7 over 4 - so obstacles
+            # closer together than about 3 m cannot be passed at different
+            # offsets anyway, whatever this says.
+            'corridor_link_gap_m': 3.0,
+            # [m] How far the next obstacle's d may differ FROM THE LEADER'S
+            # and still join. Signed, so opposite sides fall out on their own:
+            # -0.10 and -0.15 differ by 0.05 and belong together, -0.10 and
+            # +0.15 differ by 0.25 and do not.
+            #
+            # This is the legible knob on top of the geometric test below,
+            # which asks the exact question - does one offset still fit - and
+            # stays as the backstop.
+            'corridor_link_d_tol_m': 0.20,
             # [m] Spacing of the control points that hold the offset between
             # the first and last obstacle. Without them a cubic through two
             # equal knots bulges between them; the samples are clipped to the
@@ -119,6 +140,10 @@ class SplineNode(Node):
             self.get_parameter('raceline_clearance_m').value)
         self.corridor_max_len_m = float(
             self.get_parameter('corridor_max_len_m').value)
+        self.corridor_link_gap_m = float(
+            self.get_parameter('corridor_link_gap_m').value)
+        self.corridor_link_d_tol_m = float(
+            self.get_parameter('corridor_link_d_tol_m').value)
         self.corridor_point_spacing_m = max(
             0.2, float(self.get_parameter('corridor_point_spacing_m').value))
         self.measure = bool(self.get_parameter('measure').value)
@@ -134,6 +159,8 @@ class SplineNode(Node):
             'side_hysteresis_m': 'side_hysteresis_m',
             'raceline_clearance_m': 'raceline_clearance_m',
             'corridor_max_len_m': 'corridor_max_len_m',
+            'corridor_link_gap_m': 'corridor_link_gap_m',
+            'corridor_link_d_tol_m': 'corridor_link_d_tol_m',
             'corridor_point_spacing_m': 'corridor_point_spacing_m',
             'measure': 'measure',
         }
@@ -381,7 +408,23 @@ class SplineNode(Node):
             following = next(
                 (i for i in range(last + 1, len(blocking))
                  if gaps[i] > gaps[last] + 1e-3), None)
-            if following is None or gaps[following] > gaps[last] + retreat[-1]:
+            if following is None:
+                break
+            if gaps[following] > gaps[last] + self.corridor_link_gap_m * scale:
+                break
+            # Same side and near enough in d to share one offset. Measured
+            # against the LEADER, so a corridor cannot drift across the track
+            # one small step at a time.
+            d_off = blocking[following].d_center - obstacle.d_center
+            if abs(d_off) > self.corridor_link_d_tol_m:
+                self.get_logger().info(
+                    f"not linking the obstacle at "
+                    f"s={blocking[following].s_center:.2f} into the corridor: "
+                    f"its d={blocking[following].d_center:+.2f} is {abs(d_off):.2f} m "
+                    f"from the leader's {obstacle.d_center:+.2f}, over the "
+                    f"{self.corridor_link_d_tol_m:.2f} m link tolerance - "
+                    f"avoiding it on its own instead",
+                    throttle_duration_sec=2.0)
                 break
             if gaps[following] - gaps[0] > self.corridor_max_len_m:
                 self.get_logger().info(

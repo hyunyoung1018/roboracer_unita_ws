@@ -1368,31 +1368,48 @@ class StateMachine(Node):
         # never straighter than the line - it is the line plus a swerve - and
         # because it carries whatever the sectors were tuned to, which is where
         # the real knowledge about this track lives.
+        raceline_kappa = None
         if self.gb_wpnts is not None and self.wpnt_dist > 0.0:
             n_gb = len(self.gb_wpnts.wpnts)
             idx = (np.asarray([wp.s_m for wp in wpnts]) / self.wpnt_dist)
             idx = np.clip(idx, 0, None).astype(int) % n_gb
             raceline_v = np.asarray([self.gb_wpnts.wpnts[i].vx_mps for i in idx])
             vx_profile = np.minimum(vx_profile, raceline_v)
+            raceline_kappa = np.abs(np.asarray(
+                [self.gb_wpnts.wpnts[i].kappa_radpm for i in idx]))
 
-        # The ceiling follows the path SIDEWAYS, though, not along it.
+        # The ceiling follows where the path BENDS, not where it sits.
         #
-        # It used to be flat over the whole path, and the whole path is about
-        # six metres of approach before the apex - so spotting an obstacle
-        # early meant crawling the entire way to it. What is actually narrow is
-        # the gap beside the obstacle, and the car is only in it at the apex.
-        # On the raceline there is nothing to slow down for.
+        # It was flat over the whole path once, and the whole path is about six
+        # metres of approach - so spotting an obstacle early meant crawling the
+        # entire way to it. Scaling it by displacement fixed that, and then the
+        # corridor planner broke it a second way: a corridor holds one offset
+        # across every obstacle it covers, so |d| is at its maximum for the
+        # whole hold and the car crawled the length of it. Which is backwards.
+        # A held corridor is the one part of the manoeuvre that IS straight -
+        # running parallel to the raceline, past two obstacles, while everyone
+        # else swings back to the line between them. That stretch is where the
+        # time is, and it was the slowest part of the path.
         #
-        # So the ceiling scales with how far off the raceline each point is:
-        # untouched at d = 0, max_speed at full displacement. No new field
-        # needed, the waypoints already carry d_m.
+        # What is actually tight is where the path bends MORE than the line
+        # underneath it. That is the swerve in, the swerve out, and the apex of
+        # a single-obstacle dodge - and it is nothing at all in the middle of a
+        # corridor, where the path is the raceline shifted sideways.
+        #
+        # Normalised against this path's own worst point, so it needs no
+        # parameter and adapts to the shape: 1.0 at the sharpest bend the path
+        # makes, 0 where it is no sharper than the line. A single obstacle is
+        # therefore completely unchanged - its apex IS its sharpest point.
         if max_speed is not None:
             max_speed = float(max_speed)
-            d = np.array([abs(wp.d_m) for wp in wpnts])
-            d_apex = d.max()
-            if d_apex > 1e-3:
-                ceiling = vx_profile - (vx_profile - max_speed) * (d / d_apex)
-                vx_profile = np.minimum(vx_profile, ceiling)
+            extra = np.abs(kappa)
+            if raceline_kappa is not None:
+                extra = np.maximum(0.0, extra - raceline_kappa)
+            worst = extra.max()
+            if worst > 1e-6:
+                vx_profile = np.minimum(
+                    vx_profile,
+                    vx_profile - (vx_profile - max_speed) * (extra / worst))
             else:
                 vx_profile = np.minimum(vx_profile, max_speed)
 

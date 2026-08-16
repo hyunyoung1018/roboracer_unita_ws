@@ -206,6 +206,23 @@ spline_node:
     # and the next replan takes the rest.
     corridor_max_len_m: 8.0
 
+    # [m] How far past the PREVIOUS member the next obstacle may sit and still
+    # join, scaled by speed like the return leg. 3.0 is exactly what the code
+    # did before this was a parameter, so it starts as a no-op - RAISE IT to
+    # link obstacles that currently get a swerve-return-swerve each.
+    #
+    # It is a reachability limit first. Shifting 0.5 m sideways at 3 m/s needs
+    # about 6.8 m/s2 of lateral grip over 2 m and 1.7 over 4, so obstacles
+    # closer than roughly 3 m cannot be passed at different offsets anyway.
+    corridor_link_gap_m: 3.0
+
+    # [m] How far the next obstacle's d may differ FROM THE LEADER'S and still
+    # join. Signed, so opposite sides fall out by themselves: -0.10 and -0.15
+    # differ by 0.05 and belong together; -0.10 and +0.15 differ by 0.25 and
+    # do not. Measured against the leader rather than the previous member, so
+    # a corridor cannot walk across the track one small step at a time.
+    corridor_link_d_tol_m: 0.20
+
     # [m] Spacing of the control points holding the offset between the first
     # and last obstacle. Without them a cubic through two equal knots bulges
     # between them - the samples are clipped anyway, but flat control points
