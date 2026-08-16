@@ -214,14 +214,14 @@ spline_node:
     # It is a reachability limit first. Shifting 0.5 m sideways at 3 m/s needs
     # about 6.8 m/s2 of lateral grip over 2 m and 1.7 over 4, so obstacles
     # closer than roughly 3 m cannot be passed at different offsets anyway.
-    corridor_link_gap_m: 5.0
+    corridor_link_gap_m: 8.0
 
     # [m] How far the next obstacle's d may differ FROM THE LEADER'S and still
     # join. Signed, so opposite sides fall out by themselves: -0.10 and -0.15
     # differ by 0.05 and belong together; -0.10 and +0.15 differ by 0.25 and
     # do not. Measured against the leader rather than the previous member, so
     # a corridor cannot walk across the track one small step at a time.
-    corridor_link_d_tol_m: 0.20
+    corridor_link_d_tol_m: 0.30
 
     # [m] Spacing of the control points holding the offset between the first
     # and last obstacle. Without them a cubic through two equal knots bulges
