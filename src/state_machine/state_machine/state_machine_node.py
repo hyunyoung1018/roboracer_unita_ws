@@ -1349,6 +1349,32 @@ class StateMachine(Node):
         # through a metre-wide corridor that limit is still far too quick, so
         # the planner gets to state a ceiling outright.
         #
+        # First: never faster than the raceline is at the same place.
+        #
+        # calc_vel_profile above works from ggv, and ggv.csv is flat 12 m/s^2
+        # for ax AND ay at every speed - it is not a measured friction ellipse,
+        # it is a placeholder. What actually keeps the car on the road is the
+        # sector scaling in the map's speed_scaling.yaml, 0.6 on map_yes, and
+        # /global_waypoints_scaled already has it baked in. The avoidance
+        # profile never saw it: only its END point was tied to a scaled speed,
+        # everything between came straight from the optimistic ggv.
+        #
+        # So on a corner exit the path was planned most of a factor of two
+        # quicker than the line it departs from, the car accelerated into a
+        # bend with no grip budget left for it, ran wide and hit the wall. It
+        # only showed up once the flat max_speed cap stopped hiding it.
+        #
+        # The raceline speed is the right bound because the avoidance path is
+        # never straighter than the line - it is the line plus a swerve - and
+        # because it carries whatever the sectors were tuned to, which is where
+        # the real knowledge about this track lives.
+        if self.gb_wpnts is not None and self.wpnt_dist > 0.0:
+            n_gb = len(self.gb_wpnts.wpnts)
+            idx = (np.asarray([wp.s_m for wp in wpnts]) / self.wpnt_dist)
+            idx = np.clip(idx, 0, None).astype(int) % n_gb
+            raceline_v = np.asarray([self.gb_wpnts.wpnts[i].vx_mps for i in idx])
+            vx_profile = np.minimum(vx_profile, raceline_v)
+
         # The ceiling follows the path SIDEWAYS, though, not along it.
         #
         # It used to be flat over the whole path, and the whole path is about

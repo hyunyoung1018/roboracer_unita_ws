@@ -140,6 +140,10 @@ class SplineNode(Node):
         for parameter in params:
             if parameter.name in attributes:
                 setattr(self, attributes[parameter.name], parameter.value)
+        # _load_parameters floors this at 0.2 and a live set went around that.
+        # The control-point loop advances by exactly this much, so 0 hangs the
+        # node in a while loop that never terminates.
+        self.corridor_point_spacing_m = max(0.2, float(self.corridor_point_spacing_m))
         return SetParametersResult(successful=True)
 
     def _obstacle_cb(self, msg):
