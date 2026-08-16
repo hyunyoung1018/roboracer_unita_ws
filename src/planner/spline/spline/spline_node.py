@@ -257,24 +257,47 @@ class SplineNode(Node):
         left_room = ref.d_left - left_apex
         right_room = ref.d_right + right_apex
 
-        # Do not dodge into the next obstacle.
+        # Do not dodge INTO another obstacle - but only judge that where the
+        # path actually is.
         #
-        # Only the nearest obstacle shapes the path, but the path still has to
-        # get past everything inside its own span - and obstacles staggered on
-        # opposite sides are exactly the case where dodging the first aims at
-        # the second. Seen on the car: obs 1 at d -0.23 forced an apex of
-        # +0.14, which is inside obs 2 at d +0.03..+0.39 four metres later, so
-        # the state machine refused the path and the car stopped in front of
-        # both with the right-hand side of the track wide open.
+        # Two mistakes were in the first version of this and both mattered.
         #
-        # This does not make the planner a slalom. The path still holds one
-        # apex and returns to the raceline, so two obstacles that block both
-        # sides between them still cannot be solved here. It only stops a side
-        # being chosen when it is already occupied, which is enough whenever
-        # the other side is open.
+        # It compared the APEX value against obstacles metres away in s, where
+        # the path has long since returned to the raceline. The apex is a
+        # single point; the path is a cubic that decays to zero by the last
+        # control point. Below, the path's real offset at that obstacle's s is
+        # what gets tested - a spline on fixed knots is linear in its control
+        # values, and only the apex is non-zero, so path_d = apex_d * shape(s).
+        #
+        # And it vetoed a side even when the raceline was no better. That is
+        # what made two obstacles on the SAME side unsolvable: dodging the
+        # near one left put the apex inside the far one's widened band, and
+        # swinging right put it there too, so both sides were refused and
+        # nothing was published at all - the car crept up to an obstacle it
+        # had a clear way around. On the car: right-then-right and
+        # left-then-left stalled, while right-then-left and left-then-right
+        # were fine, because in the staggered cases one side always survived.
+        #
+        # So the test is comparative: refuse a side only if it leaves LESS
+        # room at some other obstacle than simply staying on the raceline
+        # would have. An obstacle the raceline does not clear either is not
+        # this path's problem - the car avoids what it can reach and the next
+        # cycle plans for the rest, which is the same rule the state machine
+        # applies past the end of a path.
         obstacle_ahead = (obstacle.s_center - cur_s) % max_s
         span_start = obstacle_ahead + offsets[0]
         span_end = obstacle_ahead + offsets[-1]
+        unit_apex = np.zeros_like(offsets)
+        unit_apex[3] = 1.0
+        shape = CubicSpline(apex_s + offsets, unit_apex, bc_type='natural')
+
+        def clearance(d, other):
+            """Signed room between a path at d and an obstacle. Negative inside."""
+            if d >= other.d_left:
+                return d - other.d_left
+            if d <= other.d_right:
+                return other.d_right - d
+            return -min(d - other.d_right, other.d_left - d)
 
         def occupied_by(apex_d):
             for other in candidates:
@@ -283,22 +306,26 @@ class SplineNode(Node):
                 ahead = (other.s_center - cur_s) % max_s
                 if not span_start <= ahead <= span_end:
                     continue
-                if (other.d_right - self.evasion_distance < apex_d <
-                        other.d_left + self.evasion_distance):
-                    return other
+                path_d = apex_d * float(shape(apex_s + ahead - obstacle_ahead))
+                # 5 cm, not zero. Between control points the cubic overshoots
+                # by a centimetre or two even where the path is nominally back
+                # on the raceline, and a side must not be chosen on that.
+                if clearance(path_d, other) < clearance(0.0, other) - 0.05:
+                    return other, path_d
             return None
 
         left_taken = occupied_by(left_apex)
         right_taken = occupied_by(right_apex)
         left_ok = left_room >= self.boundary_margin and left_taken is None
         right_ok = right_room >= self.boundary_margin and right_taken is None
-        for taken, name, apex in ((left_taken, 'left', left_apex),
-                                  (right_taken, 'right', right_apex)):
+        for taken, name in ((left_taken, 'left'), (right_taken, 'right')):
             if taken is not None:
+                other, path_d = taken
                 self.get_logger().info(
-                    f"{name} of the obstacle at s={apex_s:.2f} is taken: an apex at "
-                    f"d={apex:+.2f} lands in the obstacle at s={taken.s_center:.2f} "
-                    f"(d {taken.d_right:+.2f}..{taken.d_left:+.2f})",
+                    f"not going {name} of the obstacle at s={apex_s:.2f}: that path "
+                    f"passes the obstacle at s={other.s_center:.2f} "
+                    f"(d {other.d_right:+.2f}..{other.d_left:+.2f}) at d={path_d:+.2f}, "
+                    f"closer than the raceline would",
                     throttle_duration_sec=2.0)
         # A negative left_apex (or positive right_apex) means the obstacle's
         # near edge is already further from the raceline than evasion_distance
