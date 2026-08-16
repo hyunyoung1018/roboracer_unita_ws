@@ -43,7 +43,16 @@ def _path_heading_and_curvature(x, y):
 
 
 class SplineNode(Node):
-    """Generate a local overtaking line around the nearest relevant obstacle."""
+    """Generate a local avoidance line around every obstacle in the way.
+
+    The path is a single corridor: it leaves the raceline before the first
+    obstacle it has to pass, holds one lateral offset that clears all of them,
+    and returns after the last. Earlier it apexed on the NEAREST obstacle alone
+    and was back on the raceline 1.2 * scale metres later, so a second obstacle
+    anywhere in the return leg sat on the published path - which the state
+    machine then measured and refused, correctly, leaving the car trailing two
+    obstacles it had the room to drive around.
+    """
 
     def __init__(self):
         super().__init__('spline_node')
@@ -66,6 +75,18 @@ class SplineNode(Node):
             'path_hold_s': 0.3,
             'side_hysteresis_m': 0.10,
             'raceline_clearance_m': 0.50,
+            # [m] How far past the first obstacle the corridor may reach to
+            # pick up further ones. Beyond this the path is planned for what it
+            # can hold and the next replan takes over - a corridor longer than
+            # this holds an offset across more track than the boundary check
+            # can be expected to admit on a 1.0 to 1.9 m wide map.
+            'corridor_max_len_m': 8.0,
+            # [m] Spacing of the control points that hold the offset between
+            # the first and last obstacle. Without them a cubic through two
+            # equal knots bulges between them; the samples are clipped to the
+            # planned offset anyway, but flat control points keep the curvature
+            # - and therefore the speed the controller picks - honest.
+            'corridor_point_spacing_m': 1.0,
             'measure': False,
         }
         for name, value in defaults.items():
@@ -96,6 +117,10 @@ class SplineNode(Node):
         self.side_hysteresis_m = float(self.get_parameter('side_hysteresis_m').value)
         self.raceline_clearance_m = float(
             self.get_parameter('raceline_clearance_m').value)
+        self.corridor_max_len_m = float(
+            self.get_parameter('corridor_max_len_m').value)
+        self.corridor_point_spacing_m = max(
+            0.2, float(self.get_parameter('corridor_point_spacing_m').value))
         self.measure = bool(self.get_parameter('measure').value)
 
     def _parameter_cb(self, params):
@@ -108,6 +133,8 @@ class SplineNode(Node):
             'path_hold_s': 'path_hold_s',
             'side_hysteresis_m': 'side_hysteresis_m',
             'raceline_clearance_m': 'raceline_clearance_m',
+            'corridor_max_len_m': 'corridor_max_len_m',
+            'corridor_point_spacing_m': 'corridor_point_spacing_m',
             'measure': 'measure',
         }
         for parameter in params:
@@ -186,6 +213,29 @@ class SplineNode(Node):
         self.get_logger().info(f"no avoidance path: {reason}", throttle_duration_sec=2.0)
         return out
 
+    def _raceline_clears(self, obstacle):
+        """Does the raceline itself already pass this obstacle?
+
+        The near edge has to be raceline_clearance_m clear of d=0 on one side or
+        the other. That number is tuned to equal what the state machine calls a
+        blocked raceline (gb_ego_width_m/2 + global_tracking's lateral_width_m),
+        so a False here is the same judgement the state machine makes when it
+        starts looking for a way around.
+        """
+        return (obstacle.d_right >= self.raceline_clearance_m
+                or -obstacle.d_left >= self.raceline_clearance_m)
+
+    def _tightest_bounds(self, s_values, reference, start_s, end_s, max_s):
+        """Narrowest track bounds over an s range, sampled at 0.25 m."""
+        length = max(0.0, end_s - start_s)
+        count = int(np.ceil(length / 0.25)) + 1
+        samples = (np.linspace(start_s, end_s, count) if count > 1
+                   else np.asarray([start_s])) % max_s
+        indices = np.argmin(
+            np.abs(s_values[None, :] - samples[:, None]), axis=1)
+        return (min(reference[int(i)].d_left for i in indices),
+                min(reference[int(i)].d_right for i in indices))
+
     def _plan(self):
         out = OTWpntArray()
         out.header.stamp = self.get_clock().now().to_msg()
@@ -212,18 +262,42 @@ class SplineNode(Node):
                     throttle_duration_sec=2.0)
             self.last_side = None
             return out
-        obstacle = min(candidates, key=lambda item: (item.s_center - cur_s) % max_s)
         reference = self.scaled_msg.wpnts
         s_values = np.asarray([w.s_m for w in reference])
-        apex_s = obstacle.s_center
-        ref_idx = int(np.argmin(np.abs(s_values - (apex_s % max_s))))
-        ref = reference[ref_idx]
 
-        # How far the path reaches, which the side choice below needs: an apex
+        def ahead(item):
+            return (item.s_center - cur_s) % max_s
+
+        candidates.sort(key=ahead)
+
+        # Only obstacles the RACELINE does not already clear are worth a path,
+        # and the FIRST such one leads the corridor.
+        #
+        # This used to be decided after the side was chosen and on the nearest
+        # candidate alone: if that one happened to sit far enough off the line
+        # the planner answered "nothing to avoid" and published nothing - even
+        # with a second obstacle two metres later sitting on the line. The state
+        # machine then asked for an avoidance that never came and the car
+        # trailed forever. raceline_clearance_m is tuned to equal what the state
+        # machine calls a blocked raceline, so the two agree about WHETHER an
+        # obstacle is in the way; they also have to agree about WHICH one.
+        blocking = [o for o in candidates if not self._raceline_clears(o)]
+        if not blocking:
+            nearest = candidates[0]
+            return self._bail(
+                out,
+                f"raceline already clears all {len(candidates)} obstacle(s) in "
+                f"range: nearest is at s={nearest.s_center:.2f} with edges "
+                f"{nearest.d_right:+.2f}..{nearest.d_left:+.2f} m, and this "
+                f"planner only moves off the line inside "
+                f"{self.raceline_clearance_m:.2f} m of it")
+
+        # How far the path reaches, which the side choice below needs: an offset
         # is only usable if the rest of what this path drives through is clear.
         #
-        # Control points around the apex, in metres of s. Only the apex is
-        # offset laterally; the rest hold the path on the raceline.
+        # Control points, in metres of s relative to the first and last obstacle
+        # the corridor covers. Only the hold region is offset laterally; the
+        # approach and the return hold the path on the raceline.
         #
         # Was [-4.0, -3.0, -1.5, 0.0, 2.0, 3.0, 4.5]. The return leg is
         # shortened because it became the only remaining reason avoidance
@@ -250,12 +324,125 @@ class SplineNode(Node):
         # already committed.
         speed = max(1.0, abs(self.odom.twist.twist.linear.x))
         scale = np.clip(1.0 + speed / max(1.0, max(w.vx_mps for w in reference)), 1.0, 1.5)
-        offsets = np.asarray([-4.0, -3.0, -1.5, 0.0, 1.2, 2.0, 3.0]) * scale
+        approach = np.asarray([-4.0, -3.0, -1.5]) * scale
+        retreat = np.asarray([1.2, 2.0, 3.0]) * scale
 
-        left_apex = obstacle.d_left + self.evasion_distance
-        right_apex = obstacle.d_right - self.evasion_distance
-        left_room = ref.d_left - left_apex
-        right_room = ref.d_right + right_apex
+        # Everything the path has to get past, not just the first thing in the
+        # way.
+        #
+        # The return leg is why this matters. It brings the path back to d=0
+        # within retreat[0] of the last obstacle it knows about and holds it
+        # there to the end, so an obstacle still near the raceline inside that
+        # stretch is ON the published path. The state machine measures exactly
+        # that and refuses - "path is at d=0.000, free -0.09" in its logs - and
+        # no amount of choosing the apex better changes it, because the apex is
+        # not where the collision is.
+        #
+        # It is also what separated the two failures seen on the car. Two
+        # obstacles in a LINE stopped it; two staggered left/right did not.
+        # Staggered ones get placed near the walls, where a return leg at d=0
+        # clears them; in-line ones sit where the first one was, which is the
+        # one place the return leg is guaranteed to go.
+        #
+        # So the corridor grows while the return leg would land on something:
+        # take the next blocking obstacle within retreat[-1] of the current last
+        # member, and repeat. What comes out is one offset held from the first
+        # obstacle to the last, with the return after all of them.
+        gaps = [ahead(o) for o in blocking]
+        obstacle = blocking[0]
+        apex_s = obstacle.s_center
+        leader_gap = gaps[0]
+
+        def corridor_geometry(members):
+            """Offset, rooms and bounds for a corridor covering `members`.
+
+            Unwrapped forward from the leader so the control points stay
+            monotonic across the s=0 seam. Room is taken at the TIGHTEST point
+            of the hold region, not at the leader: the offset is held over the
+            whole of it, so the narrowest track anywhere in there is what
+            decides. One member means one sample, i.e. the old check.
+            """
+            member_s = [apex_s + (o.s_center - apex_s) % max_s for o in members]
+            left = max(o.d_left for o in members) + self.evasion_distance
+            right = min(o.d_right for o in members) - self.evasion_distance
+            bound_left, bound_right = self._tightest_bounds(
+                s_values, reference, member_s[0], member_s[-1], max_s)
+            return (member_s, left, right,
+                    bound_left - left, bound_right + right,
+                    bound_left, bound_right)
+
+        group_idx = [0]
+        while True:
+            last = group_idx[-1]
+            following = next(
+                (i for i in range(last + 1, len(blocking))
+                 if gaps[i] > gaps[last] + 1e-3), None)
+            if following is None or gaps[following] > gaps[last] + retreat[-1]:
+                break
+            if gaps[following] - gaps[0] > self.corridor_max_len_m:
+                self.get_logger().info(
+                    f"obstacle at s={blocking[following].s_center:.2f} is "
+                    f"{gaps[following] - gaps[0]:.2f} m past the first one, over "
+                    f"the {self.corridor_max_len_m:.2f} m corridor limit - "
+                    f"planning for the first {len(group_idx)} and letting the "
+                    f"next replan pick up the rest",
+                    throttle_duration_sec=2.0)
+                break
+            # Only widen the corridor if the wider one is still drivable.
+            #
+            # Obstacles on OPPOSITE sides cannot share an offset - covering both
+            # means holding max(d_left)+evasion or min(d_right)-evasion, which on
+            # a track this wide is off it. Merging them anyway turned the case
+            # that already worked (staggered left/right, where the return leg
+            # passes between them) into a refusal. So stop the corridor here and
+            # publish the shorter one: the return leg clears an obstacle that is
+            # far enough off the line, occupied_by refuses the side if it does
+            # not, and the next replan gets the rest.
+            trial = [blocking[i] for i in group_idx + [following]]
+            _, trial_left, trial_right, trial_lroom, trial_rroom, _, _ = \
+                corridor_geometry(trial)
+            if max(trial_lroom, trial_rroom) < self.boundary_margin:
+                self.get_logger().info(
+                    f"not widening the corridor to the obstacle at "
+                    f"s={blocking[following].s_center:.2f}: covering it too would "
+                    f"need d={trial_left:+.2f} or {trial_right:+.2f}, leaving "
+                    f"{trial_lroom:.2f}/{trial_rroom:.2f} m against a "
+                    f"{self.boundary_margin:.2f} m margin - planning for the "
+                    f"first {len(group_idx)}",
+                    throttle_duration_sec=2.0)
+                break
+            group_idx.append(following)
+        group = [blocking[i] for i in group_idx]
+
+        (member_s, left_apex, right_apex, left_room, right_room,
+         bound_left, bound_right) = corridor_geometry(group)
+        first_s, last_s = member_s[0], member_s[-1]
+
+        # Control points: approach on the raceline, the offset held at every
+        # member (and at corridor_point_spacing_m in between, so the cubic runs
+        # flat rather than bulging between two equal knots), then the return.
+        # For a single obstacle the hold region is one point and this is exactly
+        # the seven-point layout it has always been.
+        hold_s = [first_s]
+        for s in member_s[1:]:
+            while s - hold_s[-1] > self.corridor_point_spacing_m:
+                hold_s.append(hold_s[-1] + self.corridor_point_spacing_m)
+            if s - hold_s[-1] >= 0.05:
+                hold_s.append(s)
+            else:
+                hold_s[-1] = s
+        control_s = np.concatenate(
+            (first_s + approach, np.asarray(hold_s, dtype=float), last_s + retreat))
+        hold_mask = np.concatenate(
+            (np.zeros(len(approach)), np.ones(len(hold_s)), np.zeros(len(retreat))))
+
+        # corridor_geometry above takes the offset from EVERY member, not just
+        # the leader. Taking it from the leader alone was the other half of the
+        # same bug: a second obstacle reaching a centimetre further towards the
+        # line than the first put the leader's apex inside it, that side was
+        # refused, and the only side left was the squeeze between the leader and
+        # the wall - which never has room. The answer to "another obstacle
+        # overlaps my apex" is to move the apex over, not to give up the side.
 
         # Do not dodge INTO another obstacle - but only judge that where the
         # path actually is.
@@ -280,16 +467,19 @@ class SplineNode(Node):
         #
         # So the test is comparative: refuse a side only if it leaves LESS
         # room at some other obstacle than simply staying on the raceline
-        # would have. An obstacle the raceline does not clear either is not
-        # this path's problem - the car avoids what it can reach and the next
-        # cycle plans for the rest, which is the same rule the state machine
-        # applies past the end of a path.
-        obstacle_ahead = (obstacle.s_center - cur_s) % max_s
-        span_start = obstacle_ahead + offsets[0]
-        span_end = obstacle_ahead + offsets[-1]
-        unit_apex = np.zeros_like(offsets)
-        unit_apex[3] = 1.0
-        shape = CubicSpline(apex_s + offsets, unit_apex, bc_type='natural')
+        # would have.
+        #
+        # Group members are exempt. The offset above is built to clear all of
+        # them, and the corridor holds it across all of them, so testing them
+        # here would veto the very path that solves them. What is left is what
+        # the veto was always meant to catch - something the corridor does not
+        # cover and cannot be widened to cover - and a refusal is now honest:
+        # the manoeuvre really is not expressible as one corridor.
+        span_start = leader_gap + approach[0]
+        span_end = gaps[group_idx[-1]] + retreat[-1]
+        # The spline is linear in its control values and only the hold points
+        # are non-zero, so the path's offset at any s is apex_d * shape(s).
+        shape = CubicSpline(control_s, hold_mask, bc_type='natural')
 
         def clearance(d, other):
             """Signed room between a path at d and an obstacle. Negative inside."""
@@ -301,12 +491,19 @@ class SplineNode(Node):
 
         def occupied_by(apex_d):
             for other in candidates:
-                if other is obstacle:
+                if any(other is member for member in group):
                     continue
-                ahead = (other.s_center - cur_s) % max_s
-                if not span_start <= ahead <= span_end:
+                other_ahead = ahead(other)
+                if not span_start <= other_ahead <= span_end:
                     continue
-                path_d = apex_d * float(shape(apex_s + ahead - obstacle_ahead))
+                # Clipped exactly as the samples are below. Without this the
+                # veto reads the natural cubic's undershoot in the approach ramp
+                # - which is on the far side of the raceline and gets clipped
+                # away before anything is published - and refuses a side over an
+                # offset the path never has.
+                path_d = float(np.clip(
+                    apex_d * float(shape(apex_s + other_ahead - leader_gap)),
+                    min(0.0, apex_d), max(0.0, apex_d)))
                 # 5 cm, not zero. Between control points the cubic overshoots
                 # by a centimetre or two even where the path is nominally back
                 # on the raceline, and a side must not be chosen on that.
@@ -327,12 +524,6 @@ class SplineNode(Node):
                     f"(d {other.d_right:+.2f}..{other.d_left:+.2f}) at d={path_d:+.2f}, "
                     f"closer than the raceline would",
                     throttle_duration_sec=2.0)
-        # A negative left_apex (or positive right_apex) means the obstacle's
-        # near edge is already further from the raceline than evasion_distance
-        # - the line clears it as it is. Clamping that to 0.0 published the
-        # raceline itself as an "avoidance path", which the state machine then
-        # measured against the obstacle and refused, over and over. Say so and
-        # publish nothing instead: there is nothing to avoid.
         # Stick to the side already chosen unless the other is clearly better.
         #
         # The two are often within a couple of centimetres of each other, and
@@ -348,43 +539,27 @@ class SplineNode(Node):
         elif self.last_side == 'right':
             bias = -self.side_hysteresis_m
 
+        # "The raceline already clears it" is decided up front now, on the whole
+        # candidate list rather than on whichever obstacle happened to be
+        # nearest. Deciding it here meant a leader that was clear of the line
+        # aborted the plan for the ones behind it that were not.
         if left_ok and (not right_ok or left_room + bias >= right_room):
-            # Bailing here and clamping the apex to the raceline are NOT the
-            # same thing. Clamping publishes the raceline as an avoidance
-            # path, the state machine measures it against the obstacle that
-            # made it plan in the first place, and refuses - which is what
-            # "apex d=0.00" in the logs was. If there is nothing to avoid,
-            # say so and publish nothing.
-            if -obstacle.d_left >= self.raceline_clearance_m:
-                return self._bail(
-                    out,
-                    f"raceline already clears the obstacle at s={apex_s:.2f} on the "
-                    f"left (its edge is {-obstacle.d_left:.2f} m to the right of the "
-                    f"line, needs {self.raceline_clearance_m:.2f})")
             side, apex_d = 'left', left_apex
         elif right_ok:
-            if obstacle.d_right >= self.raceline_clearance_m:
-                return self._bail(
-                    out,
-                    f"raceline already clears the obstacle at s={apex_s:.2f} on the "
-                    f"right (its edge is {obstacle.d_right:.2f} m to the left of the "
-                    f"line, needs {self.raceline_clearance_m:.2f})")
             side, apex_d = 'right', right_apex
         else:
             return self._bail(
                 out,
-                f"no room either side of obstacle at s={apex_s:.2f}: "
+                f"no room either side of the {len(group)} obstacle(s) from "
+                f"s={first_s % max_s:.2f} to s={last_s % max_s:.2f}: "
                 f"left {left_room:.2f} m{' (taken)' if left_taken else ''}, "
                 f"right {right_room:.2f} m{' (taken)' if right_taken else ''}, "
                 f"need {self.boundary_margin:.2f} "
-                f"(obstacle {obstacle.d_left - obstacle.d_right:.2f} m wide "
-                f"at d {obstacle.d_center:+.2f}, track "
-                f"{ref.d_left + ref.d_right:.2f} m, "
+                f"(corridor must hold d={left_apex:+.2f} or {right_apex:+.2f}, "
+                f"tightest track {bound_left + bound_right:.2f} m, "
                 f"evasion_distance {self.evasion_distance:.2f})")
 
-        control_s = apex_s + offsets
-        control_d = np.zeros_like(control_s)
-        control_d[3] = apex_d
+        control_d = np.where(hold_mask > 0.5, apex_d, 0.0)
         spline = CubicSpline(control_s, control_d, bc_type='natural')
         sample_unwrapped = np.arange(control_s[0], control_s[-1], self.resolution)
         sample_d = np.clip(spline(sample_unwrapped), min(0.0, apex_d), max(0.0, apex_d))
@@ -446,8 +621,10 @@ class SplineNode(Node):
         out.ot_line = side
         self.last_side = side
         self.get_logger().info(
-            f"avoiding {side} around obstacle at s={apex_s:.2f}: "
-            f"apex d={apex_d:.2f} m, {len(out.wpnts)} waypoints over "
+            f"avoiding {side} around {len(group)} obstacle(s) at "
+            f"s={', '.join(f'{o.s_center:.2f}' for o in group)}: "
+            f"corridor d={apex_d:.2f} m held over s {first_s:.2f}..{last_s:.2f}, "
+            f"{len(out.wpnts)} waypoints over "
             f"s {control_s[0]:.2f}..{control_s[-1]:.2f}",
             throttle_duration_sec=2.0)
         return out
