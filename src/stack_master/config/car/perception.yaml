@@ -197,6 +197,15 @@ spline_node:
     # The held path keeps its ORIGINAL stamp, so this is not a way of faking
     # freshness: the state machine's own latest_threshold still decides, and
     # _check_on_spline still drops it once the car is not near it.
+    #
+    # Head-to-head does not want this lower. This node reads
+    # /tracking/static_obstacles in both modes - h2h_spline_node is remapped to
+    # it, and the opponent reaches it only through /tracking/dynamic_obstacles,
+    # which it uses to pick a side and never to plan around. So a held path
+    # here always describes stationary obstacles, which is exactly the case
+    # where holding it is sound. Moving obstacles are a different chain
+    # entirely: prediction -> lane change -> otwpnts -> dynamic_avoidance_
+    # planner, with its own freshness threshold.
     path_hold_s: 1.0
 
     # [m] How much wider the other side must be before the planner switches

@@ -35,11 +35,19 @@ free_scaling_reference_distance_m: 2.0
 # had an avoidance to follow about a tenth of the time and drove the raceline
 # the rest, which is what "the path is drawn and it goes straight" was.
 #
-# Safe because the obstacles here are stationary: a path drawn for a cone a
-# second ago is still a path around that cone. _check_on_spline independently
-# requires the car to still be on it, so a stale path that no longer fits gets
-# dropped on its own. Turn this back down for head-to-head, where a second-old
-# path describes an opponent that has moved.
+# Safe because the obstacles on this topic are stationary in BOTH modes, not
+# just in time trials. static_otwpnts is fed by spline_node, and in
+# head-to-head by h2h_spline_node, which is remapped to
+# /tracking/static_obstacles; the opponent reaches that node only through
+# /tracking/dynamic_obstacles and is used to choose a side, never to plan
+# around. A path drawn for a cone a second ago is still a path around that
+# cone. Moving obstacles have their own chain and their own threshold in
+# dynamic_avoidance_planner.yaml.
+#
+# Two things still drop a held path on their own: _check_on_spline needs the
+# car to still be near it, and _check_free_frenet re-tests the cached path
+# against the CURRENT obstacle list every tick - so if an opponent has moved
+# into it since, it is refused on that basis rather than on its age.
 latest_threshold: 1.0
 hyst_timer_sec: 4.0
 killing_timer_sec: 10.0
