@@ -1,20 +1,21 @@
 <?xml version="1.0"?>
 <!--
-  time_trials.launch.xml - drive the saved raceline, alone, no obstacles.
+  time_trials.launch.xml - drive the saved raceline, avoiding what is on it.
 
   Sits on top of localization.launch.xml, which it includes. Pick a map that
   has been through raceline_generator and the car follows its global waypoints.
 
       ros2 launch stack_master time_trials.launch.xml map:=<name>
 
-  The driving half of the stack, with the obstacle half optional:
+  The driving half of the stack, plus the obstacle half (obstacles:=false
+  drops it for a clean timed lap):
 
       state_machine     /global_waypoints_scaled + /global_waypoints/overtaking
                         -> /behavior_strategy, /local_waypoints
       controller_manager that -> /vesc/high_level/ackermann_cmd
       simple_mux        arbitrates controller vs joystick -> /vesc/ackermann_cmd
 
-  obstacles:=true adds static obstacle avoidance:
+  The obstacle half, on unless obstacles:=false:
 
       detect       /scan            -> /detect/raw_obstacles
       tracking     those            -> /tracking/obstacles     (sets is_static)
@@ -119,8 +120,10 @@
   <arg name="map" description="Map name (folder under stack_master/maps/)"/>
   <arg name="localization" default="true"
        description="Bring up localisation too. false if it is already running."/>
-  <arg name="obstacles" default="false"
-       description="Static obstacle avoidance: perception + the spline planner"/>
+  <arg name="obstacles" default="true"
+       description="Static obstacle avoidance: perception + the spline planner.
+                    On by default - obstacles are the normal case now, and the
+                    clean-lap run is obstacles:=false"/>
 
   <!-- ===== race day ===== -->
   <arg name="relocalize" default="true"

@@ -81,6 +81,13 @@ class ParticleFiler(Node):
         self.declare_parameter('range_method', descriptor=dyn)
         self.declare_parameter('rangelib_variant', descriptor=dyn)
         self.declare_parameter('fine_timing', descriptor=dyn)
+        # The 'iters per sec / possible' line. It was the whole diagnostic for
+        # the localisation decay - `possible` is 1/(one MCL wall-time), so it
+        # reads how hard the filter is working - but at once every ten
+        # iterations it is also the loudest thing in the log. Off by default;
+        # turn it back on live when that number matters again:
+        #   ros2 param set /particle_filter timing_log 1
+        self.declare_parameter('timing_log', descriptor=dyn)
         self.declare_parameter('publish_odom', descriptor=dyn)
         # Default matters: the parameter must not be required. False is also the
         # right default here - the EKF downstream owns map -> base_link, and if
@@ -119,6 +126,7 @@ class ParticleFiler(Node):
         self.WHICH_RM             = self.get_parameter('range_method').value
         self.RANGELIB_VAR         = self.get_parameter('rangelib_variant').value
         self.SHOW_FINE_TIMING     = self.get_parameter('fine_timing').value
+        self.TIMING_LOG           = bool(self.get_parameter('timing_log').value)
         self.PUBLISH_ODOM         = self.get_parameter('publish_odom').value
         self.PUBLISH_TF           = self.get_parameter('publish_tf').value
         self.MAP_FRAME            = self.get_parameter('map_frame').value
@@ -825,7 +833,7 @@ class ParticleFiler(Node):
                 # this is for tracking particle filter speed
                 ips = 1.0 / (t2 - t1)
                 self.smoothing.append(ips)
-                if self.iters % 10 == 0:
+                if self.TIMING_LOG and self.iters % 10 == 0:
                     self.get_logger().info(str(['iters per sec:', int(self.timer.fps()), ' possible:', int(self.smoothing.mean())]))
 
                 self.visualize()

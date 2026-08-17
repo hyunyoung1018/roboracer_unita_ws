@@ -27,6 +27,9 @@ particle_filter:
     # range data filtering. Matches the UST-10LX's guaranteed range.
     max_range: 10
     fine_timing: 0
+    # The periodic "iters per sec / possible" line. See timing_log in
+    # particle_filter.py - flip it live when localisation needs watching.
+    timing_log: 0
     publish_odom: 1
     # sensor model constants
     z_short: 0.01
