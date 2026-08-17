@@ -196,7 +196,15 @@ spline_node:
     # Three numbers, one threshold:
     #   raceline_clearance_m == evasion_distance
     #                        == gb_ego_width_m/2 + lateral_width_m
-    raceline_clearance_m: 0.24
+    #
+    # 0.24 -> 0.30. Measured on the car: a box with its near edge at 0.27 m
+    # was waved through by all three checks at once and hit - 3 cm of margin
+    # on an edge the detector moves by +/-10 cm between frames. 0.30 makes
+    # the pass-or-avoid call at 16 cm of true side clearance instead of 10.
+    # global_tracking.yaml moves to 0.16 with this; head-to-head stays at its
+    # own 0.24 pairing via dynamic_perception.yaml and
+    # dynamic_state_machine_params.yaml.
+    raceline_clearance_m: 0.30
 
     lookahead: 10.0
 
@@ -407,7 +415,16 @@ spline_node:
     # 0.14, so 10 cm. Do not go under 0.22 without lowering that floor again,
     # and do not lower it to zero: the free check would then have no margin
     # for the centimetre or two of noise in the obstacle's measured edge.
-    evasion_distance: 0.24
+    #
+    # 0.24 -> 0.30, back up with the pass-or-avoid threshold (see
+    # raceline_clearance_m above - the trio moves together). At 0.24 the
+    # member check ran with 1 cm of slack on the car ("free +0.013, needs
+    # 0.050") and a box at 0.27 was driven through; both are inside the edge
+    # noise. The ceiling measured above is 0.33, so the tightest obstacle on
+    # this track now has 3 cm to give - if "no room either side" or "path
+    # leaves the track" bails reappear there, step the trio down together
+    # (0.27 / 0.27 / 0.13) rather than lowering this value alone.
+    evasion_distance: 0.30
 
     trajectory_threshold: 0.6
 

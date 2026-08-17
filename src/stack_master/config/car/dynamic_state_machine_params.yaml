@@ -50,6 +50,15 @@ state_machine:
     # time_trials - unchanged. cur_avoidance_wpnts is never initialised in
     # time_trials (nothing publishes /planner/avoidance/otwpnts there), but the
     # overlay makes that independent of the argument.
+    # time_trials moved the shared pass-or-avoid threshold to 0.30
+    # (global_tracking.yaml lateral_width_m 0.16). Head-to-head's spline is
+    # still pinned at evasion/raceline_clearance 0.24 by
+    # dynamic_perception.yaml, and the three numbers must agree or the state
+    # machine asks for avoidances the planner refuses to draw. Keep
+    # head-to-head on the 0.24 pairing it was tuned on.
+    global_tracking:
+      lateral_width_m: 0.10
+
     dynamic_avoidance_planner:
       # [s] How long a cached avoidance path keeps being sliced into
       # local_waypoints after the planner stopped publishing. Was 6.0 / 10.0.
