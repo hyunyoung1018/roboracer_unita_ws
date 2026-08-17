@@ -51,7 +51,7 @@ detect:
     # This is the grid's ONLY parameter. Everything else it needs - resolution,
     # origin, and what counts as free - is read from the map's own yaml, so a
     # grid that behaves oddly is a map problem, not a tuning one.
-    filter_kernel_size: 6
+    filter_kernel_size: 4
 
     # Minimum number of LiDAR points in a cluster.
     #

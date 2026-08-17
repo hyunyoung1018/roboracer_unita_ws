@@ -4,61 +4,50 @@
 # time_trials loads. Everything here exists because the opponent is not a box:
 #
 #   the box       0.50 x 0.50, stationary, placed near the middle of the track
-#   the opponent  a 0.12 x 0.12 detection pillar on a car our own size,
+#   the opponent  a 0.12 x 0.12 detection pillar on a car 0.24 x 0.325,
 #                 moving, and racing - so it uses the walls
 #
-# Split out from head_to_head_perception.yaml and head_to_head_spline.yaml,
-# which were two files for one idea and, more to the point, were never loaded
-# by `detect` at all. The detector ran on box parameters against a 12 cm
-# target for as long as head to head has existed.
-
-detect:
-  ros__parameters:
-    # A 12 cm pillar at this lidar's 0.25 deg resolution:
-    #
-    #   1 m -> 27 beams   3 m -> 9   3.4 m -> 8   5 m -> 5.5   9 m -> 3
-    #
-    # so the box's min_size_n of 8 made the opponent vanish beyond 3.4 m -
-    # while the state machine looks 8 to 9 m ahead (gb_horizon_m,
-    # interest_horizon_m). It only existed once it was nearly under the wheels,
-    # which is not something trailing can be built on. 3 carries it to 9 m and
-    # matches those horizons.
-    #
-    # The cost is that three stray returns can become an obstacle. What makes
-    # that affordable is max_detect_d_m being enforced on the fitted obstacle
-    # rather than per point - without that, this number would fill the tracker
-    # with scenery.
-    min_size_n: 3
-
-    # The pillar measures 0.12. Flooring a MEASUREMENT at 0.20 throws away the
-    # one honest thing about it; the believed footprint is set below, in
-    # tracking, where it belongs.
-    min_size_m: 0.10
-
-    # 0.30 m of erosion erases anything within 30 cm of a wall. A box we place
-    # in the middle of the track; an opponent racing us uses every centimetre
-    # of the outside line, which is exactly where it disappears.
-    filter_kernel_size: 3
+# NO `detect:` SECTION, DELIBERATELY. It had one - min_size_n 3, min_size_m
+# 0.10, filter_kernel_size 6 -> 3 - to carry the pillar out to 9 m, and it
+# worked, at the price its own comment predicted: three stray returns became an
+# obstacle and thinner wall erosion left wall fragments standing. On the car
+# that cost more than it bought. With two or more static obstacles the spline
+# corridor picked the phantoms up as members and the avoidance stopped working,
+# where the identical obstacles under time_trials' detector were cleared every
+# time. head_to_head.launch.xml now loads perception.yaml alone on `detect`, so
+# BOTH launches detect identically and there is one detector to tune.
+#
+# What is left here is the same knowledge moved downstream of classification:
+# detect everything as a box, and once the tracker has confirmed a track is
+# MOVING, believe it is a car. That is the tracking block below, and it cannot
+# fire on a static obstacle - see h2h_tracking_node._is_confirmed_moving.
 
 tracking:
   ros__parameters:
-    # A FLOOR, and the reason this file exists.
+    # A FLOOR on a CONFIRMED-MOVING track, and the reason this file still
+    # exists. Static obstacles never reach it.
     #
-    # dynamic_extent_max_m below is a ceiling, and a ceiling over a 12 cm
-    # measurement leaves a believed footprint far smaller than the car it is
-    # bolted to. We know what a dynamic obstacle is here - there is one other
-    # car on the track - so believe the car rather than the pillar.
+    # The opponent is detected off a 0.12 m pillar bolted to a car, so the
+    # measurement is honest about the pillar and useless about the car. There
+    # is one other car on the track and we know its size - believe the car.
     #
-    # 0.29 is the circumscribed radius of a 0.28 x 0.50 car: sqrt(0.28^2 +
-    # 0.50^2)/2. A disc, so no yaw estimate is needed and no orientation
-    # under-reads - a car at 45 deg to the track tangent presents 0.28 in both
-    # Frenet axes where head-on it presents 0.14 and 0.25. Trailing is the
-    # first goal and this is the conservative way round; lower it when
-    # overtaking wants the gap back.
-    dynamic_extent_min_m: 0.29
+    # 0.202 is the circumscribed radius of a 0.24 x 0.325 car:
+    # sqrt(0.24^2 + 0.325^2)/2 = 0.2020. A disc, so no yaw estimate is needed
+    # and no orientation under-reads - a car at 45 deg to the track tangent
+    # presents more in both Frenet axes than it does head-on, and the disc is
+    # the worst case of that rotation. It does mean the believed footprint is
+    # 0.40 across rather than the car's 0.24, which is the price of not
+    # estimating yaw off a 12 cm pillar.
+    #
+    # WAS 0.29, the circumscribed radius of 0.28 x 0.50 - our own car's
+    # dimensions, not the opponent's. That is 0.58 across, and on a 1.0 to
+    # 1.9 m track it was eating the gap the overtake needs.
+    dynamic_extent_min_m: 0.202
 
-    # Raised from 0.34 to match: the floor above would otherwise fight it.
-    dynamic_extent_max_m: 0.60
+    # Ceiling, applied as max/2 = 0.21, i.e. the floor plus a centimetre. Not
+    # pinned exactly: a frame that genuinely measures wider than the disc
+    # should not be clamped below what was seen.
+    dynamic_extent_max_m: 0.42
 
     # A car's Frenet extents change with its yaw against the track tangent, not
     # with how much of it the lidar has seen, so the running maximum has to

@@ -41,8 +41,8 @@ class HeadToHeadTrackingNode(TrackingNode):
     def __init__(self):
         super().__init__()
         for name, default in (
-            ('dynamic_extent_min_m', 0.29),
-            ('dynamic_extent_max_m', 0.34),
+            ('dynamic_extent_min_m', 0.202),
+            ('dynamic_extent_max_m', 0.42),
             ('dynamic_extent_decay_mps', 0.5),
         ):
             if not self.has_parameter(name):
@@ -98,13 +98,19 @@ class HeadToHeadTrackingNode(TrackingNode):
         ceiling = float(self.get_parameter('dynamic_extent_max_m').value) / 2.0
         # A floor as well as a ceiling, and it is the floor that matters.
         #
-        # The opponent is detected off a 0.12 m pillar bolted to a car of our
-        # own size, so the measurement is honest about the pillar and useless
-        # about the car. There is one other car on the track - believe the car.
+        # The opponent is detected off a 0.12 m pillar bolted to a car, so the
+        # measurement is honest about the pillar and useless about the car.
+        # There is one other car on the track - believe the car.
         #
-        # 0.29 is the circumscribed radius of 0.28 x 0.50, i.e. a disc, so no
-        # yaw estimate is needed and no orientation under-reads: side on, a car
-        # fills 0.28 of BOTH Frenet axes where head on it fills 0.14 and 0.25.
+        # This is now the ONLY place head to head knows the opponent is not a
+        # box. The detector is time_trials' unchanged, so everything is found
+        # as a box and only a track the tracker has confirmed moving is resized
+        # here. A static obstacle takes the branch above and is untouched.
+        #
+        # 0.202 is the circumscribed radius of a 0.24 x 0.325 car, i.e. a disc,
+        # so no yaw estimate is needed and no orientation under-reads: the disc
+        # is the worst case over every yaw the car can present to the track
+        # tangent, which is the right way round when trailing is the first goal.
         floor = float(self.get_parameter('dynamic_extent_min_m').value)
         leak = float(
             self.get_parameter('dynamic_extent_decay_mps').value) * max(0.0, dt)

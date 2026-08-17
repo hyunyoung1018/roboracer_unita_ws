@@ -33,9 +33,10 @@ state_machine:
     # cur_obstacles_in_interest permanently non-empty and every
     # RacelineTrackingTransition take the obstacle branch.
     #
-    # 9.0 matches what the car can actually see: max_viewing_distance is 9.0 m
-    # and a 0.28 m wide opponent falls under min_size_n around 8 m, so nothing
-    # beyond this is observed anyway.
+    # 9.0 matches what the car can actually see: max_viewing_distance is 9.0 m.
+    # The opponent is seen well inside that - the detector is time_trials' now,
+    # and the 0.12 m pillar falls under min_size_n 8 beyond about 3.4 m - so
+    # this is a ceiling on the list, not the thing that limits acquisition.
     interest_horizon_m: 9.0
 
     # [m] _check_enemy_in_front, which is what refreshes the OVERTAKE TTL. At
