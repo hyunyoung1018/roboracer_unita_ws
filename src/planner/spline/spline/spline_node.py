@@ -321,10 +321,30 @@ class SplineNode(Node):
                     throttle_duration_sec=2.0)
                 self.corridor_latch = None
 
-        candidates = [
+        # Two lists, because "worth planning around" and "might be hit" are
+        # not the same question.
+        #
+        # trajectory_threshold answers the first: an obstacle out at d 0.86 is
+        # closer to the wall than to the line and is nothing to plan a swerve
+        # for. It was answering the second as well, and there it is simply
+        # wrong - a corridor runs at d 0.5, and what it can hit is whatever
+        # lies near 0.5, which by definition is past the threshold.
+        #
+        # From the car, on repeat: "blocked by obs 143 at d=+0.86, path is at
+        # d=+0.517, free -0.035". The planner had never heard of obs 143. The
+        # state machine checks everything inside its horizon against the path
+        # and refused, every frame, and the car sat there. Two ends of the
+        # stack disagreeing about which obstacles exist.
+        #
+        # So collisions are checked against everything in range, and only the
+        # choice of what to avoid is filtered.
+        in_range = [
             obstacle for obstacle in self.obstacles.obstacles
             if (obstacle.s_center - cur_s) % max_s < self.lookahead
-            and abs(obstacle.d_center) < self.trajectory_threshold
+        ]
+        candidates = [
+            obstacle for obstacle in in_range
+            if abs(obstacle.d_center) < self.trajectory_threshold
         ]
         if not candidates:
             if self.obstacles.obstacles:
@@ -585,7 +605,7 @@ class SplineNode(Node):
             hold_lo, hold_hi = gaps[group_idx[0]], gaps[group_idx[-1]]
 
             def hold_blocked_by(offset):
-                for other in candidates:
+                for other in in_range:
                     if any(other is m for m in group):
                         continue
                     if not hold_lo <= ahead(other) <= hold_hi:
@@ -602,7 +622,7 @@ class SplineNode(Node):
             # `candidates`, which is everything.
             leader_d = group[0].d_center
             odd_one_out = next(
-                (o for o in candidates
+                (o for o in in_range
                  if not any(o is m for m in group)
                  and hold_lo < ahead(o) < hold_hi
                  and abs(o.d_center - leader_d) > self.corridor_block_d_tol_m),
@@ -751,7 +771,7 @@ class SplineNode(Node):
         def occupied_by(apex_d):
             profile = path_profile(apex_d)
             lo, hi = clip_bounds(apex_d)
-            for other in candidates:
+            for other in in_range:
                 if any(other is member for member in group):
                     continue
                 other_ahead = ahead(other)
