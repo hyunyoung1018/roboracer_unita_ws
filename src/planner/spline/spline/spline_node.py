@@ -105,7 +105,20 @@ class SplineNode(Node):
             # from the leader in d, cancels the corridor outright. Stricter
             # than the clearance test, and asking a different question: not
             # "can we still get past it" but "does it belong to this group".
-            'corridor_block_d_tol_m': 0.30,
+            # Effectively off by default, and deliberately.
+            #
+            # It cancels a corridor on how far the in-between obstacle's d is
+            # from the leader's, and that cannot tell "needs a different
+            # offset" from "already covered by the same one". Every log it
+            # appeared in was the second: leader at -0.41 with something at
+            # +0.05 between members reads as 0.46 and gets cancelled, while one
+            # corridor at +0.43 passes both.
+            #
+            # What decides now is the attempt itself - build the corridor, and
+            # if neither side is usable fall back to the leader. That needs no
+            # tolerance. Lower this only to force one-at-a-time on a track
+            # where a wide single sweep is not wanted.
+            'corridor_block_d_tol_m': 10.0,
             # [s] How long a corridor commitment survives without being
             # renewed. The car normally drives out the far end long before
             # this; the timeout is for the corridor whose obstacles were
@@ -558,7 +571,10 @@ class SplineNode(Node):
                 shifts.append(abs(trial_left - cur_left))
             if trial_rroom >= self.boundary_margin:
                 shifts.append(abs(trial_right - cur_right))
-            if shifts and min(shifts) > self.corridor_link_shift_tol_m:
+            # 1e-6, because "0.30 m, over the 0.30 m link tolerance" appeared
+            # in a log: the shift lands exactly on the tolerance and floating
+            # point decides. A value sitting on its own limit should pass.
+            if shifts and min(shifts) > self.corridor_link_shift_tol_m + 1e-6:
                 self.get_logger().info(
                     f"not linking the obstacle at "
                     f"s={blocking[following].s_center:.2f} into the corridor: "
