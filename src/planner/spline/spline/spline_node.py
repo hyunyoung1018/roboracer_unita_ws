@@ -272,6 +272,16 @@ class SplineNode(Node):
         out.header.stamp = self.get_clock().now().to_msg()
         out.header.frame_id = 'map'
         cur_s = self.odom.pose.pose.position.x
+        # The car's CURRENT lateral offset, and the reason it is here at all.
+        #
+        # /car_state/odom_frenet carries s in position.x and d in position.y.
+        # The planner read only s, so every path it built started on the
+        # raceline no matter where the car actually was - and while a corridor
+        # is being driven the car is a long way off it. Replanning at 10 Hz
+        # then handed a displaced car a path that says "be at d=0 here", it
+        # steered back towards the line, and the obstacle it had just passed
+        # with the front wheels was still beside the rear ones.
+        cur_d = float(self.odom.pose.pose.position.y)
         max_s = self.global_msg.wpnts[-1].s_m
         if max_s <= 0.0:
             return out
@@ -483,6 +493,32 @@ class SplineNode(Node):
         hold_mask = np.concatenate(
             (np.zeros(len(approach)), np.ones(len(hold_s)), np.zeros(len(retreat))))
 
+        # Where the car is, in the same unwrapped frame as the control points.
+        car_s = first_s - leader_gap
+
+        def path_profile(apex_d):
+            """The path's lateral profile for a candidate offset.
+
+            The approach knots carry the car's CURRENT offset rather than
+            zero, so a path planned while the car is already displaced starts
+            from where it is and transitions to the new offset - instead of
+            demanding a return to the raceline first. With the car on the line
+            this is identical to what it always was.
+
+            The return knots stay at zero: after the last obstacle the
+            raceline is where the car should end up.
+            """
+            d = np.where(hold_mask > 0.5, float(apex_d), 0.0)
+            d[:len(approach)] = cur_d
+            return CubicSpline(control_s, d, bc_type='natural')
+
+        # The clip has to admit cur_d too. It used to bound the samples to
+        # [0, apex_d]; with the car sitting on the OTHER side of the line from
+        # the offset being planned, that clipped the start back to zero and
+        # reintroduced exactly the jump this is meant to remove.
+        def clip_bounds(apex_d):
+            return (min(0.0, float(apex_d), cur_d), max(0.0, float(apex_d), cur_d))
+
         # corridor_geometry above takes the offset from EVERY member, not just
         # the leader. Taking it from the leader alone was the other half of the
         # same bug: a second obstacle reaching a centimetre further towards the
@@ -524,9 +560,10 @@ class SplineNode(Node):
         # the manoeuvre really is not expressible as one corridor.
         span_start = leader_gap + approach[0]
         span_end = gaps[group_idx[-1]] + retreat[-1]
-        # The spline is linear in its control values and only the hold points
-        # are non-zero, so the path's offset at any s is apex_d * shape(s).
-        shape = CubicSpline(control_s, hold_mask, bc_type='natural')
+        # The apex_d * shape(s) shortcut is gone: with the approach knots
+        # carrying cur_d the profile is no longer linear in apex_d alone. Two
+        # splines over ten knots per plan is not worth an optimisation that
+        # would now be wrong.
 
         def clearance(d, other):
             """Signed room between a path at d and an obstacle. Negative inside."""
@@ -537,6 +574,8 @@ class SplineNode(Node):
             return -min(d - other.d_right, other.d_left - d)
 
         def occupied_by(apex_d):
+            profile = path_profile(apex_d)
+            lo, hi = clip_bounds(apex_d)
             for other in candidates:
                 if any(other is member for member in group):
                     continue
@@ -549,8 +588,7 @@ class SplineNode(Node):
                 # away before anything is published - and refuses a side over an
                 # offset the path never has.
                 path_d = float(np.clip(
-                    apex_d * float(shape(apex_s + other_ahead - leader_gap)),
-                    min(0.0, apex_d), max(0.0, apex_d)))
+                    profile(apex_s + other_ahead - leader_gap), lo, hi))
                 # 5 cm, not zero. Between control points the cubic overshoots
                 # by a centimetre or two even where the path is nominally back
                 # on the raceline, and a side must not be chosen on that.
@@ -623,10 +661,18 @@ class SplineNode(Node):
                 f"that is the raceline, which the state machine has already "
                 f"called blocked. Nothing to publish")
 
-        control_d = np.where(hold_mask > 0.5, apex_d, 0.0)
-        spline = CubicSpline(control_s, control_d, bc_type='natural')
-        sample_unwrapped = np.arange(control_s[0], control_s[-1], self.resolution)
-        sample_d = np.clip(spline(sample_unwrapped), min(0.0, apex_d), max(0.0, apex_d))
+        spline = path_profile(apex_d)
+        clip_lo, clip_hi = clip_bounds(apex_d)
+        # Sampling starts AT THE CAR, not at the first control point.
+        #
+        # The approach knots reach 4*scale behind the leader, which is usually
+        # behind the car as well. They still shape the spline - dropping them
+        # would leave two knots a few centimetres apart and a violent
+        # transition - but nothing behind the car is worth publishing. The car
+        # has been there.
+        sample_from = max(control_s[0], car_s)
+        sample_unwrapped = np.arange(sample_from, control_s[-1], self.resolution)
+        sample_d = np.clip(spline(sample_unwrapped), clip_lo, clip_hi)
         sample_s = sample_unwrapped % max_s
         xy = self.converter.get_cartesian(sample_s, sample_d)
 
