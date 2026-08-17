@@ -265,6 +265,20 @@ class TrackingNode(Node):
         if track.missed == 0 or obstacle.is_static:
             return obstacle
 
+        # Do not coast something that is not moving.
+        #
+        # is_static is a latched classification and it takes static_min_samples
+        # to earn; a track that has never held still long enough to earn it is
+        # still, in fact, a cone standing on the floor. Its measured vs and vd
+        # are jitter, and propagating them over a long occlusion walks the
+        # obstacle metres away from where it is. Now that a track survives two
+        # seconds out of sight, that mattered: the same speed test the static
+        # classifier uses decides here whether there is a velocity worth
+        # applying at all.
+        speed_limit = float(self.get_parameter('static_speed_threshold').value)
+        if abs(obstacle.vs) < speed_limit and abs(obstacle.vd) < speed_limit:
+            return obstacle
+
         dt = max(0.0, stamp - track.stamp)
         ds = obstacle.vs * dt
         dd = obstacle.vd * dt

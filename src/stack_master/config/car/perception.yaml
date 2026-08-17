@@ -145,7 +145,22 @@ tracking:
     static_position_samples: 10
 
     association_distance: 0.8
-    max_missed_frames: 8
+    # [frames] How long a track survives without being seen, at the detect
+    # rate (20 Hz), so 40 is two seconds.
+    #
+    # 8 was 0.4 s, meant to cover a dropped lidar frame, and it is far too
+    # short for the thing that actually hides an obstacle: another obstacle.
+    # Three cones in a row and the middle one shadows the last one for the
+    # whole approach - measured, the third was reported at 7.7 m
+    # ("blocked by obs 11 spanning d=-0.24..+0.04") and had been deleted by
+    # the time it was 2 m away, so the planner had nothing to plan for and
+    # the car drove into it. A cone does not stop existing because something
+    # is in front of it.
+    #
+    # The cost is that a spurious detection also lingers for two seconds. On
+    # a track of stationary obstacles that is the right trade. Turn it back
+    # down for head-to-head, where a track that is really gone matters more.
+    max_missed_frames: 40
     velocity_smoothing: 0.65
     static_speed_threshold: 0.15
     static_min_samples: 6
