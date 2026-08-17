@@ -64,6 +64,9 @@ class SplineNode(Node):
 
         self.last_path = None
         self.last_side = None
+        # The corridor the car is currently committed to driving, or None.
+        # See where it is set, at the bottom of _plan.
+        self.corridor_latch = None
 
         defaults = {
             'lookahead': 3.0,
@@ -102,6 +105,12 @@ class SplineNode(Node):
             # which asks the exact question - does one offset still fit - and
             # stays as the backstop.
             'corridor_link_d_tol_m': 0.20,
+            # [s] How long a corridor commitment survives without being
+            # renewed. The car normally drives out the far end long before
+            # this; the timeout is for the corridor whose obstacles were
+            # picked up, which would otherwise hold the car off the line for
+            # as long as it took to notice.
+            'corridor_latch_ttl_s': 3.0,
             # [m] Spacing of the control points that hold the offset between
             # the first and last obstacle. Without them a cubic through two
             # equal knots bulges between them; the samples are clipped to the
@@ -144,6 +153,8 @@ class SplineNode(Node):
             self.get_parameter('corridor_link_gap_m').value)
         self.corridor_link_d_tol_m = float(
             self.get_parameter('corridor_link_d_tol_m').value)
+        self.corridor_latch_ttl_s = float(
+            self.get_parameter('corridor_latch_ttl_s').value)
         self.corridor_point_spacing_m = max(
             0.2, float(self.get_parameter('corridor_point_spacing_m').value))
         self.measure = bool(self.get_parameter('measure').value)
@@ -161,6 +172,7 @@ class SplineNode(Node):
             'corridor_max_len_m': 'corridor_max_len_m',
             'corridor_link_gap_m': 'corridor_link_gap_m',
             'corridor_link_d_tol_m': 'corridor_link_d_tol_m',
+            'corridor_latch_ttl_s': 'corridor_latch_ttl_s',
             'corridor_point_spacing_m': 'corridor_point_spacing_m',
             'measure': 'measure',
         }
@@ -282,9 +294,28 @@ class SplineNode(Node):
         # steered back towards the line, and the obstacle it had just passed
         # with the front wheels was still beside the rear ones.
         cur_d = float(self.odom.pose.pose.position.y)
+
         max_s = self.global_msg.wpnts[-1].s_m
         if max_s <= 0.0:
             return out
+        # Let go of a corridor the car has finished, or one that has gone stale.
+        #
+        # A corridor is a commitment - see where it is set - and the two ways
+        # out are driving to the end of it, or losing confidence in it. The
+        # timeout is the second: obstacles get picked up and put down between
+        # runs, and a latch with nothing behind it would hold the car off the
+        # line for no reason.
+        if self.corridor_latch is not None:
+            latch = self.corridor_latch
+            past_end = (latch['last_s'] - cur_s) % max_s > max_s / 2.0
+            stale = (self.get_clock().now().nanoseconds * 1e-9
+                     - latch['stamp']) > self.corridor_latch_ttl_s
+            if past_end or stale:
+                self.get_logger().info(
+                    f"corridor released ({'driven to the end' if past_end else 'stale'}): "
+                    f"was holding d={latch['apex_d']:+.2f} to s={latch['last_s']:.2f}",
+                    throttle_duration_sec=2.0)
+                self.corridor_latch = None
 
         candidates = [
             obstacle for obstacle in self.obstacles.obstacles
@@ -471,9 +502,65 @@ class SplineNode(Node):
             group_idx.append(following)
         group = [blocking[i] for i in group_idx]
 
+        # A corridor holds ONE offset from its first member to its last, so it
+        # is only meaningful if everything in between can be passed at that
+        # offset. Something inside the span that is not a member cannot - it
+        # was excluded precisely because it needs a different one.
+        #
+        # Seen on the car with three obstacles at d -0.10, +0.25, -0.05: the
+        # first and third are 5 cm apart and share a corridor happily, and the
+        # middle one sits across it. The corridor was built, the path ran
+        # through the middle obstacle, and the car stopped.
+        #
+        # occupied_by does not catch this, by design. It is comparative - it
+        # refuses a side only where the path leaves LESS room than the raceline
+        # would - and an obstacle the raceline does not clear either passes
+        # that test. That relaxation is what made two obstacles on the same
+        # side solvable; here it is exactly the wrong instinct.
+        #
+        # So the corridor is abandoned rather than trimmed: fall back to the
+        # leader alone and let the next cycle plan the rest. Checked on the
+        # settled group rather than during growth, so it holds however the
+        # group was arrived at.
+        if len(group) > 1:
+            span = [apex_s + (o.s_center - apex_s) % max_s for o in group]
+            intruder = next(
+                (o for o in blocking
+                 if not any(o is m for m in group)
+                 and span[0] < apex_s + (o.s_center - apex_s) % max_s < span[-1]),
+                None)
+            if intruder is not None:
+                self.get_logger().info(
+                    f"dropping the {len(group)}-obstacle corridor: the obstacle at "
+                    f"s={intruder.s_center:.2f} (d {intruder.d_right:+.2f}.."
+                    f"{intruder.d_left:+.2f}) sits inside it and is not a member, "
+                    f"so no single offset clears everything. Planning for the "
+                    f"leader at s={group[0].s_center:.2f} alone",
+                    throttle_duration_sec=2.0)
+                group = [blocking[0]]
+                group_idx = [0]
+
         (member_s, left_apex, right_apex, left_room, right_room,
          bound_left, bound_right) = corridor_geometry(group)
         first_s, last_s = member_s[0], member_s[-1]
+
+        # Do not finish a corridor early.
+        #
+        # An obstacle the car has PASSED leaves `candidates` at once - the
+        # lookahead test is (s - cur_s) % max_s, which for something half a
+        # metre behind is nearly a full lap. So the moment the front wheels
+        # clear the first member, the corridor is recomputed from what is left,
+        # the offset shrinks to whatever the remaining obstacles need, and the
+        # manoeuvre goes soft halfway through. On the car: "1번을 지나가면서
+        # 경로를 다시 만들어서 코리도 회피가 약하게 먹음".
+        #
+        # The latch carries the committed end forward. Extending rather than
+        # freezing, so a new obstacle can still lengthen the corridor.
+        if self.corridor_latch is not None:
+            latched_end = apex_s + (self.corridor_latch['last_s'] - apex_s) % max_s
+            if last_s < latched_end <= first_s + self.corridor_max_len_m:
+                member_s = member_s + [latched_end]
+                last_s = latched_end
 
         # Control points: approach on the raceline, the offset held at every
         # member (and at corridor_point_spacing_m in between, so the cubic runs
@@ -628,7 +715,40 @@ class SplineNode(Node):
         # candidate list rather than on whichever obstacle happened to be
         # nearest. Deciding it here meant a leader that was clear of the line
         # aborted the plan for the ones behind it that were not.
-        if left_ok and (not right_ok or left_room + bias >= right_room):
+        # The committed side and offset win, while the room is still there.
+        #
+        # Recomputing from the remaining obstacles gives a smaller offset than
+        # the one the car is already carrying, and a corridor that gets weaker
+        # as it is driven is worse than either committing or not starting. So
+        # the latched side is kept and the magnitude cannot shrink below what
+        # was published when the commitment was made.
+        #
+        # It is an override, not a bypass: if the latched side no longer has
+        # boundary_margin the latch is dropped and the normal choice runs. That
+        # is the case where the situation really has changed.
+        # left_ok / right_ok, not the room alone: the committed side also has
+        # to still be clear of everything else, or a latch would drive the car
+        # into an obstacle that appeared on it after the commitment was made.
+        if self.corridor_latch is not None:
+            latch = self.corridor_latch
+            if not (left_ok if latch['side'] == 'left' else right_ok):
+                room = left_room if latch['side'] == 'left' else right_room
+                taken = left_taken if latch['side'] == 'left' else right_taken
+                self.get_logger().info(
+                    f"corridor released: the committed {latch['side']} side is no longer "
+                    f"usable ({room:.2f} m against a {self.boundary_margin:.2f} m margin"
+                    f"{', and taken' if taken else ''})",
+                    throttle_duration_sec=2.0)
+                self.corridor_latch = None
+            else:
+                side = latch['side']
+                apex_d = left_apex if side == 'left' else right_apex
+                if abs(latch['apex_d']) > abs(apex_d):
+                    apex_d = latch['apex_d']
+
+        if self.corridor_latch is not None:
+            pass  # side and apex_d are the committed ones, set just above
+        elif left_ok and (not right_ok or left_room + bias >= right_room):
             side, apex_d = 'left', left_apex
         elif right_ok:
             side, apex_d = 'right', right_apex
@@ -727,6 +847,20 @@ class SplineNode(Node):
                 vx_mps=base.vx_mps, ax_mps2=base.ax_mps2,
                 d_left=base.d_left, d_right=base.d_right,
             ))
+        # Commit to a corridor once it covers more than one obstacle.
+        #
+        # A single-obstacle dodge needs no commitment: the obstacle leaves
+        # range once passed and the path stops, which is the correct ending.
+        # A corridor spans several, and the ones already behind are exactly
+        # what the recomputation would forget.
+        if len(group) > 1:
+            self.corridor_latch = {
+                'apex_d': float(apex_d),
+                'side': side,
+                'last_s': float(last_s % max_s),
+                'stamp': self.get_clock().now().nanoseconds * 1e-9,
+            }
+
         out.ot_side = side
         out.ot_line = side
         self.last_side = side

@@ -223,6 +223,19 @@ spline_node:
     # a corridor cannot walk across the track one small step at a time.
     corridor_link_d_tol_m: 0.30
 
+    # [s] How long a corridor commitment survives without being renewed.
+    #
+    # Once a corridor covers more than one obstacle the planner commits to it:
+    # the side and the offset cannot shrink, and the span cannot end early,
+    # until the car has driven out the far end. Without that, passing the first
+    # obstacle drops it from the candidate list, the offset is recomputed from
+    # whatever is left, and the manoeuvre goes soft halfway through.
+    #
+    # The car normally reaches the end long before this expires. The timeout is
+    # for the corridor whose obstacles were picked up - otherwise the car would
+    # be held off the line until something else noticed.
+    corridor_latch_ttl_s: 3.0
+
     # [m] Spacing of the control points holding the offset between the first
     # and last obstacle. Without them a cubic through two equal knots bulges
     # between them - the samples are clipped anyway, but flat control points
