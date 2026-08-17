@@ -164,11 +164,14 @@
   <let name="timetrials_only" value="true"  unless="$(var obstacles)"/>
   <let name="timetrials_only" value="false" if="$(var obstacles)"/>
 
-  <!-- Corridors off for a qualifying run. Derived, not a separate switch:
-       the two always move together, and a qualifying lap wants the behaviour
-       with the most laps behind it rather than the fastest one. -->
-  <let name="corridor_enabled" value="false" if="$(var qual)"/>
-  <let name="corridor_enabled" value="true"  unless="$(var qual)"/>
+  <arg name="corridor" default="true"
+       description="Take several obstacles as one manoeuvre, holding one offset
+                    across them, instead of a swerve and a return to the line
+                    for each. qual:=true forces it off whatever this says."/>
+  <!-- qual wins. A qualifying lap is a known course driven for time and wants
+       the behaviour with the most laps behind it, not the newest one. -->
+  <let name="corridor_enabled" value="false"          if="$(var qual)"/>
+  <let name="corridor_enabled" value="$(var corridor)" unless="$(var qual)"/>
 
   <let name="config_dir" value="$(find-pkg-share stack_master)/config/car"/>
 
