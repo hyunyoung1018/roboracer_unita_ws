@@ -401,8 +401,24 @@ class SplineNode(Node):
         # take the next blocking obstacle within retreat[-1] of the current last
         # member, and repeat. What comes out is one offset held from the first
         # obstacle to the last, with the return after all of them.
-        gaps = [ahead(o) for o in blocking]
+        # Growth walks EVERY obstacle from the leader onwards, in s order.
+        #
+        # It used to walk `blocking` - the ones the raceline does not clear -
+        # and that is what breaks a zigzag. Right, left, right: the middle one
+        # is off to the far side, the raceline clears it, so it never enters
+        # `blocking`, growth steps straight from the first to the third, finds
+        # them 5 cm apart in d and merges them. The corridor then closes over
+        # the top of an obstacle nobody looked at.
+        #
+        # The leader still has to be something worth avoiding, so it comes
+        # from `blocking`. Everything after it is taken in order from
+        # `candidates`, and the first one that fails the d test stops the
+        # corridor - which for the second obstacle means there is no corridor.
         obstacle = blocking[0]
+        leader_ahead = ahead(blocking[0])
+        chain = sorted(
+            (o for o in candidates if ahead(o) >= leader_ahead - 1e-3), key=ahead)
+        gaps = [ahead(o) for o in chain]
         apex_s = obstacle.s_center
         leader_gap = gaps[0]
 
@@ -428,7 +444,7 @@ class SplineNode(Node):
         while self.corridor_enabled:
             last = group_idx[-1]
             following = next(
-                (i for i in range(last + 1, len(blocking))
+                (i for i in range(last + 1, len(chain))
                  if gaps[i] > gaps[last] + 1e-3), None)
             if following is None:
                 break
@@ -437,12 +453,12 @@ class SplineNode(Node):
             # Same side and near enough in d to share one offset. Measured
             # against the LEADER, so a corridor cannot drift across the track
             # one small step at a time.
-            d_off = blocking[following].d_center - obstacle.d_center
+            d_off = chain[following].d_center - obstacle.d_center
             if abs(d_off) > self.corridor_link_d_tol_m:
                 self.get_logger().info(
                     f"not linking the obstacle at "
-                    f"s={blocking[following].s_center:.2f} into the corridor: "
-                    f"its d={blocking[following].d_center:+.2f} is {abs(d_off):.2f} m "
+                    f"s={chain[following].s_center:.2f} into the corridor: "
+                    f"its d={chain[following].d_center:+.2f} is {abs(d_off):.2f} m "
                     f"from the leader's {obstacle.d_center:+.2f}, over the "
                     f"{self.corridor_link_d_tol_m:.2f} m link tolerance - "
                     f"avoiding it on its own instead",
@@ -450,7 +466,7 @@ class SplineNode(Node):
                 break
             if gaps[following] - gaps[0] > self.corridor_max_len_m:
                 self.get_logger().info(
-                    f"obstacle at s={blocking[following].s_center:.2f} is "
+                    f"obstacle at s={chain[following].s_center:.2f} is "
                     f"{gaps[following] - gaps[0]:.2f} m past the first one, over "
                     f"the {self.corridor_max_len_m:.2f} m corridor limit - "
                     f"planning for the first {len(group_idx)} and letting the "
@@ -467,13 +483,13 @@ class SplineNode(Node):
             # publish the shorter one: the return leg clears an obstacle that is
             # far enough off the line, occupied_by refuses the side if it does
             # not, and the next replan gets the rest.
-            trial = [blocking[i] for i in group_idx + [following]]
+            trial = [chain[i] for i in group_idx + [following]]
             _, trial_left, trial_right, trial_lroom, trial_rroom, _, _ = \
                 corridor_geometry(trial)
             if max(trial_lroom, trial_rroom) < self.boundary_margin:
                 self.get_logger().info(
                     f"not widening the corridor to the obstacle at "
-                    f"s={blocking[following].s_center:.2f}: covering it too would "
+                    f"s={chain[following].s_center:.2f}: covering it too would "
                     f"need d={trial_left:+.2f} or {trial_right:+.2f}, leaving "
                     f"{trial_lroom:.2f}/{trial_rroom:.2f} m against a "
                     f"{self.boundary_margin:.2f} m margin - planning for the "
@@ -481,7 +497,7 @@ class SplineNode(Node):
                     throttle_duration_sec=2.0)
                 break
             group_idx.append(following)
-        group = [blocking[i] for i in group_idx]
+        group = [chain[i] for i in group_idx]
 
         (member_s, left_apex, right_apex, left_room, right_room,
          bound_left, bound_right) = corridor_geometry(group)
