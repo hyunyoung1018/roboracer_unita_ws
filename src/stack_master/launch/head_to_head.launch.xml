@@ -113,9 +113,19 @@
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 
-  <!-- Existing static planner, unchanged. Only its subscriber and publisher
-       are redirected for this mode. -->
-  <node pkg="spline" exec="spline_node" name="spline_node" output="screen">
+  <!-- h2h_spline_node, not spline_node: a subclass that also reads
+       /tracking/dynamic_obstacles, and uses it for ONE thing - which side of a
+       static obstacle to pass. The shared planner picks the side with more room
+       to the track boundary and has never heard of the opponent, so when the
+       opponent overtakes into the wider gap (for the same reason the planner
+       wants it) the path is drawn through it and the state machine refuses.
+       Whether the box got avoided came down to which way the opponent went.
+       The opponent never becomes something to plan around - it only takes room
+       away. time_trials keeps running the unmodified spline_node, and with
+       nothing publishing dynamic obstacles this behaves identically to it.
+       Everything else about this node is unchanged; only its subscriber and
+       publisher are redirected for this mode. -->
+  <node pkg="spline" exec="h2h_spline_node" name="spline_node" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
     <param from="$(var config_dir)/dynamic_perception.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>

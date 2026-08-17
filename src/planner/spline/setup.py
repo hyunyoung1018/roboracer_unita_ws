@@ -16,5 +16,13 @@ setup(
     maintainer_email='unita@todo.todo',
     description='Frenet spline obstacle avoidance for roboracer_unita_ws',
     license='MIT',
-    entry_points={'console_scripts': ['spline_node = spline.spline_node:main']},
+    extras_require={
+        'test': ['pytest'],
+    },
+    # h2h_spline_node is the head-to-head subclass. It is a separate executable
+    # so that time_trials keeps running the unmodified spline_node.
+    entry_points={'console_scripts': [
+        'spline_node = spline.spline_node:main',
+        'h2h_spline_node = spline.h2h_spline_node:main',
+    ]},
 )
