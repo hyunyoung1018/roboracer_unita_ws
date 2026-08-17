@@ -79,14 +79,90 @@ class HeadToHeadStateMachine(StateMachine):
         # keep the planner on.
         self.dynamic_avoidance_enabled = bool(
             self._get_or_declare("dynamic_avoidance_enabled", True))
+        # [m] How far PAST the static obstacle a moving one has to be before it
+        # stops vetoing the static avoidance path. See
+        # _blocked_only_by_distant_dynamics.
+        #
+        # The static path holds its offset across the box and returns to the
+        # raceline about a metre later, so anything inside that is still on the
+        # manoeuvre and must keep refusing it. 1.5 m puts the boundary past the
+        # return leg with room for the opponent to have moved between the check
+        # and the car arriving. Raise it to be more conservative - the cost is
+        # the car trailing behind a box it could pass; lower it and the car will
+        # pull out with the opponent closer to its rejoin point.
+        self.static_path_dynamic_margin_m = float(
+            self._get_or_declare("static_path_dynamic_margin_m", 1.5))
         self._last_gb_blocked_at = None
         self._last_trailing_target = None
         self._last_trailing_target_at = None
+        # Per-tick memo for the shared _check_free_frenet; see _memo_free_frenet.
+        # Keyed by planner name because the cache objects belong to the shared
+        # state machine and this wrapper does not add fields to them.
+        self._loop_seq = 0
+        self._free_memo = {}
 
     def _get_or_declare(self, name, default):
         if not self.has_parameter(name):
             self.declare_parameter(name, default)
         return self.get_parameter(name).value
+
+    def loop(self):
+        """Stamp the tick, then run the shared loop unchanged.
+
+        The counter is what makes the free-check memo safe: it says "this is a
+        new tick, throw the answers away". Incremented before the shared loop
+        rather than after, so every check inside this tick shares one number.
+        """
+        self._loop_seq += 1
+        super().loop()
+
+    def _memo_free_frenet(self, wpnts_data):
+        """Run the shared free check at most once per cache per tick.
+
+        One tick asks the same cache the same question up to three times:
+        ObstacleTransition checks the raceline at its top and again at its
+        bottom, and the static branch is checked by both
+        _check_overtaking_mode_sustainability and _check_static_overtaking_mode.
+        Each of those walks every obstacle against every point of the path.
+
+        Caching is only sound while the inputs cannot have moved, so the key
+        carries three things:
+
+          _loop_seq        a new tick invalidates everything
+          init_count       _check_latest_wpnts re-initialises a cache mid-loop,
+                           and several callers run it immediately before asking
+          is_init          _expire_stale_cache and the source-change rule clear
+                           it, which flips the answer for an OT cache
+
+        Nothing else can change underneath: cur_obstacles_in_interest is fixed
+        for the tick by update_waypoints, and rclpy's default executor runs no
+        subscription callback while loop() is on the stack.
+
+        Only the shared computation is memoised. Everything this wrapper does
+        around it - the width swap, the beyond-path correction, the blocked-
+        raceline hold - still runs on every call, exactly as often as before,
+        so no side effect of theirs is skipped. closest_target, closest_gap and
+        free_dbg are left on the cache by the first call and are what a repeat
+        computation would have produced anyway.
+        """
+        key = (self._loop_seq, wpnts_data.init_count, wpnts_data.is_init)
+        entry = self._free_memo.get(wpnts_data.name)
+        if entry is not None and entry[0] == key:
+            return entry[1]
+        is_free = super()._check_free_frenet(wpnts_data)
+        self._free_memo[wpnts_data.name] = (key, is_free)
+        return is_free
+
+    def _nearest_obstacle_is_static(self) -> bool:
+        """Is the closest thing ahead of the car a static obstacle?
+
+        No obstacles, or a dynamic one nearest, both answer False - which keeps
+        the dynamic-first behaviour for every case this cannot separate.
+        """
+        _, nearest = nearest_ahead(
+            self.cur_obstacles_in_interest, self.cur_s, self.track_length,
+            self.track_length)
+        return bool(nearest is not None and nearest.is_static)
 
     # ------------------------------------------------------------------ #
     # CONDITION FIXES                                                     #
@@ -161,6 +237,27 @@ class HeadToHeadStateMachine(StateMachine):
         to enter OVERTAKE on, so refuse before the shared checks run at all.
         Static avoidance goes through _check_static_overtaking_mode and is
         untouched by this.
+
+        AND, when the dynamic branch does arm, decide which planner should own
+        the manoeuvre. The shared transitions ask
+
+            _check_overtaking_mode() or _check_static_overtaking_mode()
+
+        and `or` short-circuits, so a dynamic overtake meant the static branch
+        was never evaluated at all: static avoidance sat structurally beneath
+        dynamic overtaking, and a box the car was about to hit lost to an
+        opponent further away. Resolved here rather than in the shared
+        transitions, which time_trials also imports.
+
+        The choice is by distance, not by kind - whichever obstacle the car
+        reaches first is the one whose planner should be driving - and it only
+        decides anything when BOTH branches arm. When the dynamic branch does
+        not arm this returns False without touching the static branch, and the
+        caller's `or` runs it exactly as it always did.
+
+        static_overtaking_mode is the latch that tells _src_cache and
+        _check_overtaking_mode_sustainability whose path OVERTAKE slices, so it
+        is set explicitly on every path that returns True from here.
         """
         if not self.dynamic_avoidance_enabled:
             return False
@@ -169,21 +266,80 @@ class HeadToHeadStateMachine(StateMachine):
             self.get_logger().info(
                 "overtake entry vetoed: predictor asked for force_trailing",
                 throttle_duration_sec=2.0)
+            allowed = False
+        if not allowed:
             return False
-        return allowed
+
+        # Dynamic armed. Ask the static branch too - the caller never will now.
+        static_ok = self._check_static_overtaking_mode()
+        prefer_static = static_ok and self._nearest_obstacle_is_static()
+        if prefer_static:
+            self.get_logger().info(
+                "static obstacle is nearer than the opponent: static avoidance "
+                "takes the overtake", throttle_duration_sec=2.0)
+        self.static_overtaking_mode = bool(prefer_static)
+        return True
+
+    def _closing_on_nearest_static(self, threshold_m) -> bool:
+        """Is the car closing on the nearest STATIC obstacle ahead?
+
+        The shared gate asks _check_getting_closer, which measures the nearest
+        obstacle of any kind. Trailing an opponent, that is the opponent - so
+        an opponent pulling away faster than 0.5 m/s answered "not closing" and
+        refused the static avoidance, with a box sitting three metres ahead
+        that the car was very much closing on. The opponent's speed has nothing
+        to say about whether to drive around a box.
+
+        A static obstacle has vs 0, so this reduces to "the car is moving
+        forward", which is the honest answer for something that is not going
+        anywhere. The gate that matters for a box is the geometry, and that is
+        path_free's job.
+        """
+        statics = [
+            obs for obs in self.cur_obstacles_in_interest if obs.is_static]
+        _, target = nearest_ahead(
+            statics, self.cur_s, self.track_length, threshold_m)
+        if target is None:
+            return False
+        return bool(self.cur_vs - float(target.vs) > -0.5)
 
     def _check_static_overtaking_mode(self) -> bool:
-        """Clear the static/dynamic latch when neither branch arms.
+        """The shared gate, with the two inputs head to head gets wrong.
 
-        ``static_overtaking_mode`` decides which planner's cache OVERTAKE
-        slices, and the shared code only ever clears it on a successful
-        *dynamic* check. Once static avoidance has armed once, a later loop
-        where both checks fail leaves it true, and the next OVERTAKE reads the
-        static cache for what may be a dynamic opponent.
+        Reimplemented rather than wrapped because both corrections are to what
+        goes IN, and the shared version computes its inputs internally and
+        returns one bool. state_machine_node.py is what time_trials runs, so it
+        is not touched; the four conditions and the speed limit are mirrored
+        exactly, and only these change:
+
+          closing    measured against the nearest STATIC obstacle rather than
+                     the nearest obstacle of any kind - see
+                     _closing_on_nearest_static.
+          path_free  a distant opponent no longer vetoes it - see
+                     _blocked_only_by_distant_dynamics. That correction lives
+                     in _check_free_frenet so that OVERTAKE's per-tick
+                     sustainability check gets it too, not just this entry gate.
+
+        Also clears the static/dynamic latch, which the shared code only ever
+        cleared on a successful *dynamic* check: once static avoidance had armed
+        once, a later loop where both checks failed left it true and the next
+        OVERTAKE read the static cache for what may be a dynamic opponent.
         """
-        allowed = super()._check_static_overtaking_mode()
-        if not allowed:
-            self.static_overtaking_mode = False
+        slow_enough = self.cur_vs < self.static_overtake_max_speed_mps
+        closing = self._closing_on_nearest_static(threshold_m=7.0)
+        have_path = self._check_latest_wpnts(
+            self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)
+        path_free = self._check_free_frenet(self.cur_static_avoidance_wpnts)
+
+        allowed = bool(slow_enough and closing and have_path and path_free)
+        self.static_overtaking_mode = allowed
+        if not allowed and len(self.cur_obstacles_in_interest) != 0:
+            self.get_logger().info(
+                "static avoidance refused: "
+                f"slow_enough={slow_enough} "
+                f"(vs {self.cur_vs:.2f} < {self.static_overtake_max_speed_mps:.2f}), "
+                f"closing={closing}, have_path={have_path}, path_free={path_free}",
+                throttle_duration_sec=2.0)
         return allowed
 
     def _sustainability_detail(self, cache, available, path_free) -> str:
@@ -466,6 +622,62 @@ class HeadToHeadStateMachine(StateMachine):
         return all(
             rec.get("branch") == "dyn/nopred/beyond_path" for rec in blocked)
 
+    def _blocked_only_by_distant_dynamics(self, wpnts_data) -> bool:
+        """Was the STATIC avoidance path refused only by a far-off opponent?
+
+        The sibling of _blocked_only_beyond_path, for the opponent that is
+        inside the path rather than past its end.
+
+        The static avoidance path exists to get around one static obstacle. It
+        leaves the raceline before it, holds an offset past it, and returns.
+        Launched with prediction:=false the opponent has no predicted future, so
+        the shared check measures it as a FROZEN BOX at wherever it happens to
+        be right now - and if that is anywhere near the raceline, which is where
+        a racing opponent lives, it refuses the whole path.
+
+        Concretely, and this is what the car does on track: box three metres
+        ahead, opponent six metres ahead on the line, static path returning to
+        the raceline at five. The opponent blocks the path at six, path_free is
+        false, static avoidance never arms, and the car trails to a stop behind
+        a box it had the room to drive around. Nothing recovers from there: a
+        stopped car in front of a stationary obstacle is a fixed point.
+
+        The opponent will not be at six metres when the car gets there - it is
+        moving, and the car is limited to static_avoidance_planner's
+        max_speed_mps while on this path. So a moving obstacle FURTHER ahead
+        than the static one this path is for is the next decision's problem,
+        exactly as an obstacle past the path's end already is. The check re-runs
+        every tick; as the opponent comes inside the margin it vetoes again and
+        OVERTAKE drops back to trailing.
+
+        Deliberately narrow. All of these still refuse the path:
+          - anything static, at any distance
+          - a moving obstacle NEARER than the static one, which includes the
+            whole trailing case: an opponent between the car and the box is
+            what the car must not swerve into, and it keeps refusing
+          - a moving obstacle within static_path_dynamic_margin_m of the box
+        """
+        debug = getattr(wpnts_data, "free_dbg", None)
+        if not isinstance(debug, dict) or not debug.get("is_init"):
+            return False
+        records = debug.get("obs", [])
+        blocked = [rec for rec in records if rec.get("blocked")]
+        if not blocked:
+            return False
+        static_gaps = [
+            rec["gap"] for rec in records
+            if rec.get("static") and rec.get("gap") is not None]
+        if not static_gaps:
+            # No static obstacle in the list at all - this path is not for
+            # anything, so there is nothing to excuse the refusal.
+            return False
+        horizon = min(static_gaps) + self.static_path_dynamic_margin_m
+        return all(
+            not rec.get("static")
+            and rec.get("gap") is not None
+            and rec["gap"] > horizon
+            for rec in blocked)
+
     def _check_free_frenet(self, wpnts_data):
         """Use physical body width and debounce only the global-path result."""
         configured_width = self.gb_ego_width_m
@@ -473,7 +685,7 @@ class HeadToHeadStateMachine(StateMachine):
             self, "clearance_vehicle_width_m", configured_width)
         self.gb_ego_width_m = clearance_width
         try:
-            is_free = super()._check_free_frenet(wpnts_data)
+            is_free = self._memo_free_frenet(wpnts_data)
         finally:
             # Keep the legacy value for close-to-raceline state semantics.
             self.gb_ego_width_m = configured_width
@@ -485,6 +697,28 @@ class HeadToHeadStateMachine(StateMachine):
             self.get_logger().info(
                 f"[{wpnts_data.name}] only blocked by dynamic obstacles past "
                 f"the end of this path - not this path's problem",
+                throttle_duration_sec=5.0)
+            is_free = True
+            wpnts_data.closest_target = None
+            wpnts_data.closest_gap = None
+            wpnts_data.free_dbg["is_free"] = True
+
+        # The same reasoning one step earlier: an opponent INSIDE the static
+        # avoidance path but further along it than the box the path is for.
+        # Applied here rather than in _check_static_overtaking_mode so that
+        # OVERTAKE's per-tick sustainability check sees it too - correcting only
+        # the entry gate would arm the manoeuvre and abort it on the next tick.
+        # Scoped by identity to the static cache: the lane-change path is
+        # planned around the opponent, so an opponent refusing it is the check
+        # working, not a false refusal.
+        if (
+            not is_free
+            and wpnts_data is self.cur_static_avoidance_wpnts
+            and self._blocked_only_by_distant_dynamics(wpnts_data)
+        ):
+            self.get_logger().info(
+                f"[{wpnts_data.name}] only blocked by a moving obstacle further "
+                f"ahead than the static one this path is for - going around it",
                 throttle_duration_sec=5.0)
             is_free = True
             wpnts_data.closest_target = None
