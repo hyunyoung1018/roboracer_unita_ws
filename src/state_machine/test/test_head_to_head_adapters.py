@@ -216,87 +216,107 @@ def test_validated_span_absent_before_the_planner_has_published():
     assert HeadToHeadStateMachine._planner_validated_span(machine, avoidance) is None
 
 
-# --- overtake source handover (R4) -------------------------------------------
+# --- overtake sustainability: per-term verdict and source handover ------------
 
-def make_handover(static_mode, other_fresh, other_free, dynamic_enabled=True):
-    """A real instance, because the method under test calls super()."""
+def make_handover(committed_static=True, committed_available=True,
+                  committed_free=True, other_fresh=True, other_free=True,
+                  dynamic_enabled=True):
     machine = HeadToHeadStateMachine.__new__(HeadToHeadStateMachine)
     calls = []
     machine.calls = calls
-    machine.static_overtaking_mode = static_mode
+    machine.logged = []
+    machine.static_overtaking_mode = committed_static
     machine.dynamic_avoidance_enabled = dynamic_enabled
-    # Caches the planner has never published to: stamp is None, which is what
-    # took the node down when the handover used _check_availability.
     machine.cur_static_avoidance_wpnts = SimpleNamespace(
-        name="static", enabled=True, stamp=None)
+        name="static", enabled=True, stamp=None, free_dbg=None,
+        hyst_timer_sec=4.0, killing_timer_sec=10.0)
     machine.cur_avoidance_wpnts = SimpleNamespace(
-        name="dynamic", enabled=True, stamp=None)
+        name="dynamic", enabled=True, stamp=None, free_dbg=None,
+        hyst_timer_sec=1.0, killing_timer_sec=2.0)
     machine.static_avoidance_wpnts = "static_src"
     machine.avoidance_wpnts = "dynamic_src"
+    committed = (machine.cur_static_avoidance_wpnts if committed_static
+                 else machine.cur_avoidance_wpnts)
 
-    def latest(_wpnts, data):
+    def availability(_src, data):
+        assert data is committed, "availability is only for the committed cache"
+        calls.append("avail:" + data.name)
+        return committed_available
+
+    def latest(_src, data):
+        assert data is not committed, "latest_wpnts is only for the handover"
         calls.append("latest:" + data.name)
         return other_fresh
 
     def free(data):
         calls.append("free:" + data.name)
-        return other_free
+        return committed_free if data is committed else other_free
 
-    def availability(*_args):
-        raise AssertionError("handover must not read an uninitialised stamp")
-
+    machine._check_availability = availability
     machine._check_latest_wpnts = latest
     machine._check_free_frenet = free
-    machine._check_availability = availability
-    machine.get_logger = lambda: SimpleNamespace(info=lambda *a, **k: None)
+    machine._check_on_spline = lambda _d: False
+    machine.now_sec = lambda: 0.0
+    machine.get_logger = lambda: SimpleNamespace(
+        info=lambda msg, **k: machine.logged.append(msg))
     return machine
 
 
-def run_handover(machine, super_ok):
-    from state_machine.state_machine_node import StateMachine
-    original = StateMachine._check_overtaking_mode_sustainability
-    StateMachine._check_overtaking_mode_sustainability = lambda self: super_ok
-    try:
-        return machine._check_overtaking_mode_sustainability()
-    finally:
-        StateMachine._check_overtaking_mode_sustainability = original
+def test_sustains_without_touching_the_other_source():
+    machine = make_handover()
+    assert machine._check_overtaking_mode_sustainability() is True
+    assert machine.calls == ["avail:static", "free:static"]
+    assert machine.logged == []
 
 
-def test_handover_not_attempted_while_the_committed_source_holds():
-    machine = make_handover(True, other_fresh=True, other_free=True)
-    assert run_handover(machine, super_ok=True) is True
-    assert machine.calls == []
-    assert machine.static_overtaking_mode is True
+def test_both_terms_are_evaluated_so_the_refusal_can_name_one():
+    # Short-circuiting would skip the free check and the log could only ever
+    # say "unavailable", which is what made every abort look identical.
+    machine = make_handover(committed_available=False, committed_free=False,
+                            other_fresh=False)
+    assert machine._check_overtaking_mode_sustainability() is False
+    assert "avail:static" in machine.calls and "free:static" in machine.calls
+    assert "available=False" in machine.logged[0]
+    assert "path_free=False" in machine.logged[0]
+
+
+def test_refusal_names_the_blocking_obstacle():
+    machine = make_handover(committed_free=False, other_fresh=False)
+    machine.cur_static_avoidance_wpnts.free_dbg = {"obs": [
+        {"id": 1000000, "branch": "dyn/pred", "blocked": True,
+         "free_dist": -0.07, "gap": 2.4}]}
+    machine._check_overtaking_mode_sustainability()
+    assert "obs 1000000" in machine.logged[0]
+    assert "dyn/pred" in machine.logged[0]
+
+
+def test_refusal_says_when_the_planner_never_published():
+    machine = make_handover(committed_available=False, other_fresh=False)
+    machine._check_overtaking_mode_sustainability()
+    assert "never published" in machine.logged[0]
 
 
 def test_static_hands_over_to_dynamic_when_the_target_starts_moving():
-    machine = make_handover(True, other_fresh=True, other_free=True)
-    assert run_handover(machine, super_ok=False) is True
+    machine = make_handover(committed_static=True, committed_free=False)
+    assert machine._check_overtaking_mode_sustainability() is True
     assert machine.static_overtaking_mode is False
-    assert machine.calls == ["latest:dynamic", "free:dynamic"]
+    assert machine.calls[-2:] == ["latest:dynamic", "free:dynamic"]
 
 
 def test_dynamic_hands_over_to_static_when_the_target_stops():
-    machine = make_handover(False, other_fresh=True, other_free=True)
-    assert run_handover(machine, super_ok=False) is True
+    machine = make_handover(committed_static=False, committed_free=False)
+    assert machine._check_overtaking_mode_sustainability() is True
     assert machine.static_overtaking_mode is True
-    assert machine.calls == ["latest:static", "free:static"]
+    assert machine.calls[-2:] == ["latest:static", "free:static"]
 
 
 def test_handover_refused_when_the_other_path_is_blocked():
-    machine = make_handover(True, other_fresh=True, other_free=False)
-    assert run_handover(machine, super_ok=False) is False
-    assert machine.static_overtaking_mode is True
-
-
-def test_handover_refused_when_the_other_path_is_stale():
-    machine = make_handover(True, other_fresh=False, other_free=True)
-    assert run_handover(machine, super_ok=False) is False
+    machine = make_handover(committed_free=False, other_free=False)
+    assert machine._check_overtaking_mode_sustainability() is False
     assert machine.static_overtaking_mode is True
 
 
 def test_no_handover_to_dynamic_when_the_planner_is_not_launched():
-    machine = make_handover(True, other_fresh=True, other_free=True,
-                            dynamic_enabled=False)
-    assert run_handover(machine, super_ok=False) is False
-    assert machine.calls == []
+    machine = make_handover(committed_free=False, dynamic_enabled=False)
+    assert machine._check_overtaking_mode_sustainability() is False
+    assert not any(c.startswith("latest") for c in machine.calls)

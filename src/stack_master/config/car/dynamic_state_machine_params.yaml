@@ -96,3 +96,23 @@ state_machine:
     # correctly planned path was refused as "0.171 s old".
     recovery_planner:
       latest_threshold: 0.25
+
+      # The shared yaml still carries `enabled: false`, and its comment gives
+      # the reason: nothing published /planner/recovery/wpnts, so asking was
+      # pointless. head_to_head launches recovery_node, so that reason no
+      # longer holds here - but the flag was never lifted, and the state
+      # machine has therefore gone on refusing RECOVERY on this launch too.
+      #
+      # What that costs is written in the launch's own comment about why
+      # recovery_node was added: "a car off the raceline was handed the
+      # raceline itself, cutting back to it from wherever it was". That is
+      # exactly what an aborted overtake produces - the car is mid-swerve, off
+      # the line, and ObstacleTransition's last two branches both hand it
+      # RACELINE. Measured on map_yes, the car started 23 overtakes in two
+      # minutes, abandoned all 23 after about half a second each, and the
+      # resulting oscillation walked it into a wall; the trailing-only control
+      # run drove six clean laps.
+      #
+      # time_trials loads state_machine_params.yaml without this overlay, so
+      # its recovery planner stays disabled and its behaviour is unchanged.
+      enabled: true

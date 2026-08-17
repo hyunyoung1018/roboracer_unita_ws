@@ -12,7 +12,7 @@ from copy import deepcopy
 import numpy as np
 import rclpy
 
-from .state_machine_node import StateMachine
+from .state_machine_node import StateMachine, time_to_float
 
 
 def nearest_ahead(obstacles, current_s, track_length, horizon):
@@ -186,6 +186,39 @@ class HeadToHeadStateMachine(StateMachine):
             self.static_overtaking_mode = False
         return allowed
 
+    def _sustainability_detail(self, cache, available, path_free) -> str:
+        """Name the thing that refused, not just the term it refused under.
+
+        `available=False` and `path_free=False` are each three or four
+        different situations wearing the same word. Availability can fail
+        because the planner stopped publishing, because its last path is too
+        old, or because the car ran off the end of the one it was following;
+        the free check can fail on any obstacle in the list, and which one it
+        was decides whether the abort was reasonable.
+        """
+        bits = []
+        if not available:
+            stamp = getattr(cache, "stamp", None)
+            if stamp is None:
+                bits.append("never published")
+            else:
+                age = self.now_sec() - time_to_float(stamp)
+                bits.append(f"path {age:.2f}s old "
+                            f"(hyst {cache.hyst_timer_sec}, "
+                            f"kill {cache.killing_timer_sec})")
+                bits.append(f"on_spline={self._check_on_spline(cache)}")
+        if not path_free:
+            debug = getattr(cache, "free_dbg", None)
+            blocked = [rec for rec in (debug or {}).get("obs", [])
+                       if rec.get("blocked")]
+            if not blocked:
+                bits.append("no path in the cache to judge")
+            for rec in blocked[:2]:
+                bits.append(
+                    f"obs {rec.get('id')} via {rec.get('branch')} "
+                    f"free={rec.get('free_dist')} at {rec.get('gap')}m")
+        return (" - " + "; ".join(bits)) if bits else ""
+
     def _check_overtaking_mode_sustainability(self) -> bool:
         """Hand the manoeuvre over instead of abandoning it on a reclassification.
 
@@ -209,9 +242,29 @@ class HeadToHeadStateMachine(StateMachine):
         object is now dynamic. Switch to it rather than giving up. Both the
         availability and the free check still have to pass on the new source -
         this defers the decision to them, it does not override either.
+
+        The committed source's two terms are evaluated separately rather than
+        short-circuited, so a refusal can say which one refused - the same
+        shape _check_static_overtaking_mode already uses, and for the same
+        reason: from outside the car every abort looks identical. Without it
+        the only thing an aborted overtake tells you is that it aborted.
         """
-        if super()._check_overtaking_mode_sustainability():
+        committed_static = bool(self.static_overtaking_mode)
+        if committed_static:
+            src, cache = self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts
+        else:
+            src, cache = self.avoidance_wpnts, self.cur_avoidance_wpnts
+
+        available = bool(self._check_availability(src, cache))
+        path_free = bool(self._check_free_frenet(cache))
+        if available and path_free:
             return True
+
+        self.get_logger().info(
+            f"OVERTAKE dropping [{cache.name}]: "
+            f"available={available}, path_free={path_free}"
+            f"{self._sustainability_detail(cache, available, path_free)}",
+            throttle_duration_sec=0.5)
 
         target_static = not self.static_overtaking_mode
         if target_static:
