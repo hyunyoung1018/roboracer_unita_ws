@@ -255,6 +255,22 @@ spline_node:
     # advances by exactly this, so 0 would never terminate.
     corridor_point_spacing_m: 1.0
 
+    # How the avoidance path ENDS when the next obstacle is not in the corridor.
+    #
+    # The return leg used to always run its full 3 m back to the raceline, even
+    # when that crossed an obstacle the corridor had just refused to cover. The
+    # state machine checks the published path against every obstacle and would
+    # not drive it, so the car stopped with a perfectly good path on screen.
+    # Now the path ends short of that obstacle, which puts it past the end
+    # where the state machine ignores it, and the next replan leads with it.
+    #
+    # retreat_clearance_m  how far before that obstacle the path stops.
+    # retreat_floor_m      shortest return leg allowed. Below this the return
+    #                      is too sharp to drive at speed, so the full leg is
+    #                      kept and the side check refuses honestly instead.
+    retreat_clearance_m: 0.5
+    retreat_floor_m: 1.0
+
     lookahead: 10.0
 
     # [m] How far past the FIRST obstacle the corridor may reach to pick up
@@ -319,6 +335,22 @@ spline_node:
     # Floored at 0.2 in code: the control-point loop advances by exactly this,
     # so 0 would never terminate.
     corridor_point_spacing_m: 1.0
+
+    # How the avoidance path ENDS when the next obstacle is not in the corridor.
+    #
+    # The return leg used to always run its full 3 m back to the raceline, even
+    # when that crossed an obstacle the corridor had just refused to cover. The
+    # state machine checks the published path against every obstacle and would
+    # not drive it, so the car stopped with a perfectly good path on screen.
+    # Now the path ends short of that obstacle, which puts it past the end
+    # where the state machine ignores it, and the next replan leads with it.
+    #
+    # retreat_clearance_m  how far before that obstacle the path stops.
+    # retreat_floor_m      shortest return leg allowed. Below this the return
+    #                      is too sharp to drive at speed, so the full leg is
+    #                      kept and the side check refuses honestly instead.
+    retreat_clearance_m: 0.5
+    retreat_floor_m: 1.0
 
     # [m] How far the path passes the obstacle's edge. Squeezed from both
     # sides, and on test_213 the window is only 0.03 m wide.

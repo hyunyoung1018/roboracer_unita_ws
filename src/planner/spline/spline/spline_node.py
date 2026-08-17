@@ -117,6 +117,8 @@ class SplineNode(Node):
             # planned offset anyway, but flat control points keep the curvature
             # - and therefore the speed the controller picks - honest.
             'corridor_point_spacing_m': 1.0,
+            'retreat_clearance_m': 0.5,
+            'retreat_floor_m': 1.0,
             'measure': False,
         }
         for name, value in defaults.items():
@@ -155,6 +157,10 @@ class SplineNode(Node):
             self.get_parameter('corridor_link_gap_m').value)
         self.corridor_link_d_tol_m = float(
             self.get_parameter('corridor_link_d_tol_m').value)
+        self.retreat_clearance_m = float(
+            self.get_parameter('retreat_clearance_m').value)
+        self.retreat_floor_m = float(
+            self.get_parameter('retreat_floor_m').value)
         self.corridor_point_spacing_m = max(
             0.2, float(self.get_parameter('corridor_point_spacing_m').value))
         self.measure = bool(self.get_parameter('measure').value)
@@ -174,6 +180,8 @@ class SplineNode(Node):
             'corridor_link_gap_m': 'corridor_link_gap_m',
             'corridor_link_d_tol_m': 'corridor_link_d_tol_m',
             'corridor_point_spacing_m': 'corridor_point_spacing_m',
+            'retreat_clearance_m': 'retreat_clearance_m',
+            'retreat_floor_m': 'retreat_floor_m',
             'measure': 'measure',
         }
         for parameter in params:
@@ -524,6 +532,54 @@ class SplineNode(Node):
         (member_s, left_apex, right_apex, left_room, right_room,
          bound_left, bound_right) = corridor_geometry(group)
         first_s, last_s = member_s[0], member_s[-1]
+
+        # End the path BEFORE the obstacle the corridor refused to cover.
+        #
+        # This is what stopped the car on a zigzag. The corridor correctly
+        # refused to link over the middle obstacle, so the plan was the leader
+        # alone - but the return leg still ran its full 3 m back to the
+        # raceline, straight across the middle obstacle's s. The path was
+        # published, and the state machine's own clearance check, which looks
+        # at every obstacle and not just the ones near the line, found the path
+        # sitting inside that obstacle and refused to drive it. Planner said
+        # go, state machine said no, and the car sat there.
+        #
+        # A slalom is not one path. It is a path around the first obstacle that
+        # STOPS before the second, and then a replan. Ending here makes the
+        # obstacle fall past the end, which the state machine already knows how
+        # to ignore - "not this path's problem" - and the next replan leads
+        # with it and goes round the other way.
+        #
+        # Only shortened, never lengthened, and never below retreat_floor_m:
+        # the return leg's curvature is what the controller reads to set speed,
+        # and a snapped-back return at the moment the car is committed is worse
+        # than no path. If it will not fit, the retreat stays and occupied_by
+        # below refuses the side honestly instead.
+        blocker = next(
+            (o for o in chain
+             if ahead(o) > gaps[group_idx[-1]] + 1e-3
+             and not any(o is member for member in group)), None)
+        if blocker is not None:
+            room = ahead(blocker) - gaps[group_idx[-1]] - self.retreat_clearance_m
+            if room < retreat[-1]:
+                if room >= self.retreat_floor_m:
+                    was = retreat[-1]
+                    retreat = retreat * (room / was)
+                    self.get_logger().info(
+                        f"ending the path {room:.2f} m past the obstacle at "
+                        f"s={obstacle.s_center:.2f} instead of {was:.2f} m: "
+                        f"the next obstacle is at s={blocker.s_center:.2f} and "
+                        f"is not in this corridor - returning to the raceline "
+                        f"before it, and the next replan leads with it",
+                        throttle_duration_sec=2.0)
+                else:
+                    self.get_logger().info(
+                        f"cannot end the path before the obstacle at "
+                        f"s={blocker.s_center:.2f}: only {room:.2f} m of return "
+                        f"leg would be left, under the "
+                        f"{self.retreat_floor_m:.2f} m floor - keeping the full "
+                        f"return and letting the side check decide",
+                        throttle_duration_sec=2.0)
 
         # Control points: approach on the raceline, the offset held at every
         # member (and at corridor_point_spacing_m in between, so the cubic runs
