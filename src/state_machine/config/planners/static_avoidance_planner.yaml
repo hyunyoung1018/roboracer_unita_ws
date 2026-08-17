@@ -27,7 +27,20 @@ free_scaling_reference_distance_m: 2.0
 # refused an avoidance that was being planned correctly. Five cycles still
 # rejects a planner that has actually stopped, and 0.25 s is under half a metre
 # of travel at the speed this branch arms at.
-latest_threshold: 0.25
+# 0.25 -> 1.0. Measured refusal: "path is 0.301 s old, threshold 0.25" - a
+# path that existed, described an obstacle that had not moved, thrown away
+# fifty milliseconds over. The planner does not run at a steady 20 Hz once
+# obstacles are in view; between good frames it bails on noise, and over one
+# approach the gap between usable paths was 1.5 to 2.3 s. At 0.25 s the car
+# had an avoidance to follow about a tenth of the time and drove the raceline
+# the rest, which is what "the path is drawn and it goes straight" was.
+#
+# Safe because the obstacles here are stationary: a path drawn for a cone a
+# second ago is still a path around that cone. _check_on_spline independently
+# requires the car to still be on it, so a stale path that no longer fits gets
+# dropped on its own. Turn this back down for head-to-head, where a second-old
+# path describes an opponent that has moved.
+latest_threshold: 1.0
 hyst_timer_sec: 4.0
 killing_timer_sec: 10.0
 on_spline_front_horizon_thres_m: 0.5

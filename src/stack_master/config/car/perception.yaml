@@ -182,7 +182,22 @@ spline_node:
     # Capped at the state machine's latest_threshold (0.25). Holding longer
     # only republishes paths it will reject as stale - "path is 0.321 s old,
     # threshold 0.25" in the logs was exactly that.
-    path_hold_s: 0.25
+    # [s] How long spline_node keeps republishing its last good path when a
+    # frame produces nothing.
+    #
+    # It has to cover the gap between good frames, and measured on the car
+    # that gap is far larger than 0.25 s. Over one approach: a path at
+    # t=283.6, another at 284.0, then a bail, then a path 1.50 s later, then
+    # two more bails. The bails are not the planner failing - they are the
+    # side veto flickering on measurement noise, on frames where nothing
+    # physically changed - but each one leaves the state machine with no path,
+    # and 2.3 s between good frames against a 0.25 s hold meant it had
+    # something to drive about a tenth of the time.
+    #
+    # The held path keeps its ORIGINAL stamp, so this is not a way of faking
+    # freshness: the state machine's own latest_threshold still decides, and
+    # _check_on_spline still drops it once the car is not near it.
+    path_hold_s: 1.0
 
     # [m] How much wider the other side must be before the planner switches
     # sides. Left and right room are often within a couple of centimetres of
