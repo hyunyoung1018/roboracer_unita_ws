@@ -484,6 +484,31 @@ class SplineNode(Node):
             # publish the shorter one: the return leg clears an obstacle that is
             # far enough off the line, occupied_by refuses the side if it does
             # not, and the next replan gets the rest.
+            # An obstacle whose d is nowhere near the leader's cancels the
+            # corridor - it does not merely stop it growing, and it is decided
+            # BEFORE the merge test gets a chance to absorb it.
+            #
+            # Order matters here. The shift test below would happily merge an
+            # obstacle on the far side of the line, because covering it is free
+            # going the other way: the offset is set by whoever reaches
+            # furthest towards the line, so a wide detour costs nothing on
+            # paper. On a track this width that is a manoeuvre the car should
+            # not be making in one move. If something between the near obstacle
+            # and the far one is at a different d, there is no corridor here -
+            # take them one at a time.
+            leader_d = blocking[0].d_center
+            gap_d = blocking[following].d_center - leader_d
+            if abs(gap_d) > self.corridor_block_d_tol_m:
+                self.get_logger().info(
+                    f"no corridor: the obstacle at "
+                    f"s={blocking[following].s_center:.2f} is at d={blocking[following].d_center:+.2f}, "
+                    f"{abs(gap_d):.2f} m from the leader's {leader_d:+.2f} and over the "
+                    f"{self.corridor_block_d_tol_m:.2f} m block tolerance - "
+                    f"planning for the leader at s={blocking[0].s_center:.2f} alone",
+                    throttle_duration_sec=2.0)
+                group_idx = [0]
+                break
+
             trial = [blocking[i] for i in group_idx + [following]]
             _, trial_left, trial_right, trial_lroom, trial_rroom, _, _ = \
                 corridor_geometry(trial)
@@ -569,16 +594,12 @@ class SplineNode(Node):
                         return other
                 return None
 
-            # An obstacle BETWEEN two members whose d is nowhere near theirs
-            # means this was never one manoeuvre.
+            # The same test again, on what growth never got to see.
             #
-            # Simpler and stricter than the offset test below, and it catches a
-            # different thing: that one asks "can either offset still get past
-            # it", this one asks "does it belong to this group at all". A car
-            # threading a corridor past something sitting across the middle of
-            # it is not a corridor, whatever the arithmetic says about
-            # clearance, and on a track this narrow the honest answer is to
-            # take the obstacles one at a time.
+            # Growth walks `blocking` - obstacles the RACELINE does not clear -
+            # so an obstacle sitting well off the line is invisible to it, and
+            # the corridor closes over the top of it. Here the set is
+            # `candidates`, which is everything.
             leader_d = group[0].d_center
             odd_one_out = next(
                 (o for o in candidates
