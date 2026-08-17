@@ -983,6 +983,44 @@ class StateMachine(Node):
         lateral = float(obs.d_left) - float(obs.d_right)
         return lateral / 2.0 if lateral > 1e-6 else float(obs.size) / 2.0
 
+    @staticmethod
+    def _edge_gap(path_d, obs) -> float:
+        """Signed gap from a path at `path_d` to the obstacle's lateral band.
+
+        Negative when the path is inside it. This is the same geometry the
+        spline planner uses to place its apex, and the two have to agree or
+        one of them publishes a path the other will not drive.
+
+        The old form was |path_d - d_center| minus the half width, which is a
+        SYMMETRIC box around d_center. The tracker does not produce one: it
+        holds the left and right half-extents separately and writes
+        d_right = d_center - right, d_left = d_center + left. When those two
+        differ, d_center is not the midpoint, and rebuilding the band as
+        d_center +/- (d_left - d_right)/2 slides it sideways - dragging the
+        NEAR edge closer than the obstacle actually is by half the asymmetry.
+
+        Measured: an obstacle reported d_center=+0.30 with a half width of
+        0.25, so this modelled it as +0.05..+0.55, while the planner's own
+        apex puts its near edge at +0.11. Six centimetres of obstacle that is
+        not there, and it is why the refusals in that log land one and two
+        millimetres under the threshold over and over - "free +0.015, needs
+        0.016", "free +0.048, needs 0.050". At 0.63 m and 3.7 m/s the car had
+        nowhere to go by then.
+
+        Falls back to the symmetric box for a producer that leaves the bounds
+        at zero, exactly as _lateral_half_width does.
+        """
+        d_right = float(obs.d_right)
+        d_left = float(obs.d_left)
+        if d_left - d_right <= 1e-6:
+            half = float(obs.size) / 2.0
+            d_right, d_left = float(obs.d_center) - half, float(obs.d_center) + half
+        if path_d >= d_left:
+            return path_d - d_left
+        if path_d <= d_right:
+            return d_right - path_d
+        return -min(path_d - d_right, d_left - path_d)
+
     def _check_free_frenet(self, wpnts_data) -> bool:
         is_free = True
         closest_obs = None
@@ -1043,13 +1081,11 @@ class StateMachine(Node):
                             f"at {max_gap:.2f} m - not this path's problem",
                             5.0)
                     elif gap < max_horizon:
-                        obs_d = obs.d_center
                         ot_d = 0
                         if not is_gb_track_wpnts:
                             avoid_wpnt_idx = np.argmin(abs(wpnts_data.array[:, 2] - obs_s))
                             ot_d = wpnts_data.list[avoid_wpnt_idx].d_m
-                        min_dist = abs(ot_d - obs_d)
-                        free_dist = min_dist - self._lateral_half_width(obs) - self.gb_ego_width_m / 2
+                        free_dist = self._edge_gap(ot_d, obs) - self.gb_ego_width_m / 2
                         scaling_factor = np.clip(gap / free_scaling_reference_distance_m, 0.0, 1.0)
                         rec["branch"] = "static/geom"
                         rec["free_dist"] = round(float(free_dist), 3)
@@ -1065,8 +1101,8 @@ class StateMachine(Node):
                             self._throttled_info(
                                 f"blocked/{wpnts_data.name}",
                                 f"[{wpnts_data.name}] blocked by obs {int(obs.id)} "
-                                f"at d={obs.d_center:+.2f} ({gap:.2f} m ahead, "
-                                f"half width {self._lateral_half_width(obs):.2f}): "
+                                f"spanning d={obs.d_right:+.2f}..{obs.d_left:+.2f} "
+                                f"({gap:.2f} m ahead): "
                                 f"path is at d={ot_d:+.3f}, free {free_dist:+.3f} m, "
                                 f"needs {lateral_width_m * scaling_factor:.3f}",
                                 1.0,
@@ -1151,8 +1187,7 @@ class StateMachine(Node):
                             if not is_gb_track_wpnts:
                                 avoid_wpnt_idx = np.argmin(abs(wpnts_data.array[:, 2] - obs.s_center))
                                 ot_d = wpnts_data.list[avoid_wpnt_idx].d_m
-                            min_dist = abs(ot_d - obs.d_center)
-                            free_dist = min_dist - self._lateral_half_width(obs) - self.gb_ego_width_m / 2
+                            free_dist = self._edge_gap(ot_d, obs) - self.gb_ego_width_m / 2
                             scaling_factor = np.clip(gap / free_scaling_reference_distance_m, 0.0, 1.0)
                             rec["free_dist"] = round(float(free_dist), 3)
                             if free_dist < lateral_width_m * scaling_factor:
@@ -1164,9 +1199,9 @@ class StateMachine(Node):
                                 self._throttled_info(
                                     f"blocked/{wpnts_data.name}",
                                     f"[{wpnts_data.name}] blocked by non-static "
-                                    f"obs {int(obs.id)} (no prediction) at "
-                                    f"d={obs.d_center:+.2f} ({gap:.2f} m ahead, "
-                                    f"half width {self._lateral_half_width(obs):.2f}): "
+                                    f"obs {int(obs.id)} (no prediction) "
+                                    f"spanning d={obs.d_right:+.2f}..{obs.d_left:+.2f} "
+                                    f"({gap:.2f} m ahead): "
                                     f"path is at d={ot_d:+.3f}, "
                                     f"free {free_dist:+.3f} m, "
                                     f"needs {lateral_width_m * scaling_factor:.3f}",
