@@ -696,7 +696,29 @@ class SplineNode(Node):
         def occupied_by(apex_d):
             profile = path_profile(apex_d)
             lo, hi = clip_bounds(apex_d)
-            for other in candidates:
+            # in_range, not candidates. This is the last thing that looks at
+            # the path before it is published, and it has to look at the same
+            # obstacles the state machine will.
+            #
+            # candidates is filtered to trajectory_threshold (0.6 m) - near
+            # enough to the line to be worth PLANNING around. That is the
+            # wrong question here. The return leg leaves the apex and decays
+            # to the raceline over several metres, so it spends that whole
+            # distance out where an obstacle at d=0.7 lives, and one of those
+            # is invisible to every other check too: the blocker test only
+            # truncates for obstacles the raceline does not clear, and one out
+            # at 0.7 is cleared by definition.
+            #
+            # Measured over two runs, the obstacle at s~22.6 reported
+            # d=+0.52, +0.63, +0.68, +0.74, +0.77, +0.79 on different frames.
+            # It straddles the threshold. On the frames it fell outside,
+            # nothing in this planner looked at it at all while the return leg
+            # from the obstacle before it went past.
+            #
+            # Safe to widen only because the veto now has an absolute
+            # condition. Comparative-only, this would refuse a side for any
+            # obstacle anywhere on it.
+            for other in in_range:
                 if any(other is member for member in group):
                     continue
                 other_ahead = ahead(other)
