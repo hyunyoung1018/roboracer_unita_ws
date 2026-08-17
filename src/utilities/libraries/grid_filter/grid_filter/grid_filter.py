@@ -93,3 +93,42 @@ class GridFilter:
 
     def is_path_inside(self, xy):
         return all(self.is_point_inside(x, y) for x, y in np.asarray(xy))
+
+    def first_outside_index(self, xy):
+        """Index of the first sample that is not known free space, or None.
+
+        Same verdict as calling :meth:`is_point_inside` on each point in turn,
+        computed as four array operations instead of one Python call per point.
+        The per-point form costs a world_to_pixel - two trig multiplies, a
+        divide and a floor, all on Python scalars - for every sample of every
+        candidate path, and the planner runs it over the raw path AND the
+        smoothed one on every plan. On a 120-point path at 20 Hz that is 4800
+        interpreted calls a second for a test that is a single array index.
+
+        Returns None when the grid is not ready, matching is_point_inside's
+        "not known free" verdict for index 0 in that case is NOT wanted here -
+        callers check `ready` first, and reporting no failure on a missing map
+        would let an unchecked path through. So: not ready -> index 0.
+        """
+        points = np.asarray(xy, dtype=float)
+        if points.size == 0:
+            return None
+        if self.eroded_image is None or self.origin is None or self.resolution is None:
+            return 0
+        dx = points[:, 0] - self.origin[0]
+        dy = points[:, 1] - self.origin[1]
+        cos_yaw, sin_yaw = cos(self.origin_yaw), sin(self.origin_yaw)
+        local_x = cos_yaw * dx + sin_yaw * dy
+        local_y = -sin_yaw * dx + cos_yaw * dy
+        px = np.floor(local_x / self.resolution).astype(np.int64)
+        py = np.floor(local_y / self.resolution).astype(np.int64)
+        height, width = self.eroded_image.shape
+        inside_grid = (px >= 0) & (py >= 0) & (px < width) & (py < height)
+        free = np.zeros(len(points), dtype=bool)
+        # Index only the in-bounds samples; an out-of-bounds pixel stays False,
+        # which is the same answer is_point_inside gives.
+        if inside_grid.any():
+            free[inside_grid] = (
+                self.eroded_image[py[inside_grid], px[inside_grid]] == 255)
+        bad = np.flatnonzero(~free)
+        return int(bad[0]) if bad.size else None
