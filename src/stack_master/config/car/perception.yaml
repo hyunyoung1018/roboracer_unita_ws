@@ -216,12 +216,19 @@ spline_node:
     # closer than roughly 3 m cannot be passed at different offsets anyway.
     corridor_link_gap_m: 8.0
 
-    # [m] How far the next obstacle's d may differ FROM THE LEADER'S and still
-    # join. Signed, so opposite sides fall out by themselves: -0.10 and -0.15
-    # differ by 0.05 and belong together; -0.10 and +0.15 differ by 0.25 and
-    # do not. Measured against the leader rather than the previous member, so
-    # a corridor cannot walk across the track one small step at a time.
-    corridor_link_d_tol_m: 0.30
+    # [m] How far covering the next obstacle may push the corridor's offset
+    # out, measured on whichever side is cheaper. 0 means the merge is free:
+    # the obstacle is already inside what the corridor holds.
+    #
+    # This replaced a test on how far the next obstacle's d was from the
+    # leader's, which rejected the case it was meant to help. Three obstacles
+    # at d -0.10, +0.25, -0.05: the middle one differs from the leader by 0.35
+    # and was refused, so the corridor became the leader alone - and that path
+    # returns to the raceline exactly where the middle obstacle is and drives
+    # into it. Merging it costs NOTHING going right, because the offset is set
+    # by whichever obstacle reaches furthest towards the line and that is still
+    # the leader. Shift 0.00 m, invisible to a d difference.
+    corridor_link_shift_tol_m: 0.30
 
     # [s] How long a corridor commitment survives without being renewed.
     #

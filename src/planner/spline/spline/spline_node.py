@@ -96,15 +96,11 @@ class SplineNode(Node):
             # closer together than about 3 m cannot be passed at different
             # offsets anyway, whatever this says.
             'corridor_link_gap_m': 3.0,
-            # [m] How far the next obstacle's d may differ FROM THE LEADER'S
-            # and still join. Signed, so opposite sides fall out on their own:
-            # -0.10 and -0.15 differ by 0.05 and belong together, -0.10 and
-            # +0.15 differ by 0.25 and do not.
-            #
-            # This is the legible knob on top of the geometric test below,
-            # which asks the exact question - does one offset still fit - and
-            # stays as the backstop.
-            'corridor_link_d_tol_m': 0.20,
+            # [m] How far covering the next obstacle may push the corridor's
+            # offset out, measured on whichever side is cheaper. 0 means the
+            # merge is free - the obstacle is already inside what the corridor
+            # holds - and free merges should always be taken.
+            'corridor_link_shift_tol_m': 0.20,
             # [s] How long a corridor commitment survives without being
             # renewed. The car normally drives out the far end long before
             # this; the timeout is for the corridor whose obstacles were
@@ -151,8 +147,8 @@ class SplineNode(Node):
             self.get_parameter('corridor_max_len_m').value)
         self.corridor_link_gap_m = float(
             self.get_parameter('corridor_link_gap_m').value)
-        self.corridor_link_d_tol_m = float(
-            self.get_parameter('corridor_link_d_tol_m').value)
+        self.corridor_link_shift_tol_m = float(
+            self.get_parameter('corridor_link_shift_tol_m').value)
         self.corridor_latch_ttl_s = float(
             self.get_parameter('corridor_latch_ttl_s').value)
         self.corridor_point_spacing_m = max(
@@ -171,7 +167,7 @@ class SplineNode(Node):
             'raceline_clearance_m': 'raceline_clearance_m',
             'corridor_max_len_m': 'corridor_max_len_m',
             'corridor_link_gap_m': 'corridor_link_gap_m',
-            'corridor_link_d_tol_m': 'corridor_link_d_tol_m',
+            'corridor_link_shift_tol_m': 'corridor_link_shift_tol_m',
             'corridor_latch_ttl_s': 'corridor_latch_ttl_s',
             'corridor_point_spacing_m': 'corridor_point_spacing_m',
             'measure': 'measure',
@@ -453,20 +449,6 @@ class SplineNode(Node):
                 break
             if gaps[following] > gaps[last] + self.corridor_link_gap_m * scale:
                 break
-            # Same side and near enough in d to share one offset. Measured
-            # against the LEADER, so a corridor cannot drift across the track
-            # one small step at a time.
-            d_off = blocking[following].d_center - obstacle.d_center
-            if abs(d_off) > self.corridor_link_d_tol_m:
-                self.get_logger().info(
-                    f"not linking the obstacle at "
-                    f"s={blocking[following].s_center:.2f} into the corridor: "
-                    f"its d={blocking[following].d_center:+.2f} is {abs(d_off):.2f} m "
-                    f"from the leader's {obstacle.d_center:+.2f}, over the "
-                    f"{self.corridor_link_d_tol_m:.2f} m link tolerance - "
-                    f"avoiding it on its own instead",
-                    throttle_duration_sec=2.0)
-                break
             if gaps[following] - gaps[0] > self.corridor_max_len_m:
                 self.get_logger().info(
                     f"obstacle at s={blocking[following].s_center:.2f} is "
@@ -489,6 +471,43 @@ class SplineNode(Node):
             trial = [blocking[i] for i in group_idx + [following]]
             _, trial_left, trial_right, trial_lroom, trial_rroom, _, _ = \
                 corridor_geometry(trial)
+
+            # How far covering this one PUSHES THE CORRIDOR OUT, on a side that
+            # is still usable. Not how different its d is.
+            #
+            # The d-difference version of this rejected the case it was meant
+            # to help. Three obstacles at d -0.10, +0.25, -0.05: the middle one
+            # differs from the leader by 0.35 and was refused, so the corridor
+            # was the leader alone - and that path returns to the raceline
+            # exactly where the middle obstacle is, and drives into it.
+            #
+            # But merging it costs NOTHING going right: the leader already
+            # needs -0.48 there and so does the pair, because the offset is set
+            # by whichever obstacle reaches furthest towards the line and that
+            # is still the leader. Shift 0.00 m. The d difference could not see
+            # that; the shift is the thing that actually matters, because it is
+            # how much more track the corridor eats.
+            #
+            # Measured per side and the cheapest wins, so a merge that is free
+            # one way is not blocked by being expensive the other.
+            _, cur_left, cur_right, _, _, _, _ = corridor_geometry(
+                [blocking[i] for i in group_idx])
+            shifts = []
+            if trial_lroom >= self.boundary_margin:
+                shifts.append(abs(trial_left - cur_left))
+            if trial_rroom >= self.boundary_margin:
+                shifts.append(abs(trial_right - cur_right))
+            if shifts and min(shifts) > self.corridor_link_shift_tol_m:
+                self.get_logger().info(
+                    f"not linking the obstacle at "
+                    f"s={blocking[following].s_center:.2f} into the corridor: "
+                    f"covering it would push the offset out by "
+                    f"{min(shifts):.2f} m, over the "
+                    f"{self.corridor_link_shift_tol_m:.2f} m link tolerance - "
+                    f"avoiding it on its own instead",
+                    throttle_duration_sec=2.0)
+                break
+
             if max(trial_lroom, trial_rroom) < self.boundary_margin:
                 self.get_logger().info(
                     f"not widening the corridor to the obstacle at "
