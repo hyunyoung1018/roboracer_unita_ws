@@ -63,6 +63,15 @@ state_machine:
     # swerve cannot be driven at, and if that ever becomes the failure this
     # is where to bring it back down.
     static_overtake_max_speed_mps: 6.0
+    # [m] How much better than the raceline an avoidance path has to be before
+    # it is driven despite failing the free check.
+    #
+    # Only consulted when the raceline is not free either. Trailing falls back
+    # to the raceline, so refusing a marginal avoidance does not keep the car
+    # safe - it puts it on the line that was declared blocked. Measured: the
+    # avoidance cleared by 0.022 m against a 0.034 m margin, was refused, and
+    # the raceline it fell back to was 0.203 m inside the obstacle.
+    static_overtake_better_by_m: 0.05
     # safety
     volt_threshold: 11.0
     # dynamic (replaces dyn_statemachine_tuner.cfg)

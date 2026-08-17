@@ -228,6 +228,8 @@ class StateMachine(Node):
         self.gb_horizon_m = self.params.gb_horizon_m
         self.interest_horizon_m = self.params.interest_horizon_m
         self.static_overtake_max_speed_mps = self.params.static_overtake_max_speed_mps
+        self.static_overtake_better_by_m = getattr(
+            self.params, 'static_overtake_better_by_m', 0.05)
         self.overtake_min_closing_mps = self.params.overtake_min_closing_mps
 
         self.last_recovery_update_time = None
@@ -1318,6 +1320,20 @@ class StateMachine(Node):
         else:
             return False
 
+    @staticmethod
+    def _worst_free(wpnts_data):
+        """Tightest clearance _check_free_frenet found on this path, or None.
+
+        Read back out of the debug record it already fills in, so comparing
+        two paths costs nothing extra.
+        """
+        dbg = wpnts_data.free_dbg
+        if not dbg:
+            return None
+        room = [rec["free_dist"] for rec in dbg.get("obs", ())
+                if rec.get("free_dist") is not None]
+        return min(room) if room else None
+
     def _check_static_overtaking_mode(self) -> bool:
         # Evaluated separately rather than short-circuited so a refusal can say
         # which condition refused. All four have to hold, and from outside the
@@ -1340,6 +1356,38 @@ class StateMachine(Node):
         if slow_enough and closing and have_path and path_free:
             self.static_overtaking_mode = True
             return True
+
+        # Neither one is free: drive the better of the two, not the raceline.
+        #
+        # path_free is a yes/no against a fixed margin, and when the answer is
+        # no the transition falls all the way through to TRAILING/RACELINE -
+        # the raceline, which is the thing that was declared blocked in the
+        # first place. So a refusal by millimetres put the car back on a line
+        # that goes straight through the obstacle, and it drove there with a
+        # perfectly good avoidance path drawn on screen and nobody following
+        # it. Measured twice in one run: the avoidance cleared the obstacle by
+        # 0.022 m and 0.024 m against margins of 0.034 and 0.031, so it was
+        # refused, and the raceline it fell back to was 0.203 m and 0.222 m
+        # INSIDE the same obstacle.
+        #
+        # When the raceline is free this branch does nothing - a marginal
+        # avoidance is not worth leaving a clear line for, and the frame where
+        # the avoidance really was the worse of the two (free -0.055 against
+        # the raceline's +0.070) still correctly stays on the line.
+        if slow_enough and closing and have_path:
+            if not self._check_free_frenet(self.cur_gb_wpnts):
+                avoid_room = self._worst_free(self.cur_static_avoidance_wpnts)
+                line_room = self._worst_free(self.cur_gb_wpnts)
+                if (avoid_room is not None and line_room is not None
+                        and avoid_room > line_room + self.static_overtake_better_by_m):
+                    self.static_overtaking_mode = True
+                    self.get_logger().warn(
+                        f"taking the avoidance path even though it is not clear: "
+                        f"it leaves {avoid_room:+.3f} m at its tightest and the "
+                        f"raceline leaves {line_room:+.3f} m, and the raceline is "
+                        f"where trailing would put the car",
+                        throttle_duration_sec=1.0)
+                    return True
 
         if len(self.cur_obstacles_in_interest) != 0:
             self.get_logger().info(
