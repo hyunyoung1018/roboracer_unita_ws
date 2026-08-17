@@ -119,6 +119,7 @@ class SplineNode(Node):
             'corridor_point_spacing_m': 1.0,
             'retreat_clearance_m': 0.5,
             'retreat_floor_m': 1.0,
+            'min_path_clearance_m': 0.20,
             'measure': False,
         }
         for name, value in defaults.items():
@@ -161,6 +162,8 @@ class SplineNode(Node):
             self.get_parameter('retreat_clearance_m').value)
         self.retreat_floor_m = float(
             self.get_parameter('retreat_floor_m').value)
+        self.min_path_clearance_m = float(
+            self.get_parameter('min_path_clearance_m').value)
         self.corridor_point_spacing_m = max(
             0.2, float(self.get_parameter('corridor_point_spacing_m').value))
         self.measure = bool(self.get_parameter('measure').value)
@@ -182,6 +185,7 @@ class SplineNode(Node):
             'corridor_point_spacing_m': 'corridor_point_spacing_m',
             'retreat_clearance_m': 'retreat_clearance_m',
             'retreat_floor_m': 'retreat_floor_m',
+            'min_path_clearance_m': 'min_path_clearance_m',
             'measure': 'measure',
         }
         for parameter in params:
@@ -759,6 +763,33 @@ class SplineNode(Node):
                 # nominally back on the raceline, and a side must not be
                 # chosen on that.
                 room = clearance(path_d, other)
+                # A floor the comparison cannot argue its way past.
+                #
+                # clearance() measures the path's CENTRELINE to the obstacle's
+                # edge. The car is 0.28 m wide, so it fits only if room is at
+                # least its half width plus the margin the state machine
+                # insists on - which is what min_path_clearance_m is.
+                #
+                # Measured on the car, and it is why the comparison alone is
+                # not enough: leader at s=25.09 out at d=-0.49, so the corridor
+                # went left to d=+0.60, and a second obstacle 0.6 m later
+                # spanning d=-0.03..+0.45. The path passed its edge with
+                # 0.129 m - less than the car's half width, so the body
+                # overlapped it by a centimetre - and the comparison waved it
+                # through, because the raceline runs THROUGH that obstacle
+                # (clearance -0.03) and 0.129 is better than that. Better than
+                # the raceline is not the same as passable. The state machine
+                # refused the path every tick ("free -0.010 m") and the car
+                # drove into it anyway on the path it had already been given.
+                #
+                # Below the floor there is no path on that side, and if that
+                # leaves neither side the honest answer is no path at all -
+                # those two obstacles straddle the line 0.6 m apart and there
+                # is genuinely no way between them.
+                if room < self.min_path_clearance_m:
+                    return other, path_d
+                # Above the floor the car fits, and the only remaining
+                # question is whether it is worse than staying on the line.
                 if (room < self.evasion_distance
                         and room < clearance(0.0, other) - 0.05):
                     return other, path_d
@@ -775,7 +806,8 @@ class SplineNode(Node):
                     f"not going {name} of the obstacle at s={apex_s:.2f}: that path "
                     f"passes the obstacle at s={other.s_center:.2f} "
                     f"(d {other.d_right:+.2f}..{other.d_left:+.2f}) at d={path_d:+.2f}, "
-                    f"closer than the raceline would",
+                    f"leaving {clearance(path_d, other):+.2f} m against a "
+                    f"{self.min_path_clearance_m:.2f} m floor",
                     throttle_duration_sec=2.0)
         # Stick to the side already chosen unless the other is clearly better.
         #

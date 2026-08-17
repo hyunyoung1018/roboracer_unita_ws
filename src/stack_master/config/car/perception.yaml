@@ -271,6 +271,17 @@ spline_node:
     retreat_clearance_m: 0.5
     retreat_floor_m: 1.0
 
+    # [m] Hard floor on how close the published path may pass an obstacle,
+    # measured from the path's CENTRELINE to the obstacle's edge. Nothing
+    # overrides it - not even "the raceline would be worse".
+    #
+    # The car is 0.28 m wide, so its half width is 0.14, and the state machine
+    # then wants lateral_width_m (0.05) on top before it will drive the path.
+    # 0.20 is those two with a little rounding, which is what makes the two
+    # nodes agree about whether a path is drivable. Below this the planner
+    # refuses the side rather than publishing something that gets thrown back.
+    min_path_clearance_m: 0.20
+
     lookahead: 10.0
 
     # [m] How far past the FIRST obstacle the corridor may reach to pick up
@@ -351,6 +362,17 @@ spline_node:
     #                      kept and the side check refuses honestly instead.
     retreat_clearance_m: 0.5
     retreat_floor_m: 1.0
+
+    # [m] Hard floor on how close the published path may pass an obstacle,
+    # measured from the path's CENTRELINE to the obstacle's edge. Nothing
+    # overrides it - not even "the raceline would be worse".
+    #
+    # The car is 0.28 m wide, so its half width is 0.14, and the state machine
+    # then wants lateral_width_m (0.05) on top before it will drive the path.
+    # 0.20 is those two with a little rounding, which is what makes the two
+    # nodes agree about whether a path is drivable. Below this the planner
+    # refuses the side rather than publishing something that gets thrown back.
+    min_path_clearance_m: 0.20
 
     # [m] How far the path passes the obstacle's edge. Squeezed from both
     # sides, and on test_213 the window is only 0.03 m wide.
