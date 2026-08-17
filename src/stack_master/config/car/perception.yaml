@@ -230,6 +230,16 @@ spline_node:
     # the leader. Shift 0.00 m, invisible to a d difference.
     corridor_link_shift_tol_m: 0.30
 
+    # [m] An obstacle sitting BETWEEN two corridor members, further than this
+    # from the leader in d, cancels the corridor outright - the obstacles are
+    # taken one at a time instead.
+    #
+    # Stricter than the clearance test that follows it in code, and asking a
+    # different question: not "can either offset still get past it" but "does
+    # it belong to this group at all". A car threading a corridor past
+    # something across the middle of it is not really doing one manoeuvre.
+    corridor_block_d_tol_m: 0.30
+
     # [s] How long a corridor commitment survives without being renewed.
     #
     # Once a corridor covers more than one obstacle the planner commits to it:

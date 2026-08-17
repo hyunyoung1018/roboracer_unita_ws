@@ -101,6 +101,11 @@ class SplineNode(Node):
             # merge is free - the obstacle is already inside what the corridor
             # holds - and free merges should always be taken.
             'corridor_link_shift_tol_m': 0.20,
+            # [m] An obstacle BETWEEN two corridor members, further than this
+            # from the leader in d, cancels the corridor outright. Stricter
+            # than the clearance test, and asking a different question: not
+            # "can we still get past it" but "does it belong to this group".
+            'corridor_block_d_tol_m': 0.30,
             # [s] How long a corridor commitment survives without being
             # renewed. The car normally drives out the far end long before
             # this; the timeout is for the corridor whose obstacles were
@@ -149,6 +154,8 @@ class SplineNode(Node):
             self.get_parameter('corridor_link_gap_m').value)
         self.corridor_link_shift_tol_m = float(
             self.get_parameter('corridor_link_shift_tol_m').value)
+        self.corridor_block_d_tol_m = float(
+            self.get_parameter('corridor_block_d_tol_m').value)
         self.corridor_latch_ttl_s = float(
             self.get_parameter('corridor_latch_ttl_s').value)
         self.corridor_point_spacing_m = max(
@@ -168,6 +175,7 @@ class SplineNode(Node):
             'corridor_max_len_m': 'corridor_max_len_m',
             'corridor_link_gap_m': 'corridor_link_gap_m',
             'corridor_link_shift_tol_m': 'corridor_link_shift_tol_m',
+            'corridor_block_d_tol_m': 'corridor_block_d_tol_m',
             'corridor_latch_ttl_s': 'corridor_latch_ttl_s',
             'corridor_point_spacing_m': 'corridor_point_spacing_m',
             'measure': 'measure',
@@ -561,6 +569,36 @@ class SplineNode(Node):
                         return other
                 return None
 
+            # An obstacle BETWEEN two members whose d is nowhere near theirs
+            # means this was never one manoeuvre.
+            #
+            # Simpler and stricter than the offset test below, and it catches a
+            # different thing: that one asks "can either offset still get past
+            # it", this one asks "does it belong to this group at all". A car
+            # threading a corridor past something sitting across the middle of
+            # it is not a corridor, whatever the arithmetic says about
+            # clearance, and on a track this narrow the honest answer is to
+            # take the obstacles one at a time.
+            leader_d = group[0].d_center
+            odd_one_out = next(
+                (o for o in candidates
+                 if not any(o is m for m in group)
+                 and hold_lo < ahead(o) < hold_hi
+                 and abs(o.d_center - leader_d) > self.corridor_block_d_tol_m),
+                None)
+            if odd_one_out is not None:
+                self.get_logger().info(
+                    f"dropping the {len(group)}-obstacle corridor: the obstacle at "
+                    f"s={odd_one_out.s_center:.2f} sits between members at "
+                    f"d={odd_one_out.d_center:+.2f}, {abs(odd_one_out.d_center - leader_d):.2f} m "
+                    f"from the leader's {leader_d:+.2f} and over the "
+                    f"{self.corridor_block_d_tol_m:.2f} m block tolerance. "
+                    f"Planning for the leader at s={group[0].s_center:.2f} alone",
+                    throttle_duration_sec=2.0)
+                group = [blocking[0]]
+                group_idx = [0]
+
+        if len(group) > 1:
             _, try_left, try_right, _, _, _, _ = corridor_geometry(group)
             blocked_l = hold_blocked_by(try_left)
             blocked_r = hold_blocked_by(try_right)
