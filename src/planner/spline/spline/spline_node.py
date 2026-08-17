@@ -638,6 +638,15 @@ class SplineNode(Node):
                     throttle_duration_sec=2.0)
                 group = [blocking[0]]
                 group_idx = [0]
+                # And let go of the commitment. Dropping the corridor while a
+                # latch still holds its side and its far end is not dropping
+                # it: the span gets extended straight back out and the leader
+                # alone is asked to hold an offset over the whole of it. On
+                # the car that read "no avoidance path: no room either side of
+                # the 1 obstacle(s) from s=21.76 to s=25.59" - one obstacle,
+                # 3.8 m of corridor - one line after the corridor had
+                # supposedly been abandoned.
+                self.corridor_latch = None
 
         if len(group) > 1:
             _, try_left, try_right, _, _, _, _ = corridor_geometry(group)
@@ -654,6 +663,15 @@ class SplineNode(Node):
                     throttle_duration_sec=2.0)
                 group = [blocking[0]]
                 group_idx = [0]
+                # And let go of the commitment. Dropping the corridor while a
+                # latch still holds its side and its far end is not dropping
+                # it: the span gets extended straight back out and the leader
+                # alone is asked to hold an offset over the whole of it. On
+                # the car that read "no avoidance path: no room either side of
+                # the 1 obstacle(s) from s=21.76 to s=25.59" - one obstacle,
+                # 3.8 m of corridor - one line after the corridor had
+                # supposedly been abandoned.
+                self.corridor_latch = None
 
         (member_s, left_apex, right_apex, left_room, right_room,
          bound_left, bound_right) = corridor_geometry(group)
