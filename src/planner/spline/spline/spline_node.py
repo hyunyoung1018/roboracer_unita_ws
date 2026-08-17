@@ -443,10 +443,12 @@ class SplineNode(Node):
         group_idx = [0]
         while self.corridor_enabled:
             last = group_idx[-1]
-            following = next(
-                (i for i in range(last + 1, len(chain))
-                 if gaps[i] > gaps[last] + 1e-3), None)
-            if following is None:
+            # Strictly the next one in s. `chain` is sorted, so that is the
+            # very next index - no skipping, no searching. Two obstacles at
+            # the same s get tested too: if they sit on opposite sides, the d
+            # test refuses the corridor, which is the right answer anyway.
+            following = last + 1
+            if following >= len(chain):
                 break
             if gaps[following] > gaps[last] + self.corridor_link_gap_m * scale:
                 break
