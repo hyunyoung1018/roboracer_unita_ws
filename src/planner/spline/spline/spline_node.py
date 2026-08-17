@@ -268,17 +268,33 @@ class SplineNode(Node):
         self.get_logger().info(f"no avoidance path: {reason}", throttle_duration_sec=2.0)
         return out
 
-    def _raceline_clears(self, obstacle):
-        """Does the raceline itself already pass this obstacle?
+    def _raceline_clears(self, obstacle, cur_d=0.0):
+        """Will the car get past this obstacle without a plan for it?
 
-        The near edge has to be raceline_clearance_m clear of d=0 on one side or
-        the other. That number is tuned to equal what the state machine calls a
-        blocked raceline (gb_ego_width_m/2 + global_tracking's lateral_width_m),
-        so a False here is the same judgement the state machine makes when it
-        starts looking for a way around.
+        The near edge has to be raceline_clearance_m clear of everywhere the
+        car is about to be. That number is tuned to equal what the state
+        machine calls a blocked raceline (gb_ego_width_m/2 + global_tracking's
+        lateral_width_m), so a False here is the same judgement the state
+        machine makes when it starts looking for a way around.
+
+        cur_d is why this takes an argument. The question used to be asked at
+        d=0 alone, and the car is not at d=0 when it matters: it is on the
+        tail of the last avoidance, coming back to the line. Measured, the
+        third obstacle of a row: edges +0.32..+0.73, so d_right cleared the
+        0.30 threshold by two centimetres and the planner answered "nothing to
+        avoid" and published nothing. The car was at d=+0.41 on the return leg
+        from the obstacle before it, which leaves the body 23 cm INSIDE that
+        obstacle, and it drove into it every lap while a path that looked
+        perfectly good in RViz - the previous obstacle's, whose tail happens
+        to run over the top of this one - was on screen.
+
+        So the strip that has to be clear runs from where the car is to the
+        raceline it is heading back to, widened by the clearance at both ends.
+        With cur_d = 0 this is exactly the old test.
         """
-        return (obstacle.d_right >= self.raceline_clearance_m
-                or -obstacle.d_left >= self.raceline_clearance_m)
+        lo = min(0.0, cur_d) - self.raceline_clearance_m
+        hi = max(0.0, cur_d) + self.raceline_clearance_m
+        return obstacle.d_right >= hi or obstacle.d_left <= lo
 
     def _tightest_bounds(self, s_values, reference, start_s, end_s, max_s):
         """Narrowest track bounds over an s range, sampled at 0.25 m."""
@@ -331,9 +347,23 @@ class SplineNode(Node):
             obstacle for obstacle in self.obstacles.obstacles
             if (obstacle.s_center - cur_s) % max_s < self.lookahead
         ]
+        # Measured from the strip the car is on, not from the raceline.
+        #
+        # Same mistake as _raceline_clears had. Coming off an avoidance at
+        # d=+0.4, an obstacle at d=+0.62 is 22 cm away sideways, and this
+        # dropped it as "none in range, at d 0.62 (threshold 0.6)" - the
+        # planner never even considered the thing the car was about to hit.
+        # With cur_d = 0 this is exactly abs(d_center) < trajectory_threshold.
+        strip_lo, strip_hi = min(0.0, cur_d), max(0.0, cur_d)
+
+        def off_strip(d):
+            if strip_lo <= d <= strip_hi:
+                return 0.0
+            return min(abs(d - strip_lo), abs(d - strip_hi))
+
         candidates = [
             obstacle for obstacle in in_range
-            if abs(obstacle.d_center) < self.trajectory_threshold
+            if off_strip(obstacle.d_center) < self.trajectory_threshold
         ]
         if not candidates:
             if self.obstacles.obstacles:
@@ -342,7 +372,9 @@ class SplineNode(Node):
                 self.get_logger().info(
                     f"{len(self.obstacles.obstacles)} obstacle(s), none in range: "
                     f"nearest is {(nearest.s_center - cur_s) % max_s:.2f} m ahead "
-                    f"(lookahead {self.lookahead}) at d {nearest.d_center:.2f} "
+                    f"(lookahead {self.lookahead}) at d {nearest.d_center:.2f}, "
+                    f"{off_strip(nearest.d_center):.2f} m off the strip from the "
+                    f"car at d={cur_d:+.2f} to the raceline "
                     f"(threshold {self.trajectory_threshold})",
                     throttle_duration_sec=2.0)
             self.last_side = None
@@ -366,15 +398,16 @@ class SplineNode(Node):
         # trailed forever. raceline_clearance_m is tuned to equal what the state
         # machine calls a blocked raceline, so the two agree about WHETHER an
         # obstacle is in the way; they also have to agree about WHICH one.
-        blocking = [o for o in candidates if not self._raceline_clears(o)]
+        blocking = [o for o in candidates if not self._raceline_clears(o, cur_d)]
         if not blocking:
             nearest = candidates[0]
             return self._bail(
                 out,
-                f"raceline already clears all {len(candidates)} obstacle(s) in "
-                f"range: nearest is at s={nearest.s_center:.2f} with edges "
-                f"{nearest.d_right:+.2f}..{nearest.d_left:+.2f} m, and this "
-                f"planner only moves off the line inside "
+                f"nothing to plan for: all {len(candidates)} obstacle(s) in "
+                f"range clear the strip from the car at d={cur_d:+.2f} back to "
+                f"the raceline. Nearest is at s={nearest.s_center:.2f} with "
+                f"edges {nearest.d_right:+.2f}..{nearest.d_left:+.2f} m, and "
+                f"this planner only moves for something inside "
                 f"{self.raceline_clearance_m:.2f} m of it")
 
         # How far the path reaches, which the side choice below needs: an offset
@@ -576,7 +609,7 @@ class SplineNode(Node):
             (o for o in chain
              if ahead(o) > gaps[group_idx[-1]] + 1e-3
              and not any(o is member for member in group)
-             and not self._raceline_clears(o)), None)
+             and not self._raceline_clears(o, cur_d)), None)
         if blocker is not None:
             room = ahead(blocker) - gaps[group_idx[-1]] - self.retreat_clearance_m
             if room < retreat[-1]:
