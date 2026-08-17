@@ -15,6 +15,9 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
+    extras_require={
+        'test': ['pytest'],
+    },
     maintainer='unita',
     maintainer_email='unita@todo.todo',
     description='UNICORN-derived lane-change obstacle planner',

@@ -95,7 +95,9 @@ class ChangeAvoidanceNode(Node):
         self.converter = None
         self.track_length = None
         self.dynamic_obstacles = ObstacleArray()
+        self.static_obstacles = ObstacleArray()
         self.predicted_obstacles = ObstacleArray()
+        self._lane_marker_cache = None
         self.predictions = PredictionArray()
         self.prediction_received_at = None
         self.force_trailing = True
@@ -132,6 +134,15 @@ class ChangeAvoidanceNode(Node):
         # router's dynamic-only stream.
         self.create_subscription(
             ObstacleArray, '/tracking/obstacles', self._obstacle_cb, 10)
+        # The planner used to know only about the opponent, so a lane change
+        # around it could be drawn straight through a static obstacle - nothing
+        # in this node had ever heard of one. Absolute topic name, not the
+        # remapped /tracking/obstacles: this is the router's static-only stream,
+        # the same one the spline planner avoids on. Nothing publishes it in
+        # time_trials, and this node is not launched there either, so an empty
+        # array simply restores the previous behaviour.
+        self.create_subscription(
+            ObstacleArray, '/tracking/static_obstacles', self._static_obstacle_cb, 10)
         self.create_subscription(
             ObstacleArray, '/opponent_prediction/obstacles', self._predicted_obstacle_cb, 10)
         self.create_subscription(
@@ -176,6 +187,9 @@ class ChangeAvoidanceNode(Node):
 
     def _obstacle_cb(self, msg):
         self.dynamic_obstacles = msg
+
+    def _static_obstacle_cb(self, msg):
+        self.static_obstacles = msg
 
     def _predicted_obstacle_cb(self, msg):
         self.predicted_obstacles = msg
@@ -234,6 +248,8 @@ class ChangeAvoidanceNode(Node):
         left_xy = center_xy + self.lane_offset * np.column_stack((-np.sin(psi), np.cos(psi)))
         right_xy = center_xy - self.lane_offset * np.column_stack((-np.sin(psi), np.cos(psi)))
         self.lanes = {'center': center_xy, 'left': left_xy, 'right': right_xy}
+        # The marker geometry is derived from these, so it is stale now.
+        self._lane_marker_cache = None
 
     def _prediction_fresh(self):
         if self.prediction_received_at is None or not self.predictions.predictions:
@@ -449,20 +465,27 @@ class ChangeAvoidanceNode(Node):
         return kept if len(kept) >= 2 else predicted[:2]
 
     def _first_grid_failure(self, xy):
-        """Return the first rejected sample so the failure is actionable."""
-        for index, (x, y) in enumerate(np.asarray(xy, dtype=float)):
-            if not self.map_filter.is_point_inside(x, y):
-                pixel = self.map_filter.world_to_pixel(x, y)
-                detail = {
-                    'path_index': int(index),
-                    'x_m': round(float(x), 3),
-                    'y_m': round(float(y), 3),
-                }
-                if pixel is not None:
-                    detail['pixel_x'] = int(pixel[0])
-                    detail['pixel_y'] = int(pixel[1])
-                return detail
-        return None
+        """Return the first rejected sample so the failure is actionable.
+
+        The verdict comes from one vectorised pass; the report - which costs a
+        world_to_pixel and builds a dict - is only assembled for the one sample
+        that actually failed. Previously every sample paid for both.
+        """
+        points = np.asarray(xy, dtype=float)
+        index = self.map_filter.first_outside_index(points)
+        if index is None:
+            return None
+        x, y = float(points[index, 0]), float(points[index, 1])
+        detail = {
+            'path_index': int(index),
+            'x_m': round(x, 3),
+            'y_m': round(y, 3),
+        }
+        pixel = self.map_filter.world_to_pixel(x, y)
+        if pixel is not None:
+            detail['pixel_x'] = int(pixel[0])
+            detail['pixel_y'] = int(pixel[1])
+        return detail
 
     def _unwrap(self, s):
         forward = (float(s) - self.current_s) % self.track_length
@@ -470,12 +493,35 @@ class ChangeAvoidanceNode(Node):
             forward = 0.0
         return self.current_s + forward
 
+    def _statics_in_span(self, obs_end):
+        """Static obstacles the planned path would actually run over.
+
+        The path leaves the raceline before the opponent and rejoins
+        back_to_raceline_after past it, so anything static between the car and
+        that rejoin point is on the manoeuvre whether this planner models it or
+        not. Those get folded into the same side selection and corridor as the
+        opponent; a static obstacle beyond the rejoin is left alone, because the
+        path does not go there and the next replan will have moved the window.
+
+        Note this can end in NO_SAFE_SIDE, i.e. no lane change at all. That is
+        the point - refusing to pull out is the correct answer when the gap is
+        blocked, and the state machine then keeps trailing.
+        """
+        if not self.static_obstacles.obstacles or not self.track_length:
+            return []
+        span_end = obs_end + float(self.back_to_raceline_after)
+        kept = []
+        for obs in self.static_obstacles.obstacles:
+            centre = self._unwrap(obs.s_center)
+            # _unwrap folds everything onto [current_s, current_s + L), and
+            # collapses anything just behind the car to current_s exactly, so a
+            # strictly positive forward distance separates "in front" from
+            # "level with or behind".
+            if self.path_resolution < centre - self.current_s and centre <= span_end:
+                kept.append(obs)
+        return kept
+
     def _plan(self, obstacles):
-        side, target_d = self._select_side(obstacles)
-        if side is None:
-            self._set_diagnostic(
-                self._side_failure_status, self._side_failure_detail)
-            return None
         starts = [self._unwrap(obs.s_start) for obs in obstacles]
         ends = [self._unwrap(obs.s_end) for obs in obstacles]
         for index in range(len(ends)):
@@ -483,6 +529,31 @@ class ChangeAvoidanceNode(Node):
                 ends[index] += self.track_length
         obs_start = min(starts)
         obs_end = max(ends)
+
+        # Widen the problem to every obstacle the path will pass, then solve it
+        # once. Done here rather than in _considered_obstacles because the span
+        # that decides which statics matter is not known until the opponent's
+        # own start and end are.
+        statics = self._statics_in_span(obs_end)
+        if statics:
+            obstacles = list(obstacles) + statics
+            for obs in statics:
+                start = self._unwrap(obs.s_start)
+                end = self._unwrap(obs.s_end)
+                if end < start:
+                    end += self.track_length
+                obs_start = min(obs_start, start)
+                obs_end = max(obs_end, end)
+
+        side, target_d = self._select_side(obstacles)
+        if side is None:
+            if statics:
+                self._side_failure_detail = dict(
+                    self._side_failure_detail or {},
+                    static_obstacle_count=len(statics))
+            self._set_diagnostic(
+                self._side_failure_status, self._side_failure_detail)
+            return None
         path_start = self.current_s
         path_end = min(
             obs_end + self.back_to_raceline_after,
@@ -664,50 +735,78 @@ class ChangeAvoidanceNode(Node):
             self.latency_pub.publish(Float32(data=float(time.perf_counter() - started)))
 
     def _publish_lane_markers(self):
-        if not self.lanes:
+        """Redraw the three lanes 5x a second - but they never move.
+
+        The geometry only changes when _generate_lanes runs (a new centerline,
+        or lane_offset retuned), so the Point lists are built there and cached.
+        This used to rebuild three LINE_STRIPs over the whole track, one Python
+        Point object per waypoint, five times a second, unconditionally.
+        """
+        if not self.lanes or self.lane_marker_pub.get_subscription_count() == 0:
             return
-        array = MarkerArray()
-        specs = (
-            ('center', self.lanes['center'], (1.0, 1.0, 1.0)),
-            ('left', self.lanes['left'], (0.1, 0.9, 0.1)),
-            ('right', self.lanes['right'], (0.9, 0.1, 0.1)),
-        )
-        for marker_id, (name, points, color) in enumerate(specs):
-            marker = Marker(header=Header(stamp=self.get_clock().now().to_msg(), frame_id='map'))
-            marker.ns = 'lane_change_' + name
-            marker.id = marker_id
-            marker.type = Marker.LINE_STRIP
-            marker.action = Marker.ADD
-            marker.scale.x = 0.03
-            marker.color.a = 1.0
-            marker.color.r, marker.color.g, marker.color.b = color
-            marker.pose.orientation.w = 1.0
-            marker.points = [Point(x=float(x), y=float(y), z=0.0) for x, y in points]
-            array.markers.append(marker)
-        self.lane_marker_pub.publish(array)
+        if self._lane_marker_cache is None:
+            self._lane_marker_cache = [
+                self._lane_marker(marker_id, name, self.lanes[name], color)
+                for marker_id, (name, color) in enumerate((
+                    ('center', (1.0, 1.0, 1.0)),
+                    ('left', (0.1, 0.9, 0.1)),
+                    ('right', (0.9, 0.1, 0.1)),
+                ))
+            ]
+        stamp = self.get_clock().now().to_msg()
+        for marker in self._lane_marker_cache:
+            marker.header.stamp = stamp
+        self.lane_marker_pub.publish(MarkerArray(markers=self._lane_marker_cache))
+
+    @staticmethod
+    def _lane_marker(marker_id, name, points, color):
+        marker = Marker(header=Header(frame_id='map'))
+        marker.ns = 'lane_change_' + name
+        marker.id = marker_id
+        marker.type = Marker.LINE_STRIP
+        marker.action = Marker.ADD
+        marker.scale.x = 0.03
+        marker.color.a = 1.0
+        marker.color.r, marker.color.g, marker.color.b = color
+        marker.pose.orientation.w = 1.0
+        marker.points = [Point(x=float(x), y=float(y), z=0.0) for x, y in points]
+        return marker
 
     def _publish_path_markers(self, path):
-        array = MarkerArray()
-        delete = Marker(header=path.header, action=Marker.DELETEALL)
-        array.markers.append(delete)
-        for index, waypoint in enumerate(path.wpnts):
-            marker = Marker(header=path.header)
-            marker.ns = 'lane_change_path'
-            marker.id = index
-            marker.type = Marker.SPHERE
-            marker.action = Marker.ADD
-            marker.pose.position.x = waypoint.x_m
-            marker.pose.position.y = waypoint.y_m
-            marker.pose.orientation.w = 1.0
-            marker.scale.x = marker.scale.y = marker.scale.z = 0.08
-            marker.color.a = 1.0
-            marker.color.r = 0.63
-            marker.color.g = 0.13
-            marker.color.b = 0.94
-            array.markers.append(marker)
-        self.path_marker_pub.publish(array)
+        """Draw the path as ONE marker, and only when something is watching.
+
+        This was a SPHERE per waypoint: 80 to 150 Marker messages built and
+        serialised on every successful plan, at 20 Hz, whether or not RViz was
+        open - a few thousand messages a second for a picture nobody was
+        looking at. A single SPHERE_LIST carries the same points in one
+        message, and the subscriber check makes a closed RViz free.
+
+        The DELETEALL is kept: the old per-index markers have to be cleared
+        once, and a viewer that connects later gets it on the next plan.
+        """
+        if self.path_marker_pub.get_subscription_count() == 0:
+            return
+        marker = Marker(header=path.header)
+        marker.ns = 'lane_change_path'
+        marker.id = 0
+        marker.type = Marker.SPHERE_LIST
+        marker.action = Marker.ADD
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = marker.scale.y = marker.scale.z = 0.08
+        marker.color.a = 1.0
+        marker.color.r = 0.63
+        marker.color.g = 0.13
+        marker.color.b = 0.94
+        marker.points = [
+            Point(x=float(w.x_m), y=float(w.y_m), z=0.0) for w in path.wpnts]
+        self.path_marker_pub.publish(MarkerArray(markers=[
+            Marker(header=path.header, action=Marker.DELETEALL),
+            marker,
+        ]))
 
     def _publish_start_end_markers(self, start, obs_start, obs_end, end):
+        if self.start_end_pub.get_subscription_count() == 0:
+            return
         s = np.asarray([start, obs_start, obs_end, end]) % self.track_length
         xy = self.converter.get_cartesian(s, np.zeros(4)).T
         colors = ((0.0, 1.0, 1.0), (1.0, 1.0, 0.0),
