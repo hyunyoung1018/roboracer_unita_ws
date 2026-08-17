@@ -228,20 +228,8 @@ spline_node:
     # into it. Merging it costs NOTHING going right, because the offset is set
     # by whichever obstacle reaches furthest towards the line and that is still
     # the leader. Shift 0.00 m, invisible to a d difference.
-    corridor_link_shift_tol_m: 0.30
+    corridor_link_shift_tol_m: 0.20
 
-    # [m] Cancels a corridor when an obstacle BETWEEN two members is further
-    # than this from the leader in d. Effectively off at 10.0, deliberately.
-    #
-    # It cannot tell "needs a different offset" from "already covered by the
-    # same one". Measured on the car: a leader at -0.41 with an obstacle at
-    # +0.05 between members reads as 0.46 and was cancelled every frame, while
-    # a single corridor at +0.43 clears both.
-    #
-    # What decides now is the attempt itself - spline builds the corridor, and
-    # if neither side is usable it falls back to the leader alone and says so.
-    # No tolerance needed. Lower this only to force one-at-a-time.
-    corridor_block_d_tol_m: 10.0
 
     # [s] How long a corridor commitment survives without being renewed.
     #

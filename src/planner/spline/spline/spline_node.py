@@ -105,20 +105,6 @@ class SplineNode(Node):
             # from the leader in d, cancels the corridor outright. Stricter
             # than the clearance test, and asking a different question: not
             # "can we still get past it" but "does it belong to this group".
-            # Effectively off by default, and deliberately.
-            #
-            # It cancels a corridor on how far the in-between obstacle's d is
-            # from the leader's, and that cannot tell "needs a different
-            # offset" from "already covered by the same one". Every log it
-            # appeared in was the second: leader at -0.41 with something at
-            # +0.05 between members reads as 0.46 and gets cancelled, while one
-            # corridor at +0.43 passes both.
-            #
-            # What decides now is the attempt itself - build the corridor, and
-            # if neither side is usable fall back to the leader. That needs no
-            # tolerance. Lower this only to force one-at-a-time on a track
-            # where a wide single sweep is not wanted.
-            'corridor_block_d_tol_m': 10.0,
             # [s] How long a corridor commitment survives without being
             # renewed. The car normally drives out the far end long before
             # this; the timeout is for the corridor whose obstacles were
@@ -167,8 +153,6 @@ class SplineNode(Node):
             self.get_parameter('corridor_link_gap_m').value)
         self.corridor_link_shift_tol_m = float(
             self.get_parameter('corridor_link_shift_tol_m').value)
-        self.corridor_block_d_tol_m = float(
-            self.get_parameter('corridor_block_d_tol_m').value)
         self.corridor_latch_ttl_s = float(
             self.get_parameter('corridor_latch_ttl_s').value)
         self.corridor_point_spacing_m = max(
@@ -188,7 +172,6 @@ class SplineNode(Node):
             'corridor_max_len_m': 'corridor_max_len_m',
             'corridor_link_gap_m': 'corridor_link_gap_m',
             'corridor_link_shift_tol_m': 'corridor_link_shift_tol_m',
-            'corridor_block_d_tol_m': 'corridor_block_d_tol_m',
             'corridor_latch_ttl_s': 'corridor_latch_ttl_s',
             'corridor_point_spacing_m': 'corridor_point_spacing_m',
             'measure': 'measure',
@@ -517,31 +500,6 @@ class SplineNode(Node):
             # publish the shorter one: the return leg clears an obstacle that is
             # far enough off the line, occupied_by refuses the side if it does
             # not, and the next replan gets the rest.
-            # An obstacle whose d is nowhere near the leader's cancels the
-            # corridor - it does not merely stop it growing, and it is decided
-            # BEFORE the merge test gets a chance to absorb it.
-            #
-            # Order matters here. The shift test below would happily merge an
-            # obstacle on the far side of the line, because covering it is free
-            # going the other way: the offset is set by whoever reaches
-            # furthest towards the line, so a wide detour costs nothing on
-            # paper. On a track this width that is a manoeuvre the car should
-            # not be making in one move. If something between the near obstacle
-            # and the far one is at a different d, there is no corridor here -
-            # take them one at a time.
-            leader_d = blocking[0].d_center
-            gap_d = blocking[following].d_center - leader_d
-            if abs(gap_d) > self.corridor_block_d_tol_m:
-                self.get_logger().info(
-                    f"no corridor: the obstacle at "
-                    f"s={blocking[following].s_center:.2f} is at d={blocking[following].d_center:+.2f}, "
-                    f"{abs(gap_d):.2f} m from the leader's {leader_d:+.2f} and over the "
-                    f"{self.corridor_block_d_tol_m:.2f} m block tolerance - "
-                    f"planning for the leader at s={blocking[0].s_center:.2f} alone",
-                    throttle_duration_sec=2.0)
-                group_idx = [0]
-                break
-
             trial = [blocking[i] for i in group_idx + [following]]
             _, trial_left, trial_right, trial_lroom, trial_rroom, _, _ = \
                 corridor_geometry(trial)
@@ -630,49 +588,34 @@ class SplineNode(Node):
                         return other
                 return None
 
-            # The same test again, on what growth never got to see.
+            # A corridor is for a set of obstacles that can be taken as one.
+            # Anything else in the way means they cannot be.
             #
-            # Growth walks `blocking` - obstacles the RACELINE does not clear -
-            # so an obstacle sitting well off the line is invisible to it, and
-            # the corridor closes over the top of it. Here the set is
-            # `candidates`, which is everything.
-            leader_d = group[0].d_center
-            # `candidates`, not `in_range`. A d difference says nothing about
-            # whether an obstacle is in the way - only how far off the line it
-            # is - so run it over the set that is on the line to begin with.
+            # No tolerance, and that is the point. Every version of this that
+            # measured how far the intruder's d was from the leader's got it
+            # wrong in one direction or the other, because a d difference
+            # cannot say whether one offset covers both. The question the
+            # planner can answer honestly is much simpler: is there anything in
+            # here that is not part of this manoeuvre? If so, do not attempt
+            # the manoeuvre - take the obstacles one at a time.
             #
-            # Widening this to in_range in e4ecd34 cancelled every corridor on
-            # the car: an obstacle out at d +0.76 is 0.99 from a leader at
-            # -0.23 and tripped the tolerance every frame, while a corridor
-            # going right to -0.60 clears it by 1.23 m. Something that far to
-            # one side cannot interfere with a corridor going the other way,
-            # and the clearance test below - which DOES use in_range - is what
-            # decides whether it interferes at all.
-            odd_one_out = next(
+            # `candidates`, so obstacles out near the wall do not count. They
+            # are not on the line, they are nothing to plan around, and letting
+            # them cancel corridors is what the d version spent its time doing.
+            intruder = next(
                 (o for o in candidates
                  if not any(o is m for m in group)
-                 and hold_lo < ahead(o) < hold_hi
-                 and abs(o.d_center - leader_d) > self.corridor_block_d_tol_m),
+                 and hold_lo < ahead(o) < hold_hi),
                 None)
-            if odd_one_out is not None:
+            if intruder is not None:
                 self.get_logger().info(
-                    f"dropping the {len(group)}-obstacle corridor: the obstacle at "
-                    f"s={odd_one_out.s_center:.2f} sits between members at "
-                    f"d={odd_one_out.d_center:+.2f}, {abs(odd_one_out.d_center - leader_d):.2f} m "
-                    f"from the leader's {leader_d:+.2f} and over the "
-                    f"{self.corridor_block_d_tol_m:.2f} m block tolerance. "
+                    f"no corridor: the obstacle at s={intruder.s_center:.2f} "
+                    f"(d {intruder.d_center:+.2f}) is inside the span of the "
+                    f"{len(group)}-obstacle corridor and is not part of it. "
                     f"Planning for the leader at s={group[0].s_center:.2f} alone",
                     throttle_duration_sec=2.0)
                 group = [blocking[0]]
                 group_idx = [0]
-                # And let go of the commitment. Dropping the corridor while a
-                # latch still holds its side and its far end is not dropping
-                # it: the span gets extended straight back out and the leader
-                # alone is asked to hold an offset over the whole of it. On
-                # the car that read "no avoidance path: no room either side of
-                # the 1 obstacle(s) from s=21.76 to s=25.59" - one obstacle,
-                # 3.8 m of corridor - one line after the corridor had
-                # supposedly been abandoned.
                 self.corridor_latch = None
 
         if len(group) > 1:
