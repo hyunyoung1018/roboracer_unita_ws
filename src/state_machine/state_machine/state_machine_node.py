@@ -1115,12 +1115,37 @@ class StateMachine(Node):
                         rec["pred_id"] = int(self.obstacles_prediction_id) if self.obstacles_prediction_id is not None else None
                         rec["pred_len"] = len(obstacle_predictions)
                         if not wpnts_data.is_closed and gap > max_gap:
-                            rec["branch"] = "dyn/nopred/beyond_path"
-                            is_free = False
-                            rec["blocked"] = True
-                            if closest_obs is None or min_gap > gap:
-                                closest_obs = obs
-                                min_gap = gap
+                            # Same reasoning as the static branch above: an
+                            # obstacle PAST THE END of a non-closed path is not
+                            # on it. Without a prediction this obstacle is just
+                            # a frozen box at its current position, and that box
+                            # is beyond where this path stops - the car drives
+                            # to the end and the state machine decides again,
+                            # with the obstacle then inside the horizon.
+                            #
+                            # This used to set is_free = False, silently - the
+                            # one dynamic condition with no log line. In time
+                            # trials nothing publishes predictions, so a track
+                            # the tracker had not yet classified static (young,
+                            # re-created after an occlusion, or a wall ghost)
+                            # landed here on every tick and vetoed a static
+                            # avoidance the car had room to drive, with nothing
+                            # in the log to say so: three boxes in an S, path
+                            # correctly ended before the second, car stopped
+                            # behind the first with path_free=False and no
+                            # "blocked by" line. The head-to-head wrapper
+                            # already excuses exactly this case after the fact
+                            # (_blocked_only_beyond_path); deciding it here
+                            # covers time trials too, and leaves that excusal a
+                            # no-op rather than wrong.
+                            rec["branch"] = "dyn/nopred/beyond_path (ignored)"
+                            self._throttled_info(
+                                f"beyond/{wpnts_data.name}",
+                                f"[{wpnts_data.name}] non-static obs {int(obs.id)} "
+                                f"is {gap:.2f} m ahead, past the end of this "
+                                f"path at {max_gap:.2f} m - not this path's "
+                                f"problem",
+                                5.0)
                         elif gap < max_horizon:
                             ot_d = 0
                             if not is_gb_track_wpnts:
@@ -1133,6 +1158,20 @@ class StateMachine(Node):
                             if free_dist < lateral_width_m * scaling_factor:
                                 is_free = False
                                 rec["blocked"] = True
+                                # Say so, like the static branch does. A
+                                # refusal with no log line is what made the
+                                # beyond_path case above take a day to find.
+                                self._throttled_info(
+                                    f"blocked/{wpnts_data.name}",
+                                    f"[{wpnts_data.name}] blocked by non-static "
+                                    f"obs {int(obs.id)} (no prediction) at "
+                                    f"d={obs.d_center:+.2f} ({gap:.2f} m ahead, "
+                                    f"half width {self._lateral_half_width(obs):.2f}): "
+                                    f"path is at d={ot_d:+.3f}, "
+                                    f"free {free_dist:+.3f} m, "
+                                    f"needs {lateral_width_m * scaling_factor:.3f}",
+                                    1.0,
+                                )
                                 if closest_obs is None or min_gap > gap:
                                     closest_obs = obs
                                     min_gap = gap
