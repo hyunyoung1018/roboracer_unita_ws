@@ -621,8 +621,19 @@ class SplineNode(Node):
             # the corridor closes over the top of it. Here the set is
             # `candidates`, which is everything.
             leader_d = group[0].d_center
+            # `candidates`, not `in_range`. A d difference says nothing about
+            # whether an obstacle is in the way - only how far off the line it
+            # is - so run it over the set that is on the line to begin with.
+            #
+            # Widening this to in_range in e4ecd34 cancelled every corridor on
+            # the car: an obstacle out at d +0.76 is 0.99 from a leader at
+            # -0.23 and tripped the tolerance every frame, while a corridor
+            # going right to -0.60 clears it by 1.23 m. Something that far to
+            # one side cannot interfere with a corridor going the other way,
+            # and the clearance test below - which DOES use in_range - is what
+            # decides whether it interferes at all.
             odd_one_out = next(
-                (o for o in in_range
+                (o for o in candidates
                  if not any(o is m for m in group)
                  and hold_lo < ahead(o) < hold_hi
                  and abs(o.d_center - leader_d) > self.corridor_block_d_tol_m),
