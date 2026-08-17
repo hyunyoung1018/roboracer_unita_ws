@@ -228,6 +228,63 @@ spline_node:
     # into it. Merging it costs NOTHING going right, because the offset is set
     # by whichever obstacle reaches furthest towards the line and that is still
     # the leader. Shift 0.00 m, invisible to a d difference.
+    # Corridors at all. false plans one obstacle at a time - a swerve, a
+    # return to the line, and the next obstacle decided fresh.
+    #
+    # time_trials turns it off for qual:=true, and corridor:=false on either
+    # launch does the same by hand.
+    corridor_enabled: true
+
+    # [m] How far past the FIRST obstacle the corridor may reach to pick up
+    # further ones.
+    corridor_max_len_m: 8.0
+
+    # [m] How far past the PREVIOUS member the next obstacle may sit and still
+    # join, scaled by speed like the return leg. It is a reachability limit
+    # before it is a tuning one: shifting 0.5 m sideways at 3 m/s needs about
+    # 6.8 m/s2 of lateral grip over 2 m and 1.7 over 4, so obstacles closer
+    # than roughly 3 m cannot be passed at different offsets anyway.
+    corridor_link_gap_m: 8.0
+
+    # [m] How far the next obstacle's d may differ FROM THE LEADER'S and still
+    # join. Signed, so opposite sides fall out by themselves.
+    corridor_link_d_tol_m: 0.30
+
+    # [m] Spacing of the control points holding the offset between the first
+    # and last obstacle. Floored at 0.2 in code: the control-point loop
+    # advances by exactly this, so 0 would never terminate.
+    corridor_point_spacing_m: 1.0
+
+    lookahead: 10.0
+
+    # [m] How far past the FIRST obstacle the corridor may reach to pick up
+    # further ones. Obstacles inside it share one held offset instead of being
+    # planned one at a time; beyond it the path is planned for what it can hold
+    # and the next replan takes the rest.
+    corridor_max_len_m: 8.0
+
+    # [m] How far past the PREVIOUS member the next obstacle may sit and still
+    # join, scaled by speed like the return leg. 3.0 is exactly what the code
+    # did before this was a parameter, so it starts as a no-op - RAISE IT to
+    # link obstacles that currently get a swerve-return-swerve each.
+    #
+    # It is a reachability limit first. Shifting 0.5 m sideways at 3 m/s needs
+    # about 6.8 m/s2 of lateral grip over 2 m and 1.7 over 4, so obstacles
+    # closer than roughly 3 m cannot be passed at different offsets anyway.
+    corridor_link_gap_m: 8.0
+
+    # [m] How far covering the next obstacle may push the corridor's offset
+    # out, measured on whichever side is cheaper. 0 means the merge is free:
+    # the obstacle is already inside what the corridor holds.
+    #
+    # This replaced a test on how far the next obstacle's d was from the
+    # leader's, which rejected the case it was meant to help. Three obstacles
+    # at d -0.10, +0.25, -0.05: the middle one differs from the leader by 0.35
+    # and was refused, so the corridor became the leader alone - and that path
+    # returns to the raceline exactly where the middle obstacle is and drives
+    # into it. Merging it costs NOTHING going right, because the offset is set
+    # by whichever obstacle reaches furthest towards the line and that is still
+    # the leader. Shift 0.00 m, invisible to a d difference.
     # Corridors at all. false plans one obstacle at a time, the way this
     # planner worked before corridors existed - a swerve, a return to the
     # line, and the next obstacle decided fresh.
@@ -240,7 +297,6 @@ spline_node:
     # many.
     corridor_enabled: true
 
-    corridor_link_shift_tol_m: 0.20
 
 
     # [s] How long a corridor commitment survives without being renewed.
@@ -254,7 +310,6 @@ spline_node:
     # The car normally reaches the end long before this expires. The timeout is
     # for the corridor whose obstacles were picked up - otherwise the car would
     # be held off the line until something else noticed.
-    corridor_latch_ttl_s: 3.0
 
     # [m] Spacing of the control points holding the offset between the first
     # and last obstacle. Without them a cubic through two equal knots bulges
