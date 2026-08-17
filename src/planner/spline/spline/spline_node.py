@@ -792,10 +792,26 @@ class SplineNode(Node):
                     # offset the path never has.
                     path_d = float(np.clip(
                         profile(apex_s + other_ahead - leader_gap), lo, hi))
-                    # 5 cm, not zero. Between control points the cubic overshoots
-                    # by a centimetre or two even where the path is nominally back
-                    # on the raceline, and a side must not be chosen on that.
-                    if clearance(path_d, other) < clearance(0.0, other) - 0.05:
+                    # Two conditions, and the first is what was missing.
+                    #
+                    # ABSOLUTE: the path has to be genuinely tight against this
+                    # obstacle before its room is worth comparing. Without it
+                    # the comparative test vetoes any swerve towards anything -
+                    # moving 0.28 towards something 0.63 away does leave less
+                    # room than the raceline - and with in_range now including
+                    # obstacles out by the wall, that is most swerves. Single
+                    # obstacle avoidance stopped working the moment the
+                    # collision set was widened, and this is why.
+                    #
+                    # COMPARATIVE: and no worse than doing nothing. An obstacle
+                    # the raceline does not clear either is not a reason to
+                    # refuse the side - the car avoids what it can reach and
+                    # re-plans for the rest. The 5 cm is because between
+                    # control points the cubic overshoots by a centimetre or
+                    # two even where the path is nominally back on the line,
+                    # and a side must not be chosen on that.
+                    room = clearance(path_d, other)
+                    if room < self.evasion_distance and room < clearance(0.0, other) - 0.05:
                         return other, path_d
                 return None
 
