@@ -613,24 +613,36 @@ class SplineNode(Node):
         if blocker is not None:
             room = ahead(blocker) - gaps[group_idx[-1]] - self.retreat_clearance_m
             if room < retreat[-1]:
-                if room >= self.retreat_floor_m:
-                    was = retreat[-1]
-                    retreat = retreat * (room / was)
-                    self.get_logger().info(
-                        f"ending the path {room:.2f} m past the obstacle at "
-                        f"s={obstacle.s_center:.2f} instead of {was:.2f} m: "
-                        f"the next obstacle is at s={blocker.s_center:.2f} and "
-                        f"is not in this corridor - returning to the raceline "
-                        f"before it, and the next replan leads with it",
-                        throttle_duration_sec=2.0)
-                else:
-                    self.get_logger().info(
-                        f"cannot end the path before the obstacle at "
-                        f"s={blocker.s_center:.2f}: only {room:.2f} m of return "
-                        f"leg would be left, under the "
-                        f"{self.retreat_floor_m:.2f} m floor - keeping the full "
-                        f"return and letting the side check decide",
-                        throttle_duration_sec=2.0)
+                # Clamped to the floor, never abandoned.
+                #
+                # This used to keep the FULL return leg when the room was
+                # under retreat_floor_m, on the grounds that a snapped-back
+                # return is worse than none. That was the wrong comparison.
+                # The alternative is not a gentler path, it is NO path: the
+                # full 4.5 m leg then runs across whatever is further on, the
+                # side check refuses both sides, and the whole plan is thrown
+                # away. Measured, the same obstacle at s=5.2 flickering frame
+                # by frame - "avoiding left, corridor d=0.47", then "cannot
+                # end the path before the obstacle at s=6.25, only 0.53 m ...
+                # keeping the full return", then "not going left ... passes
+                # the obstacle at s=8.76 at d=+0.01", then "no room either
+                # side". Every other frame the state machine had nothing to
+                # drive and put the car back on the raceline.
+                #
+                # A short path the car can drive beats nothing at all, and the
+                # state machine ignores everything past its end anyway.
+                was = retreat[-1]
+                retreat = retreat * (max(room, self.retreat_floor_m) / was)
+                self.get_logger().info(
+                    f"ending the path {retreat[-1]:.2f} m past the obstacle at "
+                    f"s={obstacle.s_center:.2f} instead of {was:.2f} m: "
+                    f"the next obstacle is at s={blocker.s_center:.2f} and "
+                    f"is not in this corridor - returning to the raceline "
+                    f"before it, and the next replan leads with it"
+                    + (f" (wanted {room:.2f} m, held at the "
+                       f"{self.retreat_floor_m:.2f} m floor)"
+                       if room < self.retreat_floor_m else ""),
+                    throttle_duration_sec=2.0)
 
         # Control points: approach on the raceline, the offset held at every
         # member (and at corridor_point_spacing_m in between, so the cubic runs
