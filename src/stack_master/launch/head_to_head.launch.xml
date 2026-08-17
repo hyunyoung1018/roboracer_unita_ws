@@ -175,7 +175,7 @@
          workspace's ~21 m tracks and gives the dynamic avoidance path the
          speed ceiling and cache lifetime the static one already has, without
          editing either shared file. -->
-    <param from="$(var config_dir)/head_to_head_state_machine_params.yaml"/>
+    <param from="$(var config_dir)/dynamic_state_machine_params.yaml"/>
     <param name="config_dir" value="$(var config_dir)"/>
     <param name="map_dir" value="$(var map_dir)"/>
     <param name="timetrials_only" value="false"/>
@@ -197,7 +197,7 @@
 
   <node pkg="controller" exec="controller_manager" name="controller_manager" output="screen">
     <param from="$(var config_dir)/controller.yaml"/>
-    <param from="$(var config_dir)/head_to_head_controller.yaml"/>
+    <param from="$(var config_dir)/dynamic_controller.yaml"/>
     <param name="save_yaml_path" value="$(var config_dir)/controller.yaml"/>
     <param name="sim" value="$(var use_sim_time)"/>
     <param name="single_opponent_mode" value="true"/>

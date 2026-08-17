@@ -1,3 +1,9 @@
+# Controller overrides for racing another car.
+#
+# Layered over controller.yaml, which stays the base and is all time_trials
+# loads. Everything here is about following a moving car at a distance -
+# trailing gains, gaps and rate limits - which time trials never does.
+
 controller_manager:
   ros__parameters:
     # About 1.0 m centre-to-centre target at 2 m/s. This applies only to the
