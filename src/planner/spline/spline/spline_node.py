@@ -298,10 +298,30 @@ class SplineNode(Node):
         if max_s <= 0.0:
             return out
 
-        candidates = [
+        # Two different questions, two different filters.
+        #
+        # `in_range` is everything ahead, whatever its d. `candidates` is the
+        # subset near enough to the line to be worth planning around, and it
+        # is what picks the leader.
+        #
+        # The corridor has to be drawn against `in_range`. It holds one offset
+        # from the first obstacle to the last, so anything sitting in between
+        # decides whether that is drivable - including something out at d=0.7
+        # that this planner would never bother to avoid on its own. Growing
+        # the corridor over `candidates` meant a zigzag's middle obstacle, off
+        # at the far side near the 0.6 m threshold, was invisible: the first
+        # and third linked up and the corridor closed over it. Worse, its
+        # measured d wanders a few centimetres between frames, so it crossed
+        # the threshold back and forth and the corridor formed and collapsed
+        # several times a second - a different path each time, and the car
+        # dithering while the two fought.
+        in_range = [
             obstacle for obstacle in self.obstacles.obstacles
             if (obstacle.s_center - cur_s) % max_s < self.lookahead
-            and abs(obstacle.d_center) < self.trajectory_threshold
+        ]
+        candidates = [
+            obstacle for obstacle in in_range
+            if abs(obstacle.d_center) < self.trajectory_threshold
         ]
         if not candidates:
             if self.obstacles.obstacles:
@@ -417,7 +437,7 @@ class SplineNode(Node):
         obstacle = blocking[0]
         leader_ahead = ahead(blocking[0])
         chain = sorted(
-            (o for o in candidates if ahead(o) >= leader_ahead - 1e-3), key=ahead)
+            (o for o in in_range if ahead(o) >= leader_ahead - 1e-3), key=ahead)
         gaps = [ahead(o) for o in chain]
         apex_s = obstacle.s_center
         leader_gap = gaps[0]
