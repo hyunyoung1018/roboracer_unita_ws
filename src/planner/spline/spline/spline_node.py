@@ -709,10 +709,36 @@ class SplineNode(Node):
                 # offset the path never has.
                 path_d = float(np.clip(
                     profile(apex_s + other_ahead - leader_gap), lo, hi))
-                # 5 cm, not zero. Between control points the cubic overshoots
-                # by a centimetre or two even where the path is nominally back
-                # on the raceline, and a side must not be chosen on that.
-                if clearance(path_d, other) < clearance(0.0, other) - 0.05:
+                # Two conditions, and BOTH have to hold. The path must be
+                # genuinely too close, and it must be worse than the raceline.
+                #
+                # The comparative half alone is what refused a drivable side.
+                # Measured on the car: leader at s=21.17 with the only room on
+                # the left, and an obstacle back at s=15.78 with its near edge
+                # at d=+0.32. The path passes it at d=+0.05 - 27 cm of room,
+                # more than evasion_distance - and it was vetoed anyway,
+                # because the raceline would have been 32 cm clear and 27 is
+                # less than that. Both sides refused, no path published, car
+                # stopped in front of an obstacle it had a metre of room past.
+                #
+                # evasion_distance is the clearance this planner builds every
+                # apex to, so it is the honest threshold for "too close" here
+                # as well. Above it, being a few centimetres tighter than the
+                # raceline is simply what going round something costs.
+                #
+                # The comparative half stays: it is what stops the planner
+                # choosing a side that walks INTO an obstacle the raceline
+                # would have cleared. The case above still refuses when the
+                # path is actually inside the band - measured, d=-0.64 against
+                # an obstacle spanning -0.77..-0.39.
+                #
+                # The 5 cm is unchanged. Between control points the cubic
+                # overshoots by a centimetre or two even where the path is
+                # nominally back on the raceline, and a side must not be
+                # chosen on that.
+                room = clearance(path_d, other)
+                if (room < self.evasion_distance
+                        and room < clearance(0.0, other) - 0.05):
                     return other, path_d
             return None
 
