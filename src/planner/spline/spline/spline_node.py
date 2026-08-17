@@ -100,6 +100,9 @@ class SplineNode(Node):
             # offset out, measured on whichever side is cheaper. 0 means the
             # merge is free - the obstacle is already inside what the corridor
             # holds - and free merges should always be taken.
+            # Corridors at all. False plans one obstacle at a time, which is
+            # what this planner did before corridors existed.
+            'corridor_enabled': True,
             'corridor_link_shift_tol_m': 0.20,
             # [m] An obstacle BETWEEN two corridor members, further than this
             # from the leader in d, cancels the corridor outright. Stricter
@@ -151,6 +154,8 @@ class SplineNode(Node):
             self.get_parameter('corridor_max_len_m').value)
         self.corridor_link_gap_m = float(
             self.get_parameter('corridor_link_gap_m').value)
+        self.corridor_enabled = bool(
+            self.get_parameter('corridor_enabled').value)
         self.corridor_link_shift_tol_m = float(
             self.get_parameter('corridor_link_shift_tol_m').value)
         self.corridor_latch_ttl_s = float(
@@ -171,6 +176,7 @@ class SplineNode(Node):
             'raceline_clearance_m': 'raceline_clearance_m',
             'corridor_max_len_m': 'corridor_max_len_m',
             'corridor_link_gap_m': 'corridor_link_gap_m',
+            'corridor_enabled': 'corridor_enabled',
             'corridor_link_shift_tol_m': 'corridor_link_shift_tol_m',
             'corridor_latch_ttl_s': 'corridor_latch_ttl_s',
             'corridor_point_spacing_m': 'corridor_point_spacing_m',
@@ -472,7 +478,10 @@ class SplineNode(Node):
             return -min(d - other.d_right, other.d_left - d)
 
         group_idx = [0]
-        while True:
+        # The whole of corridor formation is this loop. Off, the group never
+        # grows past the leader and everything downstream - the intruder check,
+        # the latch, the retry - sees a one-obstacle group and does nothing.
+        while self.corridor_enabled:
             last = group_idx[-1]
             following = next(
                 (i for i in range(last + 1, len(blocking))

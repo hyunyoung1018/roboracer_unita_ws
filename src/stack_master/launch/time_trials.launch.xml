@@ -164,6 +164,12 @@
   <let name="timetrials_only" value="true"  unless="$(var obstacles)"/>
   <let name="timetrials_only" value="false" if="$(var obstacles)"/>
 
+  <!-- Corridors off for a qualifying run. Derived, not a separate switch:
+       the two always move together, and a qualifying lap wants the behaviour
+       with the most laps behind it rather than the fastest one. -->
+  <let name="corridor_enabled" value="false" if="$(var qual)"/>
+  <let name="corridor_enabled" value="true"  unless="$(var qual)"/>
+
   <let name="config_dir" value="$(find-pkg-share stack_master)/config/car"/>
 
   <!-- ===== everything below the driving logic ===== -->
@@ -240,6 +246,7 @@
     <node pkg="spline" exec="spline_node" name="spline_node" output="screen">
       <param from="$(var config_dir)/perception.yaml"/>
       <param name="use_sim_time" value="$(var use_sim_time)"/>
+      <param name="corridor_enabled" value="$(var corridor_enabled)"/>
       <remap from="/planner/avoidance/otwpnts" to="/planner/avoidance/static_otwpnts"/>
     </node>
   </group>
