@@ -555,10 +555,24 @@ class SplineNode(Node):
         # and a snapped-back return at the moment the car is committed is worse
         # than no path. If it will not fit, the retreat stays and occupied_by
         # below refuses the side honestly instead.
+        # The next obstacle the RACELINE does not clear, not merely the next
+        # one in s. The return leg lands on the raceline and stays there, so
+        # that is the only kind of obstacle the tail of this path can hit; one
+        # sitting out by the wall is not where the return goes, and occupied_by
+        # below still vets the whole span against it.
+        #
+        # Measured on the car, choosing the next obstacle regardless: leader on
+        # the line at s=20.86, a cleared obstacle at s=22.15 out at d=+0.84,
+        # and the REAL threat at s~22.9 on the line. Ending before the cleared
+        # one left 0.83 m of return, under the floor, so the full return was
+        # kept - straight across the on-line obstacle behind it. The state
+        # machine refused the path every tick ("blocked by obs 210 ... free
+        # -0.319") and the car stopped behind an obstacle it had room to pass.
         blocker = next(
             (o for o in chain
              if ahead(o) > gaps[group_idx[-1]] + 1e-3
-             and not any(o is member for member in group)), None)
+             and not any(o is member for member in group)
+             and not self._raceline_clears(o)), None)
         if blocker is not None:
             room = ahead(blocker) - gaps[group_idx[-1]] - self.retreat_clearance_m
             if room < retreat[-1]:
