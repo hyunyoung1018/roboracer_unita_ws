@@ -439,6 +439,14 @@ class SplineNode(Node):
                     bound_left - left, bound_right + right,
                     bound_left, bound_right)
 
+        def clearance(d, other):
+            """Signed room between a path at d and an obstacle. Negative inside."""
+            if d >= other.d_left:
+                return d - other.d_left
+            if d <= other.d_right:
+                return other.d_right - d
+            return -min(d - other.d_right, other.d_left - d)
+
         group_idx = [0]
         while True:
             last = group_idx[-1]
@@ -521,40 +529,49 @@ class SplineNode(Node):
             group_idx.append(following)
         group = [blocking[i] for i in group_idx]
 
-        # A corridor holds ONE offset from its first member to its last, so it
-        # is only meaningful if everything in between can be passed at that
-        # offset. Something inside the span that is not a member cannot - it
-        # was excluded precisely because it needs a different one.
+        # Does the corridor's own offset clear everything it drives past?
         #
-        # Seen on the car with three obstacles at d -0.10, +0.25, -0.05: the
-        # first and third are 5 cm apart and share a corridor happily, and the
-        # middle one sits across it. The corridor was built, the path ran
-        # through the middle obstacle, and the car stopped.
+        # This is spline's decision, made on the offset it is about to hold,
+        # and it replaces a version that asked the wrong question twice over.
+        # That one looked only at `blocking` - obstacles the RACELINE does not
+        # clear - which is the wrong set entirely: a corridor runs at -0.48,
+        # and what threatens it is whatever sits near -0.48, not whatever sits
+        # near zero. An obstacle at d -0.45 clears the raceline comfortably,
+        # never appears in `blocking`, and is exactly what the corridor drives
+        # into. It also flagged anything inside the span whether or not the
+        # path went near it.
         #
-        # occupied_by does not catch this, by design. It is comparative - it
-        # refuses a side only where the path leaves LESS room than the raceline
-        # would - and an obstacle the raceline does not clear either passes
-        # that test. That relaxation is what made two obstacles on the same
-        # side solvable; here it is exactly the wrong instinct.
+        # Over the hold region the path IS the offset - flat, by construction -
+        # so no spline is needed to know where it will be. Every candidate in
+        # there, member or not, has to be evasion_distance clear of it.
         #
-        # So the corridor is abandoned rather than trimmed: fall back to the
-        # leader alone and let the next cycle plan the rest. Checked on the
-        # settled group rather than during growth, so it holds however the
-        # group was arrived at.
+        # If neither side survives, one offset cannot cover this group, and the
+        # corridor is dropped for the leader alone. The next cycle plans the
+        # rest, which is the same rule as an obstacle past the end of a path.
         if len(group) > 1:
-            span = [apex_s + (o.s_center - apex_s) % max_s for o in group]
-            intruder = next(
-                (o for o in blocking
-                 if not any(o is m for m in group)
-                 and span[0] < apex_s + (o.s_center - apex_s) % max_s < span[-1]),
-                None)
-            if intruder is not None:
+            hold_lo, hold_hi = gaps[group_idx[0]], gaps[group_idx[-1]]
+
+            def hold_blocked_by(offset):
+                for other in candidates:
+                    if any(other is m for m in group):
+                        continue
+                    if not hold_lo <= ahead(other) <= hold_hi:
+                        continue
+                    if clearance(offset, other) < self.evasion_distance:
+                        return other
+                return None
+
+            _, try_left, try_right, _, _, _, _ = corridor_geometry(group)
+            blocked_l = hold_blocked_by(try_left)
+            blocked_r = hold_blocked_by(try_right)
+            if blocked_l is not None and blocked_r is not None:
                 self.get_logger().info(
-                    f"dropping the {len(group)}-obstacle corridor: the obstacle at "
-                    f"s={intruder.s_center:.2f} (d {intruder.d_right:+.2f}.."
-                    f"{intruder.d_left:+.2f}) sits inside it and is not a member, "
-                    f"so no single offset clears everything. Planning for the "
-                    f"leader at s={group[0].s_center:.2f} alone",
+                    f"dropping the {len(group)}-obstacle corridor: holding "
+                    f"{try_left:+.2f} runs into the obstacle at "
+                    f"s={blocked_l.s_center:.2f} (d {blocked_l.d_right:+.2f}.."
+                    f"{blocked_l.d_left:+.2f}) and {try_right:+.2f} into the one at "
+                    f"s={blocked_r.s_center:.2f}, so no single offset covers it. "
+                    f"Planning for the leader at s={group[0].s_center:.2f} alone",
                     throttle_duration_sec=2.0)
                 group = [blocking[0]]
                 group_idx = [0]
@@ -671,13 +688,6 @@ class SplineNode(Node):
         # splines over ten knots per plan is not worth an optimisation that
         # would now be wrong.
 
-        def clearance(d, other):
-            """Signed room between a path at d and an obstacle. Negative inside."""
-            if d >= other.d_left:
-                return d - other.d_left
-            if d <= other.d_right:
-                return other.d_right - d
-            return -min(d - other.d_right, other.d_left - d)
 
         def occupied_by(apex_d):
             profile = path_profile(apex_d)
