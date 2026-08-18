@@ -23,7 +23,7 @@ is_closed: true
 # comes back. Head-to-head keeps the 0.24 pairing it was tuned on:
 # h2h_perception.yaml pins its spline at 0.24 and
 # h2h_state_machine_params.yaml overrides this key back to 0.10.
-lateral_width_m: 0.16
+lateral_width_m: 0.10
 latest_threshold: 0.1
 max_horizon: 20.0
 min_horizon: 0.0
