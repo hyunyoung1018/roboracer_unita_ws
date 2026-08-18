@@ -275,13 +275,6 @@ spline_node:
     # into it. Merging it costs NOTHING going right, because the offset is set
     # by whichever obstacle reaches furthest towards the line and that is still
     # the leader. Shift 0.00 m, invisible to a d difference.
-    # Corridors at all. false plans one obstacle at a time - a swerve, a
-    # return to the line, and the next obstacle decided fresh.
-    #
-    # time_trials turns it off for qual:=true, and corridor:=false on either
-    # launch does the same by hand.
-    corridor_enabled: true
-
     # [m] How far past the FIRST obstacle the corridor may reach to pick up
     # further ones.
     corridor_max_len_m: 8.0
@@ -359,18 +352,6 @@ spline_node:
     # into it. Merging it costs NOTHING going right, because the offset is set
     # by whichever obstacle reaches furthest towards the line and that is still
     # the leader. Shift 0.00 m, invisible to a d difference.
-    # Corridors at all. false plans one obstacle at a time, the way this
-    # planner worked before corridors existed - a swerve, a return to the
-    # line, and the next obstacle decided fresh.
-    #
-    # time_trials turns it OFF for qual:=true. A qualifying lap is a known
-    # course driven for time: the obstacles do not move between laps, the
-    # sector speeds are being stepped up under the car, and one swerve at a
-    # time is the behaviour that has the most laps behind it. Corridors are
-    # the newer, faster thing and they belong in practice until they have as
-    # many.
-    corridor_enabled: true
-
 
 
     # [s] How long a corridor commitment survives without being renewed.

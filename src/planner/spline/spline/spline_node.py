@@ -80,15 +80,6 @@ class SplineNode(Node):
             # can hold and the next replan takes over - a corridor longer than
             # this holds an offset across more track than the boundary check
             # can be expected to admit on a 1.0 to 1.9 m wide map.
-            # Corridors at all. False plans one obstacle at a time.
-            #
-            # The only thing kept from the run of corridor patches that
-            # followed b1db364: they fixed each other in circles and the car
-            # ended up worse than it started, so the file is back to the last
-            # state that was confirmed working on the car. This switch stays
-            # because both launches pass it, and because being able to turn the
-            # feature off without a rebuild is what that week was missing.
-            'corridor_enabled': True,
             'corridor_max_len_m': 8.0,
             # [m] How far past the PREVIOUS member the next obstacle may sit
             # and still join the corridor, scaled by speed the same way the
@@ -150,8 +141,6 @@ class SplineNode(Node):
         self.side_hysteresis_m = float(self.get_parameter('side_hysteresis_m').value)
         self.raceline_clearance_m = float(
             self.get_parameter('raceline_clearance_m').value)
-        self.corridor_enabled = bool(
-            self.get_parameter('corridor_enabled').value)
         self.corridor_max_len_m = float(
             self.get_parameter('corridor_max_len_m').value)
         self.corridor_link_gap_m = float(
@@ -178,7 +167,6 @@ class SplineNode(Node):
             'path_hold_s': 'path_hold_s',
             'side_hysteresis_m': 'side_hysteresis_m',
             'raceline_clearance_m': 'raceline_clearance_m',
-            'corridor_enabled': 'corridor_enabled',
             'corridor_max_len_m': 'corridor_max_len_m',
             'corridor_link_gap_m': 'corridor_link_gap_m',
             'corridor_link_d_tol_m': 'corridor_link_d_tol_m',
@@ -506,7 +494,14 @@ class SplineNode(Node):
                     bound_left, bound_right)
 
         group_idx = [0]
-        while self.corridor_enabled:
+        # Always. Turning corridors off does not fall back to something
+        # simpler and safer - it makes two obstacles in a row impassable,
+        # because each is then planned as a swerve and a return to the line
+        # and the return lands on the next one. The switch was there to fall
+        # back on during the week the corridor patches were fighting each
+        # other; that is over, and a switch whose off position cannot be
+        # driven is not a switch.
+        while True:
             last = group_idx[-1]
             # Strictly the next one in s. `chain` is sorted, so that is the
             # very next index - no skipping, no searching. Two obstacles at

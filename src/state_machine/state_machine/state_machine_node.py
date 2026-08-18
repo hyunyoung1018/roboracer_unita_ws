@@ -1290,18 +1290,51 @@ class StateMachine(Node):
             wpnts_data.closest_target = None
 
     def _check_availability(self, wpnts, wpnts_data) -> bool:
-        if (self.now_sec() - time_to_float(wpnts_data.stamp)) > wpnts_data.killing_timer_sec:
+        """Is there a path to drive, and refresh the cache to the newest one.
+
+        A newer path always wins. The hysteresis is for the case where there
+        is NO usable new path - a skipped solver frame - and it holds the
+        cached one while the car is still on it.
+
+        It used to be the other way round: while the car was on the cached
+        path and the cache was under killing_timer_sec old, this returned True
+        without asking the planner anything. _check_latest_wpnts is the only
+        thing that calls initialize_traj, so the cache was the only thing that
+        ever got driven, and it was never replaced.
+
+        That is what made the third of three obstacles unavoidable. Outside
+        OVERTAKE the cache refreshes every tick, because
+        _check_static_overtaking_mode calls _check_latest_wpnts itself; inside
+        OVERTAKE only this function runs, so the car committed to whatever
+        path it entered on. The path for the second obstacle is cut short
+        before the third and has already returned to d=0 by its end, and the
+        third reads as "past the end of this path - not this path's problem",
+        so the path stayed free, OVERTAKE stayed on, and the planner's path
+        for the third obstacle - published, correct, visible in RViz - was
+        never read. The cache only turned over when the car ran off the end of
+        the old path, half a metre before it, which at 3 m/s is a third of a
+        second before the obstacle.
+
+        Two and one obstacle worked because the last path in the chain is not
+        cut short: with nothing behind it, it does the avoiding itself.
+        """
+        age = self.now_sec() - time_to_float(wpnts_data.stamp)
+
+        if age > wpnts_data.killing_timer_sec:
             wpnts_data.is_init = False
             return bool(self._check_latest_wpnts(wpnts, wpnts_data))
 
-        if (self.now_sec() - time_to_float(wpnts_data.stamp)) > wpnts_data.hyst_timer_sec:
-            if self._check_latest_wpnts(wpnts, wpnts_data):
-                return True
+        # A fresh path beats the cached one, always. This is the line the bug
+        # was hiding behind.
+        if self._check_latest_wpnts(wpnts, wpnts_data):
+            return True
 
-        if not self._check_on_spline(wpnts_data):
-            return bool(self._check_latest_wpnts(wpnts, wpnts_data))
+        # No usable fresh path. Keep driving the cached one while the car is
+        # still on it and it has not gone stale.
+        if age <= wpnts_data.hyst_timer_sec:
+            return bool(self._check_on_spline(wpnts_data))
 
-        return True
+        return False
 
     def _check_sustainability(self, src_wpnts, wpnts_data) -> bool:
         if self._check_availability(src_wpnts, wpnts_data) and self._check_free_frenet(wpnts_data):
@@ -1334,6 +1367,47 @@ class StateMachine(Node):
                 if rec.get("free_dist") is not None]
         return min(room) if room else None
 
+    def _worth_driving(self, path_free) -> bool:
+        """Should the static avoidance path be driven?
+
+        Free is enough on its own. When it is not free, the question is not
+        "is this path safe" but "is it better than where refusing it puts the
+        car" - and refusing it puts the car on the raceline, which is the
+        thing that was declared blocked in the first place.
+
+        path_free is a yes/no against a fixed margin, so a refusal by
+        millimetres sent the car down a line that goes straight through the
+        obstacle. Measured twice in one run: the avoidance cleared by 0.022 m
+        and 0.024 m against margins of 0.034 and 0.031, so it was refused, and
+        the raceline it fell back to was 0.203 m and 0.222 m INSIDE the same
+        obstacle.
+
+        When the raceline is free this returns False - a marginal avoidance is
+        not worth leaving a clear line for - and the frame in that same run
+        where the avoidance really was the worse of the two (free -0.055
+        against the raceline's +0.070) stays on the line.
+
+        Used by both the entry and the sustainability check, which have to
+        agree: with the comparison only on entry, the car dropped out of
+        OVERTAKE the moment the path went marginal and had to re-earn it.
+        """
+        if path_free:
+            return True
+        if self._check_free_frenet(self.cur_gb_wpnts):
+            return False
+        avoid_room = self._worst_free(self.cur_static_avoidance_wpnts)
+        line_room = self._worst_free(self.cur_gb_wpnts)
+        if (avoid_room is None or line_room is None
+                or avoid_room <= line_room + self.static_overtake_better_by_m):
+            return False
+        self.get_logger().warn(
+            f"taking the avoidance path even though it is not clear: it leaves "
+            f"{avoid_room:+.3f} m at its tightest and the raceline leaves "
+            f"{line_room:+.3f} m, and the raceline is where trailing would put "
+            f"the car",
+            throttle_duration_sec=1.0)
+        return True
+
     def _check_static_overtaking_mode(self) -> bool:
         # Evaluated separately rather than short-circuited so a refusal can say
         # which condition refused. All four have to hold, and from outside the
@@ -1353,41 +1427,9 @@ class StateMachine(Node):
             self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)
         path_free = self._check_free_frenet(self.cur_static_avoidance_wpnts)
 
-        if slow_enough and closing and have_path and path_free:
+        if slow_enough and closing and have_path and self._worth_driving(path_free):
             self.static_overtaking_mode = True
             return True
-
-        # Neither one is free: drive the better of the two, not the raceline.
-        #
-        # path_free is a yes/no against a fixed margin, and when the answer is
-        # no the transition falls all the way through to TRAILING/RACELINE -
-        # the raceline, which is the thing that was declared blocked in the
-        # first place. So a refusal by millimetres put the car back on a line
-        # that goes straight through the obstacle, and it drove there with a
-        # perfectly good avoidance path drawn on screen and nobody following
-        # it. Measured twice in one run: the avoidance cleared the obstacle by
-        # 0.022 m and 0.024 m against margins of 0.034 and 0.031, so it was
-        # refused, and the raceline it fell back to was 0.203 m and 0.222 m
-        # INSIDE the same obstacle.
-        #
-        # When the raceline is free this branch does nothing - a marginal
-        # avoidance is not worth leaving a clear line for, and the frame where
-        # the avoidance really was the worse of the two (free -0.055 against
-        # the raceline's +0.070) still correctly stays on the line.
-        if slow_enough and closing and have_path:
-            if not self._check_free_frenet(self.cur_gb_wpnts):
-                avoid_room = self._worst_free(self.cur_static_avoidance_wpnts)
-                line_room = self._worst_free(self.cur_gb_wpnts)
-                if (avoid_room is not None and line_room is not None
-                        and avoid_room > line_room + self.static_overtake_better_by_m):
-                    self.static_overtaking_mode = True
-                    self.get_logger().warn(
-                        f"taking the avoidance path even though it is not clear: "
-                        f"it leaves {avoid_room:+.3f} m at its tightest and the "
-                        f"raceline leaves {line_room:+.3f} m, and the raceline is "
-                        f"where trailing would put the car",
-                        throttle_duration_sec=1.0)
-                    return True
 
         if len(self.cur_obstacles_in_interest) != 0:
             self.get_logger().info(
@@ -1400,9 +1442,14 @@ class StateMachine(Node):
 
     def _check_overtaking_mode_sustainability(self) -> bool:
         if self.static_overtaking_mode:
+            # The same test as the entry, through _worth_driving. They used to
+            # differ: entry would accept a path that beat the raceline, and
+            # this would then throw it away on the next tick for not being
+            # free, so the car flicked out of OVERTAKE and had to earn it back.
             if (
                 self._check_availability(self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)
-                and self._check_free_frenet(self.cur_static_avoidance_wpnts)
+                and self._worth_driving(
+                    self._check_free_frenet(self.cur_static_avoidance_wpnts))
             ):
                 return True
         else:

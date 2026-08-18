@@ -42,11 +42,6 @@
   <arg name="relocalize_every_n_laps" default="3"
        description="How often. Live: ros2 param set /auto_relocalizer relocalize_every_n_laps N"/>
 
-  <arg name="corridor" default="true"
-       description="Take several obstacles as one manoeuvre, holding one offset
-                    across them, instead of a swerve and a return to the line
-                    for each."/>
-
   <arg name="joy_max_speed" default="5.0"/>
   <arg name="use_sim_time" default="false"/>
   <arg name="rviz" default="false"/>
@@ -133,7 +128,6 @@
   <node pkg="spline" exec="h2h_spline_node" name="spline_node" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
     <param from="$(var config_dir)/dynamic_perception.yaml"/>
-    <param name="corridor_enabled" value="$(var corridor)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
     <remap from="/tracking/obstacles" to="/tracking/static_obstacles"/>
     <remap from="/planner/avoidance/otwpnts" to="/planner/avoidance/static_otwpnts"/>
