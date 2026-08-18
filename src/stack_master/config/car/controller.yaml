@@ -63,6 +63,12 @@ controller_manager:
     trailing_rate_limit_enabled: false
     opponent_speed_hold_sec: 0.75
     opponent_speed_valid_min_mps: 0.15
+    # [m/s] Upper bound on a believable opponent speed. Without it one bad
+    # frame is stored as valid and held for opponent_speed_hold_sec, and
+    # trailing accelerates towards an opponent it thinks is doing 269 m/s.
+    # Keep equal to the tracker's dynamic_speed_valid_max_mps - the tracker
+    # caps /tracking/dynamic_obstacles, this caps the trailing_targets path.
+    opponent_speed_valid_max_mps: 6.0
     behavior_timeout_sec: 0.5
     curvature_factor: 0.145
     speed_factor_for_lat_err: 1.0

@@ -247,16 +247,34 @@ class HeadToHeadTrackingNode(TrackingNode):
             obstacles.append(obstacle)
             classes[int(obstacle.id)] = self._track_class(track)
 
+        selected = self.selector.select(
+            obstacles, classes, now, self.waypoints, self.track_length,
+            self.ego_s)
+        selected_id = None if selected is None else int(selected.id)
+
+        # Everything except the one opponent, not just the confirmed statics.
+        #
+        # This is what time_trials feeds its planner, and matching it is the
+        # point. spline_node does not look at is_static AT ALL - it plans
+        # around every track on /tracking/obstacles - so filtering to STATIC
+        # here gave head to head a strictly smaller world than time trials and
+        # the same planner behaved differently on the same cone.
+        #
+        # Two kinds of track were being dropped. UNKNOWN, for the 0.3 s before
+        # a track has static_min_samples frames, so a newly seen cone was
+        # invisible for its first 0.9 m of approach. And any cone whose
+        # smoothed speed brushed static_speed_threshold for a frame, which is
+        # what "static obstacles are not being caught" was on the car.
+        #
+        # The selected opponent is the one thing held back, because it has a
+        # planner of its own. Nothing else is judged here at all.
         static_msg = ObstacleArray(header=header)
         if publish_static:
             static_msg.obstacles = [
                 obstacle for obstacle in obstacles
-                if classes[int(obstacle.id)] == STATIC
+                if int(obstacle.id) != selected_id
             ]
 
-        selected = self.selector.select(
-            obstacles, classes, now, self.waypoints, self.track_length,
-            self.ego_s)
         dynamic_msg = ObstacleArray(header=header)
         if selected is not None:
             # A copy: stabilize_speed rewrites vs, and the same object is

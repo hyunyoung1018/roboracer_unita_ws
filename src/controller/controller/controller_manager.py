@@ -107,6 +107,8 @@ class ControllerManager(Node):
             self._get_param('opponent_speed_hold_sec', 0.75))
         self.opponent_speed_valid_min_mps = float(
             self._get_param('opponent_speed_valid_min_mps', 0.15))
+        self.opponent_speed_valid_max_mps = float(
+            self._get_param('opponent_speed_valid_max_mps', 6.0))
         self.trailing_rate_limit_enabled = bool(
             self._get_param('trailing_rate_limit_enabled', False))
 
@@ -357,9 +359,26 @@ class ControllerManager(Node):
             opponent_id = int(opponent.id)
             if self.single_opponent_mode and not opponent_static:
                 now_sec = now.nanoseconds * 1e-9
+                # An upper bound as well as a lower one.
+                #
+                # Only the lower one existed, so a single bad frame was
+                # accepted as a real reading, stored, and then HELD for
+                # opponent_speed_hold_sec. Trailing commands opponent speed
+                # minus a correction, so an impossible opponent speed makes
+                # the car accelerate towards it. Logged on the car:
+                # "opponent ID changed 47 -> 1000000; using continuous speed
+                # 269.88 m/s", which is 972 km/h, from a velocity computed
+                # across an id switch on a dt of nearly nothing.
+                #
+                # The tracker caps the same quantity for the dynamic stream
+                # with dynamic_speed_valid_max_mps, but that cap is on
+                # /tracking/dynamic_obstacles and this reads trailing_targets,
+                # which the state machine builds from /tracking/obstacles -
+                # a path the cap never covered. Keep the two numbers equal.
                 speed_is_valid = (
                     np.isfinite(opponent_vs)
                     and opponent_vs >= self.opponent_speed_valid_min_mps
+                    and opponent_vs <= self.opponent_speed_valid_max_mps
                 )
                 if speed_is_valid:
                     self.last_valid_opponent_speed = opponent_vs
