@@ -59,7 +59,6 @@
   <exec_depend>spline</exec_depend>
 
   <!-- head_to_head.launch.xml only -->
-  <exec_depend>obstacle_router</exec_depend>
   <exec_depend>spline_planner</exec_depend>
   <exec_depend>lane_change_planner</exec_depend>
   <exec_depend>gp_traj_predictor</exec_depend>

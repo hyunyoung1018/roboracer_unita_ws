@@ -392,13 +392,14 @@ class H2HStateMachine(StateMachine):
 
         That is wrong for exactly one situation, and it is a situation this
         workspace is built to meet: the opponent stops behind a static
-        obstacle, is reclassified STATIC after about a second, and the car
-        begins a static evasion around it - and then it drives off again. The
-        router moves it to /tracking/dynamic_obstacles within about 0.1 s
-        (dynamic_confirm_count is 2 against a full history window for the other
-        direction), spline_node stops seeing it and stops refreshing the static
-        path, and the free check now watches the opponent drive along the very
-        line the car is committed to. Sustainability fails and the car drops to
+        obstacle, is reclassified STATIC once its speed has been under
+        static_speed_threshold for static_min_samples frames, and the car
+        begins a static evasion around it - and then it drives off again.
+        h2h_tracking_node moves it to /tracking/dynamic_obstacles on the first
+        frame the speed estimate clears that threshold, spline_node stops
+        seeing it and stops refreshing the static path, and the free check now
+        watches the opponent drive along the very line the car is committed to.
+        Sustainability fails and the car drops to
         TRAILING mid-evasion, off the raceline and alongside a moving car.
 
         The other planner has a live path for precisely that case, because the

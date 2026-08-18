@@ -5,7 +5,8 @@ This exists as a subclass rather than as edits to :mod:`spline.spline_node`
 because time_trials.launch.xml runs that node for static obstacle avoidance and
 must keep behaving exactly as it does today. Nothing here has any effect unless
 /tracking/dynamic_obstacles is publishing, and nothing publishes it in time
-trials - the head-to-head router is what produces it.
+trials - h2h_tracking_node is what produces it, by splitting its own output on
+the tracker's speed-based is_static.
 
 ONE THING CHANGES: which side of a static obstacle the path goes.
 
@@ -58,9 +59,8 @@ class HeadToHeadSplineNode(SplineNode):
         # estimate.
         'opponent_extra_clearance_m': 0.10,
         # [s] Ignore the opponent list once it is older than this. Without it a
-        # detector dropout, or the router simply having nothing to route, would
-        # leave the last known opponent taking a side away for the rest of the
-        # run.
+        # detector dropout, or simply no moving track to report, would leave the
+        # last known opponent taking a side away for the rest of the run.
         'opponent_timeout_sec': 0.5,
         # Set false to get the shared planner's side choice back without
         # relaunching, which is the A/B for this whole file.
@@ -76,8 +76,8 @@ class HeadToHeadSplineNode(SplineNode):
         self.opponents = ObstacleArray()
         self.opponents_stamp = None
         # Absolute topic name, not the remapped /tracking/obstacles the base
-        # reads: head_to_head.launch.xml points that at the router's static-only
-        # stream, and this is the other half of the same split.
+        # reads: head_to_head.launch.xml points that at h2h_tracking_node's
+        # static-only stream, and this is the other half of the same split.
         self.create_subscription(
             ObstacleArray, '/tracking/dynamic_obstacles', self._opponent_cb, 10)
         self.get_logger().info(

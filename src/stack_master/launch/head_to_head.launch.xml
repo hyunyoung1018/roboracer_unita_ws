@@ -3,8 +3,12 @@
   Head-to-head mode. This file is deliberately independent from
   time_trials.launch.xml so the proven time-trials graph remains unchanged.
 
-  Static:  tracking -> stable router -> existing spline -> static_otwpnts
-  Dynamic: tracking -> stable router -> GP prediction -> lane change -> otwpnts
+  Static:  h2h tracking -> static_obstacles  -> h2h spline  -> static_otwpnts
+  Dynamic: h2h tracking -> dynamic_obstacles -> GP prediction -> lane change
+                                             -> otwpnts
+
+  One tracker, one classification. h2h_tracking_node splits its own output on
+  the tracker's speed-based is_static; there is no second opinion downstream.
 -->
 <launch>
   <arg name="map" description="Map name (folder under stack_master/maps/)"/>
@@ -109,17 +113,29 @@
   </node>
   <!-- h2h_tracking_node, not tracking_node: a subclass that publishes the
        obstacle fields the shared tracker drops (x_m/y_m/theta and the
-       variances) and sizes a confirmed-moving target like a car rather than
-       like a static box. time_trials keeps running the unmodified
-       tracking_node, and h2h_perception.yaml only adds keys. -->
+       variances), sizes a confirmed-moving target like a car rather than like
+       a static box, and splits its own output into
+       /tracking/static_obstacles and /tracking/dynamic_obstacles.
+       time_trials keeps running the unmodified tracking_node, and
+       h2h_perception.yaml only adds keys.
+
+       THE SPLIT USED TO BE A SEPARATE NODE, stable_obstacle_router, and it is
+       gone. It re-classified every track from the standard deviation of its
+       Frenet position and discarded the tracker's own answer. A stationary box
+       measured from a moving car walks centimetres a frame as the L-shape fit
+       slides with the viewing angle, which cleared its 0.04 m "clearly
+       dynamic" bar - so boxes went to the dynamic stream and were even
+       acquired as the opponent (ten times in one run), leaving the spline
+       planner with nothing to avoid while the controller trailed a box at the
+       0.8 m opponent gap. The car stopped in front of obstacles, or drove into
+       them when the derived speed came out wrong.
+
+       There is one classifier now, and it is the one time_trials drives on:
+       |v| < static_speed_threshold sustained over static_min_samples frames,
+       in the node that already estimates the velocity. -->
   <node pkg="perception" exec="h2h_tracking_node" name="tracking" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
     <param from="$(var config_dir)/h2h_perception.yaml"/>
-    <param name="use_sim_time" value="$(var use_sim_time)"/>
-  </node>
-  <node pkg="obstacle_router" exec="stable_obstacle_router_node"
-        name="stable_obstacle_router" output="screen">
-    <param from="$(find-pkg-share obstacle_router)/config/stable_obstacle_router.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 
@@ -226,7 +242,9 @@
     <param name="sim" value="$(var use_sim_time)"/>
     <param name="map" value="$(var map)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
-    <remap from="/tracking/obstacles" to="/tracking/stable_obstacles"/>
+    <!-- No remap. /tracking/stable_obstacles was the router's copy of every
+         track it had seen, which is what /tracking/obstacles already is - and
+         is the topic time_trials' state machine reads. One less alias. -->
   </node>
 
   <node pkg="controller" exec="controller_manager" name="controller_manager" output="screen">

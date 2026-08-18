@@ -108,7 +108,7 @@ class DrivingModeMonitor(Node):
         self.last_diagnostic_status = {}
 
         self.declare_parameter(
-            "obstacle_topic", "/tracking/stable_obstacles")
+            "obstacle_topic", "/tracking/obstacles")
         self.declare_parameter(
             "classification_debug_topic", "/tracking/classification_debug")
         self.declare_parameter(
@@ -241,9 +241,12 @@ class DrivingModeMonitor(Node):
                 f"장애물 {action} (종류 확인 중)",
             )
 
-        # An ID absent from classification_debug has not yet been confirmed by
-        # the stable router.  In particular, is_static=False alone must never
-        # be called DYNAMIC because UNKNOWN uses the same wire representation.
+        # An ID absent from classification_debug is reported UNKNOWN. Since
+        # stable_obstacle_router was removed nothing publishes that topic at
+        # all, so every target reads UNKNOWN unless a replacement publisher is
+        # pointed at classification_debug_topic. is_static=False alone must
+        # still never be called DYNAMIC: a track that has not yet collected
+        # static_min_samples frames carries the same wire representation.
         stable_class = self.stable_classes.get(int(target.id), "UNKNOWN")
         return obstacle_mode_for_class(prefix, stable_class)
 
