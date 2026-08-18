@@ -58,8 +58,10 @@ because UNKNOWN shares that wire representation. It is published on
 """
 
 import json
+import math
 from copy import deepcopy
 
+import numpy as np
 import rclpy
 from f110_msgs.msg import ObstacleArray
 from nav_msgs.msg import Odometry
@@ -72,7 +74,7 @@ from perception.h2h_opponent_selector import (
     UNKNOWN,
     OpponentSelector,
 )
-from perception.tracking_node import TrackingNode
+from perception.tracking_node import TrackingNode, _circular_delta
 
 
 class HeadToHeadTrackingNode(TrackingNode):
@@ -113,6 +115,10 @@ class HeadToHeadTrackingNode(TrackingNode):
         # towards it. Nothing on this track goes faster than the raceline.
         'dynamic_speed_valid_max_mps': 6.0,
         'classification_debug': True,
+        # Classify from median-filtered positions instead of the raw
+        # frame-to-frame difference. See _classification_speed. False restores
+        # the shared tracker's own verdict exactly, which is the A/B.
+        'static_classification_median': True,
     }
 
     def __init__(self):
@@ -204,6 +210,96 @@ class HeadToHeadTrackingNode(TrackingNode):
 
     def _odom_frenet_cb(self, msg):
         self.ego_s = float(msg.pose.pose.position.x)
+
+    def _update_track(self, track, measurement, stamp):
+        """Track as the parent does, then re-decide static on filtered history.
+
+        The parent estimates velocity from ONE frame-to-frame difference:
+
+            ds = measurement.s_center - track.obstacle.s_center
+
+        and the L-shape fit lands a few centimetres differently every frame as
+        the viewing angle changes, so for a stationary box that difference is
+        mostly noise. At 20 Hz a 3 cm wobble is 0.6 m/s before smoothing, well
+        over static_speed_threshold, and the box reads DYNAMIC.
+
+        The parent already knows the cure - it medians the position over
+        static_position_samples frames - but it applies that median ONLY once
+        the track is already static, and only to the published centre, never to
+        the velocity the decision is made from. So the filtering that would
+        make a box classifiable is gated behind the box already having been
+        classified. That is the bootstrap this override breaks.
+
+        Done after super() rather than by reimplementing _update_track: the
+        parent is what time_trials runs and stays untouched, and everything
+        else it does - the extents, the published vs/vd the trailing controller
+        reads, the history - is left exactly as it was. Only is_static, and the
+        centre that follows from it, are revised.
+        """
+        previous_stamp = track.stamp
+        super()._update_track(track, measurement, stamp)
+        if bool(self.get_parameter('static_classification_median').value):
+            self._reclassify_on_medians(
+                track, measurement, stamp, previous_stamp)
+
+    def _classification_speed(self, track, dt):
+        """Speed from two medians half a window apart, or None if too early.
+
+        The history is split in half; each half contributes a median, and the
+        distance between those two medians over the time between them is the
+        speed. A median rejects the odd bad fit outright rather than averaging
+        it in, and the two-point baseline means the estimate spans several
+        frames instead of one - so single-frame wobble cannot reach it at all.
+
+        It uses whatever history exists, so a track is classifiable at exactly
+        the same static_min_samples frames as before; the estimate simply gets
+        better as the window fills. s is medianed as offsets from a common
+        reference, because it wraps.
+        """
+        length = len(track.s_history)
+        window = int(self.get_parameter('static_position_samples').value)
+        half = min(length, 2 * window) // 2
+        if half < 1 or dt <= 0.0 or not self.track_length:
+            return None
+
+        reference = track.s_history[-1]
+
+        def median_s(samples):
+            return float(np.median(
+                [_circular_delta(value, reference, self.track_length)
+                 for value in samples]))
+
+        ds = median_s(track.s_history[-half:]) - median_s(
+            track.s_history[-2 * half:-half])
+        dd = float(np.median(track.d_history[-half:])) - float(
+            np.median(track.d_history[-2 * half:-half]))
+        return math.hypot(ds, dd) / (half * dt)
+
+    def _reclassify_on_medians(self, track, measurement, stamp, previous_stamp):
+        """Revise is_static, and the centre that depends on it."""
+        speed = self._classification_speed(track, stamp - previous_stamp)
+        if speed is None:
+            return
+        obstacle = track.obstacle
+        is_static = bool(
+            len(track.s_history)
+            >= int(self.get_parameter('static_min_samples').value)
+            and speed < float(self.get_parameter('static_speed_threshold').value)
+        )
+        if is_static == bool(obstacle.is_static):
+            return
+
+        obstacle.is_static = is_static
+        # The centre the parent published followed its own verdict, so it has
+        # to follow this one: medianed while static, the raw measurement while
+        # not. The edges are derived from the centre, so they are re-derived
+        # off the held extents rather than left pointing at the old one.
+        if is_static:
+            obstacle.s_center, obstacle.d_center = self._filtered_center(track)
+        else:
+            obstacle.s_center = float(measurement.s_center)
+            obstacle.d_center = float(measurement.d_center)
+        self._apply_extents(obstacle, track.extents, self.track_length)
 
     def _track_class(self, track):
         """STATIC / DYNAMIC / UNKNOWN for one track.

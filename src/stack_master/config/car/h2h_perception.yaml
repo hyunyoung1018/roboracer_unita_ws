@@ -108,6 +108,22 @@ tracking:
     # driving_mode_monitor is its reader.
     classification_debug: true
 
+    # ---- classification input ------------------------------------------
+    # Decide static/dynamic from median-filtered positions instead of one
+    # frame-to-frame difference.
+    #
+    # The shared tracker estimates velocity from a single difference, and the
+    # L-shape fit moves a few centimetres a frame as the viewing angle
+    # changes: at 20 Hz a 3 cm wobble is 0.6 m/s before smoothing, over
+    # static_speed_threshold, and a box reads DYNAMIC. It already has the cure
+    # - the median over static_position_samples - but applies it only AFTER a
+    # track is static, and only to the published centre. So the filtering that
+    # would let a box be classified was gated behind it already having been.
+    #
+    # false restores the shared verdict exactly, which is the A/B:
+    #   ros2 param set /tracking static_classification_median false
+    static_classification_median: true
+
 # spline_node: nothing here on purpose.
 #
 # This used to pin evasion_distance and raceline_clearance_m at 0.24

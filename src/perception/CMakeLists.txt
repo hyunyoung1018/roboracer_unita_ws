@@ -80,6 +80,7 @@ install(PROGRAMS
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(h2h_opponent_selector test/test_h2h_opponent_selector.py)
+  ament_add_pytest_test(h2h_classification test/test_h2h_classification.py)
 endif()
 
 ament_package()
