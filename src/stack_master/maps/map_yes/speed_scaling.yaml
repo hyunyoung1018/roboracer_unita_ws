@@ -35,7 +35,7 @@ sector_tuner:
     Sector3:
       start: 266
       end: 349
-      scaling: 0.5
-      t_clip_min: 1.05
+      scaling: 0.6
+      t_clip_min: 1.1
       only_FTG: false
       no_FTG: true
