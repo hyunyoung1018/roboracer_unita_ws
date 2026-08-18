@@ -429,9 +429,32 @@ class StableObstacleRouter(Node):
                     selected_output if is_selected else stable_obstacle)
                 stable_msg.obstacles.append(output_obstacle)
 
-            # Confirmed static obstacles retain the existing output contract;
-            # only the head-to-head dynamic/unknown candidate path is filtered.
-            if in_static:
+            # Not yet classified goes out as static.
+            #
+            # UNKNOWN used to reach neither output. It reached stable_msg, so
+            # the state machine saw the obstacle and trailed on it, while
+            # h2h_spline_node - which reads static_obstacles and is the only
+            # thing that draws an avoidance path - had an empty list. The car
+            # knew something was in the way, slowed for it, and nobody planned
+            # a way round: "static_avoidance_planner: published an empty path"
+            # with an obstacle plainly there.
+            #
+            # Static is the safe default for "do not know yet". Being wrong
+            # that way costs an avoidance that was not needed. Being wrong the
+            # old way costs the path entirely.
+            #
+            # This is not rare. The classifier is asymmetric on purpose -
+            # STATIC needs std_s AND std_d under min_std, DYNAMIC needs either
+            # over max_std - so noise falls towards DYNAMIC and everything
+            # between the two thresholds sits in UNKNOWN. A cone measured from
+            # a moving car wanders a few centimetres over the 20-sample window
+            # simply because the visible face of it changes, which lands it
+            # right in that band.
+            #
+            # The selected opponent still wins: is_selected is only ever true
+            # for a confirmed DYNAMIC track, so a real opponent cannot be
+            # routed here by mistake.
+            if in_static or unknown_is_settled:
                 static_msg.obstacles.append(deepcopy(stable_obstacle))
             elif is_selected:
                 dynamic_msg.obstacles.append(deepcopy(selected_output))
