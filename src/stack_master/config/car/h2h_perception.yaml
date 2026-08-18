@@ -24,61 +24,55 @@
 
 tracking:
   ros__parameters:
-    # A FLOOR on a CONFIRMED-MOVING track, and the reason this file still
-    # exists. Static obstacles never reach it.
-    #
-    # The opponent is detected off a 0.12 m pillar bolted to a car, so the
-    # measurement is honest about the pillar and useless about the car. There
-    # is one other car on the track and we know its size - believe the car.
-    #
-    # 0.202 is the circumscribed radius of a 0.24 x 0.325 car:
-    # sqrt(0.24^2 + 0.325^2)/2 = 0.2020. A disc, so no yaw estimate is needed
-    # and no orientation under-reads - a car at 45 deg to the track tangent
-    # presents more in both Frenet axes than it does head-on, and the disc is
-    # the worst case of that rotation. It does mean the believed footprint is
-    # 0.40 across rather than the car's 0.24, which is the price of not
-    # estimating yaw off a 12 cm pillar.
-    #
-    # WAS 0.29, the circumscribed radius of 0.28 x 0.50 - our own car's
-    # dimensions, not the opponent's. That is 0.58 across, and on a 1.0 to
-    # 1.9 m track it was eating the gap the overtake needs.
+# A FLOOR on a CONFIRMED-MOVING track, and the reason this file still
+# exists. Static obstacles never reach it.
+#
+# The opponent is detected off a 0.12 m pillar bolted to a car, so the
+# measurement is honest about the pillar and useless about the car. There
+# is one other car on the track and we know its size - believe the car.
+#
+# 0.202 is the circumscribed radius of a 0.24 x 0.325 car:
+# sqrt(0.24^2 + 0.325^2)/2 = 0.2020. A disc, so no yaw estimate is needed
+# and no orientation under-reads - a car at 45 deg to the track tangent
+# presents more in both Frenet axes than it does head-on, and the disc is
+# the worst case of that rotation. It does mean the believed footprint is
+# 0.40 across rather than the car's 0.24, which is the price of not
+# estimating yaw off a 12 cm pillar.
+#
+# WAS 0.29, the circumscribed radius of 0.28 x 0.50 - our own car's
+# dimensions, not the opponent's. That is 0.58 across, and on a 1.0 to
+# 1.9 m track it was eating the gap the overtake needs.
     dynamic_extent_min_m: 0.202
 
-    # Ceiling, applied as max/2 = 0.21, i.e. the floor plus a centimetre. Not
-    # pinned exactly: a frame that genuinely measures wider than the disc
-    # should not be clamped below what was seen.
+# Ceiling, applied as max/2 = 0.21, i.e. the floor plus a centimetre. Not
+# pinned exactly: a frame that genuinely measures wider than the disc
+# should not be clamped below what was seen.
     dynamic_extent_max_m: 0.42
 
-    # A car's Frenet extents change with its yaw against the track tangent, not
-    # with how much of it the lidar has seen, so the running maximum has to
-    # bleed off within a tick rather than the six seconds a static box gets.
+# A car's Frenet extents change with its yaw against the track tangent, not
+# with how much of it the lidar has seen, so the running maximum has to
+# bleed off within a tick rather than the six seconds a static box gets.
     dynamic_extent_decay_mps: 0.5
 
-spline_node:
-  ros__parameters:
-    # WAS 0.19 with raceline_clearance_m left at the base 0.24, which broke the
-    # agreement the whole static stack is built on: the state machine's floor
-    # is gb_ego_width_m/2 + lateral_width_m = 0.14 + 0.05 = 0.19, so an evasion
-    # of 0.19 left exactly ZERO slack and one centimetre of measurement noise
-    # was enough for the car to refuse its own path.
-    #
-    # time_trials runs 0.24 against the same 0.19 floor - five centimetres of
-    # slack. Same here, and raceline_clearance_m matches it, as it must.
-    # Tighter than time trials, which runs 0.30 on both of these, and
-    # deliberately so: head to head has no penalty for brushing past a static
-    # obstacle or a wall, and the metre it saves is a metre of track position.
-    # A qualifying lap is scored on a clean run, this is scored on being in
-    # front. Do not "fix" the difference by matching the two files.
-    #
-    # raceline_clearance_m has a second reason it must be 0.24 here: it is
-    # tuned to equal gb_ego_width_m/2 + global_tracking's lateral_width_m, and
-    # h2h_state_machine_params.yaml takes that from 0.16 down to 0.10.
-    # 0.14 + 0.10 = 0.24. Move one and the planner and the state machine stop
-    # agreeing about whether the raceline is blocked.
-    evasion_distance: 0.24
-    raceline_clearance_m: 0.24
-
-    # The one number that stays tighter than time_trials. An opponent is not
-    # something to give a wide berth on a track this width, and unlike the
-    # obstacle's edge this is a bound against the WALL, which does not move.
-    boundary_margin: 0.18
+# spline_node: nothing here on purpose.
+#
+# This used to pin evasion_distance and raceline_clearance_m at 0.24
+# against time trials' 0.30, on the reasoning that head to head has no
+# penalty for brushing a static obstacle and the centimetres are track
+# position. Measured on the car, that reasoning cost more than it bought.
+#
+# raceline_clearance_m is "how close before this planner bothers to move"
+# and evasion_distance is "how far to move" - and they are the SAME NUMBER
+# by design, so an obstacle sitting at the threshold produces an offset of
+# zero. At 0.24 the threshold landed exactly where these obstacles measure:
+# near edges wandering -0.21 to -0.31 frame to frame, giving apexes of
+# +0.03, 0.00, -0.07. Three centimetres of avoidance, then a bail on the
+# abs(apex_d) < 0.02 guard, then "nothing to plan for" - all on the same
+# obstacle, cycling several times a second, with the state machine calling
+# the raceline blocked by a centimetre the whole time.
+#
+# Moving to 0.30 does not remove that structure, it moves the window off
+# where this track's obstacles actually sit. The structure itself is the
+# equality of the two numbers, and that is a separate change.
+#
+# boundary_margin comes back to 0.19 with them.

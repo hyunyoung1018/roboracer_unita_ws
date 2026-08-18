@@ -81,6 +81,9 @@ class RecoveryNode(Node):
 
     PARAM_DEFAULTS = {
         'rate_hz': 20.0,
+        # [Hz] Marker draw rate. Markers are also skipped entirely when no
+        # viewer is subscribed; see _viz_due.
+        'viz_rate_hz': 5.0,
         # [m] Distance over which the car's lateral offset is taken out. Long
         # enough that the manoeuvre is not a swerve at the speeds this arms at,
         # short enough that the car is back on the line before the next corner.
@@ -123,6 +126,8 @@ class RecoveryNode(Node):
             WpntArray, '/global_waypoints', self._global_cb, 10)
         self.create_subscription(
             WpntArray, '/global_waypoints_scaled', self._scaled_cb, 10)
+        self._viz_rate_hz = float(self.get_parameter('viz_rate_hz').value)
+        self._last_viz_sec = 0.0
         self.create_timer(1.0 / max(float(self.rate_hz), 1.0), self._loop)
         self.get_logger().info(
             'Waiting for /car_state/odom_frenet and /global_waypoints_scaled')
@@ -204,7 +209,28 @@ class RecoveryNode(Node):
                 ax_mps2=float(reference.ax_mps2),
             ))
         self.path_pub.publish(message)
-        self.marker_pub.publish(self._markers(message))
+        if self._viz_due():
+            self.marker_pub.publish(self._markers(message))
+
+    def _viz_due(self):
+        """True when this tick should draw.
+
+        Rate-limited, and skipped entirely when nothing is subscribed - with
+        no viewer attached the markers cost nothing at all, which is how the
+        car should normally race. Measured with py-spy on this node while
+        rviz was closed: _markers was 13.05s of _loop's 37.96s, a third of
+        everything it did, drawing for nobody. The same shape the state
+        machine already uses.
+        """
+        if self._viz_rate_hz <= 0.0:
+            return False
+        if self.marker_pub.get_subscription_count() == 0:
+            return False
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if now - self._last_viz_sec < 1.0 / self._viz_rate_hz:
+            return False
+        self._last_viz_sec = now
+        return True
 
     def _markers(self, path):
         array = MarkerArray()

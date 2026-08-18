@@ -16,6 +16,15 @@ class UpdateWaypoints(Node):
         super().__init__('waypoint_updater')
         self.declare_parameter('update_waypoints', True)
         self.declare_parameter('speed_offset', 0.0)
+        # [Hz] Marker draw rate; also skipped when nothing is subscribed.
+        self.declare_parameter('viz_rate_hz', 1.0)
+        # Read once. These were being fetched through the parameter machinery
+        # on EVERY odometry callback - fifty lookups a second to decide
+        # whether to write one float.
+        self._enabled = bool(self.get_parameter('update_waypoints').value)
+        self._speed_offset = float(self.get_parameter('speed_offset').value)
+        self._viz_rate_hz = float(self.get_parameter('viz_rate_hz').value)
+        self._last_viz_sec = 0.0
         self.waypoints = None
         self.s_values = None
         self.create_subscription(WpntArray, '/global_waypoints_scaled', self._waypoints_cb, 10)
@@ -29,10 +38,10 @@ class UpdateWaypoints(Node):
         self.s_values = np.asarray([waypoint.s_m for waypoint in msg.wpnts])
 
     def _odom_cb(self, msg):
-        if self.waypoints is None or not self.get_parameter('update_waypoints').value:
+        if self.waypoints is None or not self._enabled:
             return
         idx = int(np.argmin(np.abs(self.s_values - msg.pose.pose.position.x)))
-        speed = msg.twist.twist.linear.x + float(self.get_parameter('speed_offset').value)
+        speed = msg.twist.twist.linear.x + self._speed_offset
         self.waypoints.wpnts[idx].vx_mps = max(0.0, speed)
 
     def _publish(self):
@@ -40,6 +49,14 @@ class UpdateWaypoints(Node):
             return
         self.waypoints.header.stamp = self.get_clock().now().to_msg()
         self.publisher.publish(self.waypoints)
+        # 349 Marker objects a second, for nobody. Skipped entirely when no
+        # viewer is subscribed, and rate-limited when one is.
+        if self._viz_rate_hz <= 0.0 or self.marker_pub.get_subscription_count() == 0:
+            return
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if now - self._last_viz_sec < 1.0 / self._viz_rate_hz:
+            return
+        self._last_viz_sec = now
         markers = MarkerArray()
         max_speed = max(0.1, max(w.vx_mps for w in self.waypoints.wpnts))
         for waypoint in self.waypoints.wpnts:

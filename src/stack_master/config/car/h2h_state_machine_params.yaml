@@ -56,8 +56,18 @@ state_machine:
     # h2h_perception.yaml, and the three numbers must agree or the state
     # machine asks for avoidances the planner refuses to draw. Keep
     # head-to-head on the 0.24 pairing it was tuned on.
-    global_tracking:
-      lateral_width_m: 0.10
+    # global_tracking.lateral_width_m is deliberately NOT overridden here.
+    #
+    # It was 0.10 against the shared 0.16, and it cannot move on its own:
+    # spline_node's raceline_clearance_m is tuned to equal gb_ego_width_m/2
+    # plus this number, which is how the planner and the state machine agree
+    # about whether the raceline is blocked. 0.14 + 0.10 = 0.24 paired with
+    # the old h2h clearance; now that h2h uses the shared 0.30, this has to be
+    # the shared 0.16 too. 0.14 + 0.16 = 0.30.
+    #
+    # Measured with the pair mismatched: the raceline was called blocked at
+    # "free +0.089, needs 0.100" while the avoidance the planner offered for
+    # the same obstacle was three centimetres wide.
 
     dynamic_avoidance_planner:
       # [s] How long a cached avoidance path keeps being sliced into
