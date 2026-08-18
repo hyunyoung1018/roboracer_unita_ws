@@ -331,14 +331,21 @@ class HeadToHeadStateMachine(StateMachine):
             self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)
         path_free = self._check_free_frenet(self.cur_static_avoidance_wpnts)
 
-        allowed = bool(slow_enough and closing and have_path and path_free)
+        # _worth_driving, not path_free on its own. Refusing a marginal
+        # avoidance does not hold the car back, it drops the transition
+        # through to the raceline - the line that was declared blocked. The
+        # shared node made that change and this override has to carry it or
+        # head to head keeps the old behaviour on static obstacles.
+        worth = self._worth_driving(self.cur_static_avoidance_wpnts, path_free)
+        allowed = bool(slow_enough and closing and have_path and worth)
         self.static_overtaking_mode = allowed
         if not allowed and len(self.cur_obstacles_in_interest) != 0:
             self.get_logger().info(
                 "static avoidance refused: "
                 f"slow_enough={slow_enough} "
                 f"(vs {self.cur_vs:.2f} < {self.static_overtake_max_speed_mps:.2f}), "
-                f"closing={closing}, have_path={have_path}, path_free={path_free}",
+                f"closing={closing}, have_path={have_path}, "
+                f"path_free={path_free}, worth_driving={worth}",
                 throttle_duration_sec=2.0)
         return allowed
 
@@ -413,7 +420,10 @@ class HeadToHeadStateMachine(StateMachine):
 
         available = bool(self._check_availability(src, cache))
         path_free = bool(self._check_free_frenet(cache))
-        if available and path_free:
+        # Same test as the entry gate, on whichever cache is committed. With
+        # the comparison only on entry the car flicked out of OVERTAKE the
+        # moment the path went marginal and had to earn it back.
+        if available and self._worth_driving(cache, path_free):
             return True
 
         self.get_logger().info(
@@ -439,7 +449,8 @@ class HeadToHeadStateMachine(StateMachine):
         # Second, handing over is an entry into that source, not the
         # continuation of one, so it should demand a fresh path the way
         # _check_overtaking_mode does rather than accept a stale cache.
-        if self._check_latest_wpnts(wpnts, data) and self._check_free_frenet(data):
+        if self._check_latest_wpnts(wpnts, data) and self._worth_driving(
+                data, self._check_free_frenet(data)):
             self.static_overtaking_mode = target_static
             self.get_logger().info(
                 "overtake source handed over to "

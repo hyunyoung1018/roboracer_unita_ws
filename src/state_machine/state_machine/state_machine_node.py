@@ -1367,8 +1367,8 @@ class StateMachine(Node):
                 if rec.get("free_dist") is not None]
         return min(room) if room else None
 
-    def _worth_driving(self, path_free) -> bool:
-        """Should the static avoidance path be driven?
+    def _worth_driving(self, wpnts_data, path_free) -> bool:
+        """Should this avoidance path be driven?
 
         Free is enough on its own. When it is not free, the question is not
         "is this path safe" but "is it better than where refusing it puts the
@@ -1390,18 +1390,21 @@ class StateMachine(Node):
         Used by both the entry and the sustainability check, which have to
         agree: with the comparison only on entry, the car dropped out of
         OVERTAKE the moment the path went marginal and had to re-earn it.
+        Head to head overrides both of those and calls this from each, and it
+        can be holding either the static or the dynamic cache, which is why
+        the path being judged is an argument rather than assumed.
         """
         if path_free:
             return True
         if self._check_free_frenet(self.cur_gb_wpnts):
             return False
-        avoid_room = self._worst_free(self.cur_static_avoidance_wpnts)
+        avoid_room = self._worst_free(wpnts_data)
         line_room = self._worst_free(self.cur_gb_wpnts)
         if (avoid_room is None or line_room is None
                 or avoid_room <= line_room + self.static_overtake_better_by_m):
             return False
         self.get_logger().warn(
-            f"taking the avoidance path even though it is not clear: it leaves "
+            f"taking [{wpnts_data.name}] even though it is not clear: it leaves "
             f"{avoid_room:+.3f} m at its tightest and the raceline leaves "
             f"{line_room:+.3f} m, and the raceline is where trailing would put "
             f"the car",
@@ -1427,7 +1430,8 @@ class StateMachine(Node):
             self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)
         path_free = self._check_free_frenet(self.cur_static_avoidance_wpnts)
 
-        if slow_enough and closing and have_path and self._worth_driving(path_free):
+        if slow_enough and closing and have_path and self._worth_driving(
+                self.cur_static_avoidance_wpnts, path_free):
             self.static_overtaking_mode = True
             return True
 
@@ -1449,6 +1453,7 @@ class StateMachine(Node):
             if (
                 self._check_availability(self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)
                 and self._worth_driving(
+                    self.cur_static_avoidance_wpnts,
                     self._check_free_frenet(self.cur_static_avoidance_wpnts))
             ):
                 return True
