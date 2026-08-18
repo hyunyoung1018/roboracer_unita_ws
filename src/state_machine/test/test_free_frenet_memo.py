@@ -1,6 +1,6 @@
 """The per-tick memo must never serve a stale verdict.
 
-Covers HeadToHeadStateMachine._memo_free_frenet. One loop asks the same cache
+Covers H2HStateMachine._memo_free_frenet. One loop asks the same cache
 the same question up to three times, and the answer cannot change in between -
 but only while the tick and the cache generation are the same, which is what
 the key checks. Lives in the wrapper because state_machine_node.py is what
@@ -9,8 +9,8 @@ time_trials runs.
 
 from types import SimpleNamespace
 
-import state_machine.head_to_head_state_machine as module
-from state_machine.head_to_head_state_machine import HeadToHeadStateMachine
+import state_machine.h2h_state_machine as module
+from state_machine.h2h_state_machine import H2HStateMachine
 
 
 def harness(answers):
@@ -25,7 +25,7 @@ def harness(answers):
         calls.append(wpnts_data)
         return answers[len(calls) - 1]
 
-    state = HeadToHeadStateMachine.__new__(HeadToHeadStateMachine)
+    state = H2HStateMachine.__new__(H2HStateMachine)
     state._loop_seq = 1
     state._free_memo = {}
     state._shared_free = shared
@@ -40,7 +40,7 @@ def ask(state, cache):
     module.StateMachine._check_free_frenet = (
         lambda self, wpnts_data: self._shared_free(wpnts_data))
     try:
-        return HeadToHeadStateMachine._memo_free_frenet(state, cache)
+        return H2HStateMachine._memo_free_frenet(state, cache)
     finally:
         module.StateMachine._check_free_frenet = original
 

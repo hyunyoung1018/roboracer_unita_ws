@@ -64,6 +64,17 @@ spline_node:
     #
     # time_trials runs 0.24 against the same 0.19 floor - five centimetres of
     # slack. Same here, and raceline_clearance_m matches it, as it must.
+    # Tighter than time trials, which runs 0.30 on both of these, and
+    # deliberately so: head to head has no penalty for brushing past a static
+    # obstacle or a wall, and the metre it saves is a metre of track position.
+    # A qualifying lap is scored on a clean run, this is scored on being in
+    # front. Do not "fix" the difference by matching the two files.
+    #
+    # raceline_clearance_m has a second reason it must be 0.24 here: it is
+    # tuned to equal gb_ego_width_m/2 + global_tracking's lateral_width_m, and
+    # h2h_state_machine_params.yaml takes that from 0.16 down to 0.10.
+    # 0.14 + 0.10 = 0.24. Move one and the planner and the state machine stop
+    # agreeing about whether the raceline is blocked.
     evasion_distance: 0.24
     raceline_clearance_m: 0.24
 

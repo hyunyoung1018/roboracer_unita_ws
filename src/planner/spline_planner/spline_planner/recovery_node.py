@@ -90,7 +90,7 @@ class RecoveryNode(Node):
         # its end (`gap > max_gap`), so a path shorter than the state machine's
         # interest_horizon_m reads as blocked exactly when there is something
         # ahead - which is when RECOVERY is wanted. Keep this at or above
-        # interest_horizon_m (9.0 in head_to_head_state_machine_params.yaml).
+        # interest_horizon_m (9.0 in h2h_state_machine_params.yaml).
         'path_length_m': 10.0,
         'resolution_m': 0.10,
         # [m] Below this lateral offset the car is already on the line and the

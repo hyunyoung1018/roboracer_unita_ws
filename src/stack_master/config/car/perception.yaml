@@ -241,8 +241,8 @@ spline_node:
     # on an edge the detector moves by +/-10 cm between frames. 0.30 makes
     # the pass-or-avoid call at 16 cm of true side clearance instead of 10.
     # global_tracking.yaml moves to 0.16 with this; head-to-head stays at its
-    # own 0.24 pairing via dynamic_perception.yaml and
-    # dynamic_state_machine_params.yaml.
+    # own 0.24 pairing via h2h_perception.yaml and
+    # h2h_state_machine_params.yaml.
     raceline_clearance_m: 0.30
 
     lookahead: 10.0

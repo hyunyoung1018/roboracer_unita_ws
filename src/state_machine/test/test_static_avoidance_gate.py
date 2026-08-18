@@ -15,7 +15,7 @@ state_machine_node.py is what time_trials runs, so both live in the wrapper.
 
 from types import SimpleNamespace
 
-from state_machine.head_to_head_state_machine import HeadToHeadStateMachine
+from state_machine.h2h_state_machine import H2HStateMachine
 
 
 def obstacle(s_center, is_static, vs=0.0):
@@ -23,7 +23,7 @@ def obstacle(s_center, is_static, vs=0.0):
 
 
 def closing(obstacles, cur_vs=1.0, cur_s=0.0, track_length=20.0, threshold=7.0):
-    return HeadToHeadStateMachine._closing_on_nearest_static(
+    return H2HStateMachine._closing_on_nearest_static(
         SimpleNamespace(
             cur_obstacles_in_interest=obstacles,
             cur_s=cur_s,
@@ -56,7 +56,7 @@ def record(gap, static, blocked, branch="static/geom"):
 
 def excused(records, margin=1.5):
     cache = SimpleNamespace(free_dbg={"is_init": True, "obs": records})
-    return HeadToHeadStateMachine._blocked_only_by_distant_dynamics(
+    return H2HStateMachine._blocked_only_by_distant_dynamics(
         SimpleNamespace(static_path_dynamic_margin_m=margin), cache)
 
 
@@ -110,7 +110,7 @@ def test_nothing_blocked_is_not_this_function_s_business():
 
 def test_uninitialised_cache_is_never_excused():
     cache = SimpleNamespace(free_dbg={"is_init": False, "obs": []})
-    assert not HeadToHeadStateMachine._blocked_only_by_distant_dynamics(
+    assert not H2HStateMachine._blocked_only_by_distant_dynamics(
         SimpleNamespace(static_path_dynamic_margin_m=1.5), cache)
 
 

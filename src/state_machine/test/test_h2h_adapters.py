@@ -6,8 +6,8 @@ from state_machine.driving_mode_monitor import (
     diagnostic_detail_text,
     obstacle_mode_for_class,
 )
-from state_machine.head_to_head_state_machine import (
-    HeadToHeadStateMachine,
+from state_machine.h2h_state_machine import (
+    H2HStateMachine,
     nearest_ahead,
 )
 
@@ -112,16 +112,16 @@ def test_held_target_is_propagated_but_invisible_frames_do_not_extend_ttl():
         vs=2.0,
         is_visible=True,
     )
-    HeadToHeadStateMachine._remember_trailing_target(machine, target)
+    H2HStateMachine._remember_trailing_target(machine, target)
 
     clock.now = 0.5
-    held = HeadToHeadStateMachine._held_trailing_target(machine)
+    held = H2HStateMachine._held_trailing_target(machine)
     assert held.s_center == 6.0
     assert held.is_visible is False
 
-    HeadToHeadStateMachine._remember_trailing_target(machine, held)
+    H2HStateMachine._remember_trailing_target(machine, held)
     clock.now = 0.8
-    assert HeadToHeadStateMachine._held_trailing_target(machine) is None
+    assert H2HStateMachine._held_trailing_target(machine) is None
 
 
 def free_dbg(*records):
@@ -141,7 +141,7 @@ def test_beyond_path_only_block_is_ignored():
     # takes dyn/nopred, and one past the end of a non-closed avoidance path
     # must not refuse that path.
     wpnts = SimpleNamespace(free_dbg=free_dbg(blocked("dyn/nopred/beyond_path")))
-    assert HeadToHeadStateMachine._blocked_only_beyond_path(None, wpnts) is True
+    assert H2HStateMachine._blocked_only_beyond_path(None, wpnts) is True
 
 
 def test_real_block_alongside_beyond_path_still_refuses():
@@ -149,34 +149,34 @@ def test_real_block_alongside_beyond_path_still_refuses():
         blocked("dyn/nopred/beyond_path", 1),
         blocked("static/geom", 2),
     ))
-    assert HeadToHeadStateMachine._blocked_only_beyond_path(None, wpnts) is False
+    assert H2HStateMachine._blocked_only_beyond_path(None, wpnts) is False
 
 
 def test_predicted_opponent_block_still_refuses():
     # dyn/pred is the branch a running predictor uses; it must be untouched so
     # relaunching with prediction:=true behaves exactly as before.
     wpnts = SimpleNamespace(free_dbg=free_dbg(blocked("dyn/pred")))
-    assert HeadToHeadStateMachine._blocked_only_beyond_path(None, wpnts) is False
+    assert H2HStateMachine._blocked_only_beyond_path(None, wpnts) is False
 
 
 def test_nothing_blocked_is_not_a_correction():
     wpnts = SimpleNamespace(free_dbg=free_dbg(cleared("static/geom")))
-    assert HeadToHeadStateMachine._blocked_only_beyond_path(None, wpnts) is False
+    assert H2HStateMachine._blocked_only_beyond_path(None, wpnts) is False
 
 
 def test_uninitialised_or_missing_debug_is_not_a_correction():
-    assert HeadToHeadStateMachine._blocked_only_beyond_path(
+    assert H2HStateMachine._blocked_only_beyond_path(
         None, SimpleNamespace(free_dbg=None)) is False
-    assert HeadToHeadStateMachine._blocked_only_beyond_path(
+    assert H2HStateMachine._blocked_only_beyond_path(
         None, SimpleNamespace()) is False
-    assert HeadToHeadStateMachine._blocked_only_beyond_path(
+    assert H2HStateMachine._blocked_only_beyond_path(
         None, SimpleNamespace(free_dbg={"is_init": False, "obs": [
             blocked("dyn/nopred/beyond_path")]})) is False
 
 
 def test_dynamic_overtake_refused_when_planner_not_launched():
     machine = SimpleNamespace(dynamic_avoidance_enabled=False)
-    assert HeadToHeadStateMachine._check_overtaking_mode(machine) is False
+    assert H2HStateMachine._check_overtaking_mode(machine) is False
 
 
 # --- planner-validated span (R5) ---------------------------------------------
@@ -190,7 +190,7 @@ def span_machine(merger, avoidance, wpnts_data, cur_s=5.0, max_s=21.9):
 def test_validated_span_bounds_only_the_dynamic_cache():
     avoidance = SimpleNamespace(name='dynamic')
     machine = span_machine([11.0, 15.0], avoidance, avoidance)
-    span = HeadToHeadStateMachine._planner_validated_span(machine, avoidance)
+    span = H2HStateMachine._planner_validated_span(machine, avoidance)
     assert span == 6.0
 
 
@@ -200,20 +200,20 @@ def test_validated_span_ignores_the_static_cache():
     avoidance = SimpleNamespace(name='dynamic')
     static = SimpleNamespace(name='static')
     machine = span_machine([11.0, 15.0], avoidance, static)
-    assert HeadToHeadStateMachine._planner_validated_span(machine, static) is None
+    assert H2HStateMachine._planner_validated_span(machine, static) is None
 
 
 def test_validated_span_wraps_at_the_seam():
     avoidance = SimpleNamespace(name='dynamic')
     machine = span_machine([2.0, 6.0], avoidance, avoidance, cur_s=20.0)
-    span = HeadToHeadStateMachine._planner_validated_span(machine, avoidance)
+    span = H2HStateMachine._planner_validated_span(machine, avoidance)
     assert abs(span - 3.9) < 1e-9
 
 
 def test_validated_span_absent_before_the_planner_has_published():
     avoidance = SimpleNamespace(name='dynamic')
     machine = span_machine(None, avoidance, avoidance)
-    assert HeadToHeadStateMachine._planner_validated_span(machine, avoidance) is None
+    assert H2HStateMachine._planner_validated_span(machine, avoidance) is None
 
 
 # --- overtake sustainability: per-term verdict and source handover ------------
@@ -221,7 +221,7 @@ def test_validated_span_absent_before_the_planner_has_published():
 def make_handover(committed_static=True, committed_available=True,
                   committed_free=True, other_fresh=True, other_free=True,
                   dynamic_enabled=True):
-    machine = HeadToHeadStateMachine.__new__(HeadToHeadStateMachine)
+    machine = H2HStateMachine.__new__(H2HStateMachine)
     calls = []
     machine.calls = calls
     machine.logged = []

@@ -29,7 +29,7 @@ setup(
     entry_points={
         'console_scripts': [
             'state_machine = state_machine.state_machine_node:main',
-            'head_to_head_state_machine = state_machine.head_to_head_state_machine:main',
+            'h2h_state_machine = state_machine.h2h_state_machine:main',
             'driving_mode_monitor = state_machine.driving_mode_monitor:main',
         ],
     },

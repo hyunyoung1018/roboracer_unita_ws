@@ -85,7 +85,7 @@
        adapter stabilizes classification after tracking. -->
   <!-- THE DETECTOR IS TIME-TRIALS'. perception.yaml only, exactly as
        time_trials.launch.xml loads it.
-       dynamic_perception.yaml used to be loaded here as well, to carry a 12 cm
+       h2h_perception.yaml used to be loaded here as well, to carry a 12 cm
        pillar out to 9 m: min_size_n 8 -> 3, min_size_m 0.20 -> 0.10,
        filter_kernel_size 6 -> 3. It did that, and it also did what its own
        comment warned about - three stray returns became an obstacle, and less
@@ -95,7 +95,7 @@
        time_trials' detector were cleared reliably.
        So: detect everything the way time trials does, and put the knowledge
        that the opponent is a car AFTER classification instead of before it -
-       see dynamic_extent_min_m in dynamic_perception.yaml, which is applied by
+       see dynamic_extent_min_m in h2h_perception.yaml, which is applied by
        h2h_tracking_node only once a track is confirmed moving.
        THE COST, and it is real: the pillar is under min_size_n 8 beyond about
        3.4 m, so the opponent is not detected at all until it is that close.
@@ -111,10 +111,10 @@
        obstacle fields the shared tracker drops (x_m/y_m/theta and the
        variances) and sizes a confirmed-moving target like a car rather than
        like a static box. time_trials keeps running the unmodified
-       tracking_node, and dynamic_perception.yaml only adds keys. -->
+       tracking_node, and h2h_perception.yaml only adds keys. -->
   <node pkg="perception" exec="h2h_tracking_node" name="tracking" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
-    <param from="$(var config_dir)/dynamic_perception.yaml"/>
+    <param from="$(var config_dir)/h2h_perception.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
   <node pkg="obstacle_router" exec="stable_obstacle_router_node"
@@ -137,7 +137,7 @@
        publisher are redirected for this mode. -->
   <node pkg="spline" exec="h2h_spline_node" name="spline_node" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
-    <param from="$(var config_dir)/dynamic_perception.yaml"/>
+    <param from="$(var config_dir)/h2h_perception.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
     <remap from="/tracking/obstacles" to="/tracking/static_obstacles"/>
     <remap from="/planner/avoidance/otwpnts" to="/planner/avoidance/static_otwpnts"/>
@@ -202,14 +202,14 @@
 
   <!-- The wrapper preserves the existing state logic and only corrects the
        head-to-head startup semantics of use_force_trailing. -->
-  <node pkg="state_machine" exec="head_to_head_state_machine"
+  <node pkg="state_machine" exec="h2h_state_machine"
         name="state_machine" output="screen">
     <param from="$(var config_dir)/state_machine_params.yaml"/>
     <!-- Overlay, loaded second so its keys win. Shrinks the horizons to this
          workspace's ~21 m tracks and gives the dynamic avoidance path the
          speed ceiling and cache lifetime the static one already has, without
          editing either shared file. -->
-    <param from="$(var config_dir)/dynamic_state_machine_params.yaml"/>
+    <param from="$(var config_dir)/h2h_state_machine_params.yaml"/>
     <param name="config_dir" value="$(var config_dir)"/>
     <param name="map_dir" value="$(var map_dir)"/>
     <param name="timetrials_only" value="false"/>

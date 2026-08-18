@@ -31,7 +31,7 @@ def nearest_ahead(obstacles, current_s, track_length, horizon):
     return min(candidates, key=lambda item: item[0])
 
 
-class HeadToHeadStateMachine(StateMachine):
+class H2HStateMachine(StateMachine):
     """Head-to-head-only safety fixes around the preserved shared state machine.
 
     The shared state machine negates this parameter during construction, while
@@ -797,7 +797,7 @@ class HeadToHeadStateMachine(StateMachine):
 
 def main(args=None):
     rclpy.init(args=args)
-    state_machine = HeadToHeadStateMachine()
+    state_machine = H2HStateMachine()
     try:
         rclpy.spin(state_machine)
     except KeyboardInterrupt:

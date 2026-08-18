@@ -1,6 +1,6 @@
 """Both avoidance branches get asked, and the nearer obstacle picks the winner.
 
-Covers HeadToHeadStateMachine._check_overtaking_mode. The shared transitions
+Covers H2HStateMachine._check_overtaking_mode. The shared transitions
 ask `_check_overtaking_mode() or _check_static_overtaking_mode()`, and `or`
 short-circuits, so an armed dynamic branch meant the static one was never
 evaluated. Resolved in the wrapper because state_transitions.py and
@@ -9,8 +9,8 @@ state_machine_node.py are what time_trials runs.
 
 from types import SimpleNamespace
 
-import state_machine.head_to_head_state_machine as module
-from state_machine.head_to_head_state_machine import HeadToHeadStateMachine
+import state_machine.h2h_state_machine as module
+from state_machine.h2h_state_machine import H2HStateMachine
 
 
 class Logger:
@@ -30,7 +30,7 @@ def machine(dynamic_ok, static_ok, nearest_static=False,
     instance of the class. Nothing in rclpy's Node is touched: the only methods
     reached are the ones stubbed here.
     """
-    state = HeadToHeadStateMachine.__new__(HeadToHeadStateMachine)
+    state = H2HStateMachine.__new__(H2HStateMachine)
     state.calls = []
     state.static_overtaking_mode = None
     state.dynamic_avoidance_enabled = dynamic_enabled
@@ -60,7 +60,7 @@ def resolve(state):
     module.StateMachine._check_overtaking_mode = (
         lambda self: self._shared_check_overtaking_mode())
     try:
-        return HeadToHeadStateMachine._check_overtaking_mode(state)
+        return H2HStateMachine._check_overtaking_mode(state)
     finally:
         module.StateMachine._check_overtaking_mode = original
 
@@ -113,7 +113,7 @@ def obstacle(s_center, is_static):
 
 
 def nearest_is_static(obstacles, cur_s=0.0, track_length=20.0):
-    return HeadToHeadStateMachine._nearest_obstacle_is_static(SimpleNamespace(
+    return H2HStateMachine._nearest_obstacle_is_static(SimpleNamespace(
         cur_obstacles_in_interest=obstacles,
         cur_s=cur_s,
         track_length=track_length))

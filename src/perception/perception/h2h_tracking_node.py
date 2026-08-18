@@ -20,7 +20,7 @@ Two fixes, both about the opponent car:
 2. ``_hold_extents`` keeps the largest extent a track has ever shown. Correct
    for a box - see the docstring it inherits - and wrong for a car, whose
    Frenet extents grow with its yaw relative to the track tangent rather than
-   with how much of it the lidar has seen. See dynamic_perception.yaml.
+   with how much of it the lidar has seen. See h2h_perception.yaml.
 """
 
 import rclpy
