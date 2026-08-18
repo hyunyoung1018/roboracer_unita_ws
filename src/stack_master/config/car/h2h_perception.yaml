@@ -54,6 +54,60 @@ tracking:
 # bleed off within a tick rather than the six seconds a static box gets.
     dynamic_extent_decay_mps: 0.5
 
+    # ---- opponent selection -------------------------------------------
+    # Everything the deleted stable_obstacle_router carried EXCEPT its second
+    # classifier. Selecting one opponent and holding it was never the part that
+    # failed on the car; re-deriving static/dynamic from the standard deviation
+    # of the Frenet position was, and that has no parameters here any more
+    # (min_std, max_std, *_confirm_count and min_unknown_samples are gone).
+    #
+    # Classification is the tracker's own, from perception.yaml:
+    # static_speed_threshold sustained over static_min_samples frames, which is
+    # the test time_trials drives on.
+
+    single_dynamic_opponent: true
+    logical_opponent_id: 1000000
+
+    # The OPPONENT's measured width, not ours. Used only to ask whether its
+    # footprint fits between the track bounds before it can be selected.
+    opponent_width_m: 0.24
+    opponent_boundary_margin_m: 0.03
+
+    # [m] Acquisition window. The 0.2 m forward minimum is what keeps somebody
+    # standing behind the car from becoming the opponent.
+    opponent_forward_min_m: 0.2
+    opponent_forward_max_m: 8.0
+
+    # [m] Rear allowance for the target ALREADY locked onto. Signed, so
+    # negative is behind the car. Acquisition is unchanged; this only decides
+    # when a locked opponent is released. Without it the opponent's forward gap
+    # falls through opponent_forward_min_m mid-overtake, the dynamic stream
+    # empties, opp_prediction raises force_trailing and the lane-change planner
+    # withdraws its path - while the car is alongside and most needs it.
+    # -1.5 m covers our length plus the opponent's.
+    opponent_active_rear_m: -1.5
+
+    # Re-identification across the tracker losing and recreating an ID. The
+    # ambiguity margin is what refuses a handoff when two candidates are
+    # equally plausible; guessing there produced an ID ping-pong on the car.
+    dynamic_reid_timeout_sec: 1.0
+    dynamic_reid_max_distance_m: 1.2
+    dynamic_reid_max_lateral_m: 0.25
+    dynamic_reid_ambiguity_margin_m: 0.20
+
+    # [s] How long a credible opponent speed survives frames that are not.
+    dynamic_speed_hold_sec: 0.75
+    # [m/s] Sanity bounds on that speed. The MAXIMUM is new: with only a lower
+    # bound, one bad frame reporting 8.55 m/s for a stationary box was accepted
+    # and held for the hold time - and the trailing controller commands
+    # opponent speed minus a correction, so the car accelerated towards it.
+    dynamic_speed_valid_min_mps: 0.15
+    dynamic_speed_valid_max_mps: 6.0
+
+    # /tracking/classification_debug, built only while something subscribes.
+    # driving_mode_monitor is its reader.
+    classification_debug: true
+
 # spline_node: nothing here on purpose.
 #
 # This used to pin evasion_distance and raceline_clearance_m at 0.24

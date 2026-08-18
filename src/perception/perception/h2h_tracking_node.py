@@ -23,7 +23,9 @@ Three things, all about the opponent car:
    with how much of it the lidar has seen. See h2h_perception.yaml.
 
 3. It splits its own output into /tracking/static_obstacles and
-   /tracking/dynamic_obstacles, on the tracker's own ``is_static``.
+   /tracking/dynamic_obstacles, on the tracker's own ``is_static``, and it
+   selects the ONE opponent that goes on the dynamic stream - see
+   :mod:`perception.h2h_opponent_selector`.
 
    That split used to be a separate node - stable_obstacle_router - which
    re-classified every track from the STANDARD DEVIATION of its Frenet
@@ -40,12 +42,36 @@ Three things, all about the opponent car:
    verdict, from |v| < static_speed_threshold over static_min_samples frames,
    which is exactly the test time_trials drives on. One classifier, one
    definition of static, in the node that already estimates the velocity.
+
+   SELECTION is a separate question and it was never the part at fault, so all
+   of it survived the router: the corridor and forward-window gates, the lock
+   on one target, re-identification across tracker ID churn, the logical
+   opponent ID and the speed hold. Only the second classifier was dropped.
+
+The three-state view the tracker supports is STATIC / DYNAMIC / UNKNOWN, where
+UNKNOWN is a track too new to have collected static_min_samples frames. That
+distinction is load-bearing twice over: an UNKNOWN track is the only thing
+re-identification will accept as a replacement ID for the opponent, and
+driving_mode_monitor refuses to call anything DYNAMIC on is_static=False alone
+because UNKNOWN shares that wire representation. It is published on
+/tracking/classification_debug.
 """
+
+import json
+from copy import deepcopy
 
 import rclpy
 from f110_msgs.msg import ObstacleArray
+from nav_msgs.msg import Odometry
 from rclpy.executors import ExternalShutdownException
+from std_msgs.msg import String
 
+from perception.h2h_opponent_selector import (
+    DYNAMIC,
+    STATIC,
+    UNKNOWN,
+    OpponentSelector,
+)
 from perception.tracking_node import TrackingNode
 
 
@@ -58,6 +84,37 @@ class HeadToHeadTrackingNode(TrackingNode):
         'x_m', 'y_m', 'theta', 's_var', 'd_var', 'vs_var', 'vd_var',
     )
 
+    # Selection knobs. Everything the router carried EXCEPT the second
+    # classifier's thresholds (min_std, max_std, *_confirm_count,
+    # min_unknown_samples), which no longer have anything to configure.
+    SELECTION_DEFAULTS = {
+        'single_dynamic_opponent': True,
+        'logical_opponent_id': 1000000,
+        'opponent_width_m': 0.24,
+        'opponent_boundary_margin_m': 0.03,
+        'opponent_forward_min_m': 0.2,
+        'opponent_forward_max_m': 8.0,
+        # [m] Rear allowance for the target ALREADY locked onto. Signed, so
+        # negative is behind the car, and it covers the car's own length plus
+        # the opponent's. Acquisition still needs opponent_forward_min_m; see
+        # OpponentSelector._forward_ok for what happens without it.
+        'opponent_active_rear_m': -1.5,
+        'dynamic_reid_timeout_sec': 1.0,
+        'dynamic_reid_max_distance_m': 1.2,
+        'dynamic_reid_max_lateral_m': 0.25,
+        'dynamic_reid_ambiguity_margin_m': 0.20,
+        'dynamic_speed_hold_sec': 0.75,
+        'dynamic_speed_valid_min_mps': 0.15,
+        # [m/s] Upper sanity bound on a believable opponent speed, and it is
+        # new. The router had only the lower one, so a single bad frame
+        # reporting 8.55 m/s for a stationary box was accepted as valid and
+        # held for dynamic_speed_hold_sec - and the trailing controller
+        # commands opponent speed minus a correction, so the car ACCELERATED
+        # towards it. Nothing on this track goes faster than the raceline.
+        'dynamic_speed_valid_max_mps': 6.0,
+        'classification_debug': True,
+    }
+
     def __init__(self):
         super().__init__()
         for name, default in (
@@ -67,6 +124,9 @@ class HeadToHeadTrackingNode(TrackingNode):
         ):
             if not self.has_parameter(name):
                 self.declare_parameter(name, default)
+        for name, default in self.SELECTION_DEFAULTS.items():
+            if not self.has_parameter(name):
+                self.declare_parameter(name, default)
         self.get_logger().info(
             'head-to-head tracker: full obstacle fields, '
             f'moving-target extents capped at '
@@ -74,11 +134,25 @@ class HeadToHeadTrackingNode(TrackingNode):
 
         # The split. /tracking/obstacles keeps carrying everything, exactly as
         # the parent publishes it, so nothing that reads the shared topic sees a
-        # difference; these two are additional views of that same list.
+        # difference; these are additional views of that same list.
         self.static_pub = self.create_publisher(
             ObstacleArray, '/tracking/static_obstacles', 5)
         self.dynamic_pub = self.create_publisher(
             ObstacleArray, '/tracking/dynamic_obstacles', 5)
+        self.debug_pub = self.create_publisher(
+            String, '/tracking/classification_debug', 10)
+
+        self.selector = OpponentSelector(
+            lambda name: self.get_parameter(name).value,
+            self.get_logger().warn)
+        self.waypoints = []
+        self.ego_s = None
+        # /global_waypoints_scaled is already subscribed by the parent; the
+        # corridor gate needs the waypoints themselves, not just the length, so
+        # _path_cb is extended rather than a second subscription opened on the
+        # same topic.
+        self.create_subscription(
+            Odometry, '/car_state/odom_frenet', self._odom_frenet_cb, 10)
 
     def _copy_obstacle(self, source):
         """Carry the Cartesian pose and the variances through the tracker.
@@ -101,12 +175,12 @@ class HeadToHeadTrackingNode(TrackingNode):
         history length is required as well - the same evidence
         ``_update_track`` demands before it sets the flag. A box therefore never
         reaches the moving-target ceiling, not even for its first few frames.
+
+        That is precisely the DYNAMIC of the three-state view, so it is defined
+        once, in _track_class, and the extent ceiling and the opponent gates
+        cannot drift apart.
         """
-        minimum = int(self.get_parameter('static_min_samples').value)
-        return (
-            len(track.s_history) >= minimum
-            and not bool(track.obstacle.is_static)
-        )
+        return self._track_class(track) == DYNAMIC
 
     def _obstacles_cb(self, msg):
         """Track as the parent does, then publish the two split views.
@@ -122,34 +196,117 @@ class HeadToHeadTrackingNode(TrackingNode):
             return
         self._publish_split(msg.header)
 
-    def _publish_split(self, header):
-        """Route each track by the tracker's own is_static.
+    def _path_cb(self, msg):
+        """Keep the waypoints too, for the opponent corridor gate."""
+        super()._path_cb(msg)
+        if msg.wpnts:
+            self.waypoints = list(msg.wpnts)
 
-        Both arrays are rebuilt every frame rather than latched. A track that
-        stops being static leaves the static array on the same tick it enters
-        the dynamic one, so no consumer can ever see it in both.
+    def _odom_frenet_cb(self, msg):
+        self.ego_s = float(msg.pose.pose.position.x)
+
+    def _track_class(self, track):
+        """STATIC / DYNAMIC / UNKNOWN for one track.
+
+        UNKNOWN is not a hedge, it is the honest answer for a track that has
+        not yet collected static_min_samples frames: is_static defaults False
+        on a fresh message, so "not static" alone does not mean moving. Both
+        re-identification and driving_mode_monitor depend on that distinction.
+        """
+        if bool(track.obstacle.is_static):
+            return STATIC
+        minimum = int(self.get_parameter('static_min_samples').value)
+        return DYNAMIC if len(track.s_history) >= minimum else UNKNOWN
+
+    def _publish_split(self, header):
+        """Route static tracks by class, and the dynamic stream by selection.
+
+        The static side is every STATIC track, rebuilt every frame rather than
+        latched, so a track that starts moving leaves it on the same tick it
+        enters the other one.
+
+        The dynamic side is NOT every moving track. It is the one opponent the
+        selector has locked onto, republished under logical_opponent_id so that
+        opp_prediction and the lane-change planner see a stable ID across the
+        tracker losing and recreating its own. Everything downstream of this
+        node is written for exactly one opponent.
 
         ``publish_static`` is honoured for the same reason the parent honours
         it: with it false the static half is deliberately invisible, and a
-        split that ignored it would put back exactly what was switched off.
+        split that ignored it would put back what was switched off.
         """
         stamp = header.stamp.sec + header.stamp.nanosec / 1e9
         if stamp <= 0.0:
             stamp = self.get_clock().now().nanoseconds / 1e9
+        now = self.get_clock().now().nanoseconds * 1e-9
         publish_static = bool(self.get_parameter('publish_static').value)
 
-        static_msg = ObstacleArray(header=header)
-        dynamic_msg = ObstacleArray(header=header)
+        obstacles, classes = [], {}
         for track in self.tracks:
-            if bool(track.obstacle.is_static):
-                if publish_static:
-                    static_msg.obstacles.append(
-                        self._obstacle_for_output(track, stamp))
-            else:
-                dynamic_msg.obstacles.append(
-                    self._obstacle_for_output(track, stamp))
+            obstacle = self._obstacle_for_output(track, stamp)
+            obstacles.append(obstacle)
+            classes[int(obstacle.id)] = self._track_class(track)
+
+        static_msg = ObstacleArray(header=header)
+        if publish_static:
+            static_msg.obstacles = [
+                obstacle for obstacle in obstacles
+                if classes[int(obstacle.id)] == STATIC
+            ]
+
+        selected = self.selector.select(
+            obstacles, classes, now, self.waypoints, self.track_length,
+            self.ego_s)
+        dynamic_msg = ObstacleArray(header=header)
+        if selected is not None:
+            # A copy: stabilize_speed rewrites vs, and the same object is
+            # already in the array the parent published on /tracking/obstacles.
+            opponent = deepcopy(selected)
+            self.selector.stabilize_speed(opponent, now)
+            opponent.id = int(self.get_parameter('logical_opponent_id').value)
+            dynamic_msg.obstacles.append(opponent)
+
         self.static_pub.publish(static_msg)
         self.dynamic_pub.publish(dynamic_msg)
+        self._publish_classification_debug(
+            header, obstacles, classes, selected)
+
+    def _publish_classification_debug(self, header, obstacles, classes,
+                                      selected):
+        """The per-track view of every gate, for driving_mode_monitor.
+
+        Skipped when nothing subscribes: it is a json.dumps of every track,
+        every frame, for a topic that is empty unless somebody is watching.
+        """
+        if not bool(self.get_parameter('classification_debug').value):
+            return
+        if self.debug_pub.get_subscription_count() == 0:
+            return
+        selected_id = None if selected is None else int(selected.id)
+        logical_id = int(self.get_parameter('logical_opponent_id').value)
+        records = []
+        for obstacle in obstacles:
+            tracker_id = int(obstacle.id)
+            corridor_ok, forward_ok = self.selector.gates.get(
+                tracker_id, (False, False))
+            records.append({
+                'id': logical_id if tracker_id == selected_id else tracker_id,
+                'tracker_id': tracker_id,
+                'stable_class': classes[tracker_id],
+                'is_static': bool(obstacle.is_static),
+                'is_visible': bool(obstacle.is_visible),
+                'vs': round(float(obstacle.vs), 4),
+                's_center': round(float(obstacle.s_center), 3),
+                'd_center': round(float(obstacle.d_center), 3),
+                'inside_opponent_corridor': corridor_ok,
+                'inside_forward_window': forward_ok,
+                'selected_opponent': tracker_id == selected_id,
+            })
+        self.debug_pub.publish(String(data=json.dumps({
+            'stamp': header.stamp.sec + header.stamp.nanosec / 1e9,
+            'active_opponent_tracker_id': self.selector.active_id,
+            'obstacles': records,
+        })))
 
     def _hold_extents(self, track, measurement, dt):
         """Hold extents with a car's ceiling and leak rate once moving.

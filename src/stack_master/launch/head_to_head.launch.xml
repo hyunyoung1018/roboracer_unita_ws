@@ -132,7 +132,14 @@
 
        There is one classifier now, and it is the one time_trials drives on:
        |v| < static_speed_threshold sustained over static_min_samples frames,
-       in the node that already estimates the velocity. -->
+       in the node that already estimates the velocity.
+
+       SELECTION was never the part at fault, so all of it moved here with the
+       split rather than being dropped: the corridor and forward-window gates,
+       the lock on one opponent, re-identification across tracker ID churn, the
+       logical opponent ID and the speed hold. See h2h_opponent_selector.py and
+       the opponent block in h2h_perception.yaml. /tracking/dynamic_obstacles
+       therefore carries the ONE selected opponent, not every moving track. -->
   <node pkg="perception" exec="h2h_tracking_node" name="tracking" output="screen">
     <param from="$(var config_dir)/perception.yaml"/>
     <param from="$(var config_dir)/h2h_perception.yaml"/>

@@ -75,4 +75,11 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+# The pure-python opponent selection gates. ament_cmake does not collect
+# test/ on its own, unlike the ament_python packages in this workspace.
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(h2h_opponent_selector test/test_h2h_opponent_selector.py)
+endif()
+
 ament_package()
