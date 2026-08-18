@@ -48,6 +48,11 @@
                     The joystick DRIVER stays on either way - the mux reads /joy."/>
   <arg name="hardware" default="true"
        description="Bring up the drivers. false if they are already running."/>
+  <!-- Relay to hardware.launch.xml. Default false, and it must have one:
+       time_trials includes this file too, so a required argument here would
+       break that launch. -->
+  <arg name="braking" default="false"
+       description="VESC current braking in the ackermann bridge. See vesc.yaml."/>
   <arg name="frenet" default="true"
        description="Also publish /car_state/frenet/*. Needs global_waypoints.json."/>
   <arg name="use_sim_time" default="false"/>
@@ -68,6 +73,7 @@
            odom -> ego_racecar/base_link between corrections. -->
       <arg name="odom_tf" value="true"/>
       <arg name="teleop" value="$(var teleop)"/>
+      <arg name="braking" value="$(var braking)"/>
     </include>
   </group>
 

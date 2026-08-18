@@ -41,6 +41,15 @@
        description="Re-seed the particle filter at the finish line every N laps."/>
   <arg name="relocalize_every_n_laps" default="3"
        description="How often. Live: ros2 param set /auto_relocalizer relocalize_every_n_laps N"/>
+  <!-- Off until validated in this mode: the trailing PID already owns
+       longitudinal control (no rate limit - trailing_rate_limit_enabled is
+       false in controller.yaml), and current braking on top of it can stop-go
+       oscillate behind an opponent. At the 0.5 m emergency gap the commanded
+       stop also becomes max-current braking instead of a PID coast-down.
+       Live A/B while driving:
+         ros2 param set /vesc/ackermann_to_vesc_node brake_control_enabled true|false -->
+  <arg name="braking" default="false"
+       description="VESC current braking in the ackermann bridge. See vesc.yaml."/>
 
   <arg name="joy_max_speed" default="5.0"/>
   <arg name="use_sim_time" default="false"/>
@@ -57,6 +66,7 @@
       <arg name="foxglove" value="$(var foxglove)"/>
       <arg name="use_sim_time" value="$(var use_sim_time)"/>
       <arg name="teleop" value="false"/>
+      <arg name="braking" value="$(var braking)"/>
     </include>
   </group>
 

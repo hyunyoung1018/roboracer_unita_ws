@@ -124,6 +124,11 @@
        description="Static obstacle avoidance: perception + the spline planner.
                     On by default - obstacles are the normal case now, and the
                     clean-lap run is obstacles:=false"/>
+  <!-- Opt-in, same flag as head_to_head. Obstacles here are static, so hard
+       braking matters less - but this solo mode is where it gets validated
+       first (wheels up, then clean laps) before head-to-head turns it on. -->
+  <arg name="braking" default="false"
+       description="VESC current braking in the ackermann bridge. See vesc.yaml."/>
 
   <!-- ===== race day ===== -->
   <arg name="relocalize" default="true"
@@ -180,6 +185,7 @@
            on the drive topic. This switches off joy_teleop only - the joy
            driver is a separate argument and stays on. -->
       <arg name="teleop" value="false"/>
+      <arg name="braking" value="$(var braking)"/>
     </include>
   </group>
 

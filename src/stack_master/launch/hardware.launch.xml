@@ -52,6 +52,11 @@
        true while localising: the EKF publishes map -> odom and this closes the
        chain to the car. localization.launch.xml passes true. -->
   <arg name="odom_tf" default="false" description="Publish odom -> base_link from wheel odometry"/>
+  <!-- Opt-in: off keeps today's speed-mode-only behaviour exactly. Also live
+       on the running node: ros2 param set /vesc/ackermann_to_vesc_node
+       brake_control_enabled true|false -->
+  <arg name="braking" default="false"
+       description="VESC current braking in the ackermann bridge. See vesc.yaml."/>
 
   <let name="config_dir" value="$(find-pkg-share stack_master)/config/car"/>
 
@@ -104,6 +109,8 @@
     <node pkg="vesc_ackermann" exec="ackermann_to_vesc_node"
           name="ackermann_to_vesc_node" namespace="vesc" output="screen">
       <param from="$(var config_dir)/vesc.yaml"/>
+      <!-- After the file, so the argument wins. -->
+      <param name="brake_control_enabled" value="$(var braking)"/>
     </node>
 
     <node pkg="vesc_ackermann" exec="vesc_to_odom_node"
