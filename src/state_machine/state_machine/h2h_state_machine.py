@@ -11,6 +11,7 @@ from copy import deepcopy
 
 import numpy as np
 import rclpy
+from f110_msgs.msg import ObstacleArray
 
 from .state_machine_node import StateMachine, time_to_float
 
@@ -95,6 +96,20 @@ class H2HStateMachine(StateMachine):
         self._last_gb_blocked_at = None
         self._last_trailing_target = None
         self._last_trailing_target_at = None
+        # [s] How long the opponent list is believed. It arrives in the same
+        # tracker callback as /tracking/obstacles, so in normal running it is
+        # never older than a frame; this only covers the stream stopping.
+        self.opponent_stream_timeout_sec = float(
+            self._get_or_declare("opponent_stream_timeout_sec", 0.5))
+        # The one selected opponent, as h2h_tracking_node chose it. The state
+        # machine reads /tracking/obstacles, which carries raw tracker ids, so
+        # the opponent cannot be named by id there - it is matched by position
+        # instead, and both copies come from the same track in the same frame.
+        self._opponent_obstacles = []
+        self._opponent_stamp = None
+        self.create_subscription(
+            ObstacleArray, "/tracking/dynamic_obstacles",
+            self._dynamic_obstacles_cb, 10)
         # Per-tick memo for the shared _check_free_frenet; see _memo_free_frenet.
         # Keyed by planner name because the cache objects belong to the shared
         # state machine and this wrapper does not add fields to them.
@@ -280,8 +295,49 @@ class H2HStateMachine(StateMachine):
         self.static_overtaking_mode = bool(prefer_static)
         return True
 
-    def _closing_on_nearest_static(self, threshold_m) -> bool:
-        """Is the car closing on the nearest STATIC obstacle ahead?
+    def _dynamic_obstacles_cb(self, msg):
+        self._opponent_obstacles = list(msg.obstacles)
+        self._opponent_stamp = self.now_sec()
+
+    def _opponent_positions(self):
+        """Frenet centres of the selected opponent, or empty."""
+        if not self._opponent_obstacles or self._opponent_stamp is None:
+            return []
+        if self.now_sec() - self._opponent_stamp > self.opponent_stream_timeout_sec:
+            return []
+        return [(float(obs.s_center), float(obs.d_center))
+                for obs in self._opponent_obstacles]
+
+    def _is_opponent(self, obstacle, positions):
+        """Match by position, because the two streams disagree about the id.
+
+        /tracking/dynamic_obstacles republishes the opponent under
+        logical_opponent_id so the predictor sees a stable name across tracker
+        id churn; /tracking/obstacles, which this node reads, carries the raw
+        tracker id. Both copies are made from the same track in the same
+        tracker callback and neither rewrites the centre, so the match is
+        exact - the millimetre tolerance is for the float round-trip, not for
+        any real ambiguity.
+        """
+        return any(
+            abs(float(obstacle.s_center) - s) < 1e-3
+            and abs(float(obstacle.d_center) - d) < 1e-3
+            for s, d in positions)
+
+    def _avoidable_obstacles(self):
+        """What the static planner is actually planning around.
+
+        Exactly the contents of /tracking/static_obstacles: everything except
+        the one selected opponent, which has a planner of its own.
+        """
+        positions = self._opponent_positions()
+        if not positions:
+            return list(self.cur_obstacles_in_interest)
+        return [obs for obs in self.cur_obstacles_in_interest
+                if not self._is_opponent(obs, positions)]
+
+    def _closing_on_nearest_avoidable(self, threshold_m) -> bool:
+        """Is the car closing on the nearest obstacle the static path is for?
 
         The shared gate asks _check_getting_closer, which measures the nearest
         obstacle of any kind. Trailing an opponent, that is the opponent - so
@@ -290,18 +346,41 @@ class H2HStateMachine(StateMachine):
         that the car was very much closing on. The opponent's speed has nothing
         to say about whether to drive around a box.
 
-        A static obstacle has vs 0, so this reduces to "the car is moving
-        forward", which is the honest answer for something that is not going
-        anywhere. The gate that matters for a box is the geometry, and that is
-        path_free's job.
+        It used to exclude the opponent by taking only is_static obstacles, and
+        that made this gate depend on a classification it has no business
+        depending on. Measured on 2026-08-19, with nothing but boxes on the
+        track: 39 of 41 tracks read DYNAMIC for their whole life, because a
+        stationary box measures 0.5 to 2.9 m/s of apparent longitudinal speed
+        from a moving car. The static list came out empty, nearest_ahead
+        returned nothing, and this answered False - 34 of 35 refusals that run,
+        nine of them with have_path, path_free and worth_driving all true. The
+        planner had done its job and the gate threw it away.
+
+        So it excludes the opponent by NAME instead, which is what it always
+        meant. The list is now the same one /tracking/static_obstacles carries,
+        and the same principle the split already runs on: time trials' planner
+        never looks at is_static, so nothing here should either.
+
+        And the target's own vs is deliberately not read. The shared form is
+        `cur_vs - target.vs > -0.5`, which on the same measurement that breaks
+        the classification breaks this too: a box misread as moving carries a
+        misread speed with it, and 1.0 - 2.4 answers "not closing" for a box
+        the car is driving straight at. Excluding the opponent and then
+        believing the speed of what is left would have moved the failure
+        rather than fixed it.
+
+        Treating them as stationary is not a simplification, it is the same
+        assumption the planner behind this gate already makes: spline_node puts
+        a fixed apex at a fixed s and holds it. If something in that list is
+        genuinely moving and is not the opponent, the geometry check does the
+        refusing - path_free is measured against where things actually are.
         """
-        statics = [
-            obs for obs in self.cur_obstacles_in_interest if obs.is_static]
         _, target = nearest_ahead(
-            statics, self.cur_s, self.track_length, threshold_m)
+            self._avoidable_obstacles(), self.cur_s, self.track_length,
+            threshold_m)
         if target is None:
             return False
-        return bool(self.cur_vs - float(target.vs) > -0.5)
+        return bool(self.cur_vs > -0.5)
 
     def _check_static_overtaking_mode(self) -> bool:
         """The shared gate, with the two inputs head to head gets wrong.
@@ -312,9 +391,9 @@ class H2HStateMachine(StateMachine):
         is not touched; the four conditions and the speed limit are mirrored
         exactly, and only these change:
 
-          closing    measured against the nearest STATIC obstacle rather than
-                     the nearest obstacle of any kind - see
-                     _closing_on_nearest_static.
+          closing    measured against the nearest obstacle the static planner
+                     is actually planning around, rather than the nearest
+                     obstacle of any kind - see _closing_on_nearest_avoidable.
           path_free  a distant opponent no longer vetoes it - see
                      _blocked_only_by_distant_dynamics. That correction lives
                      in _check_free_frenet so that OVERTAKE's per-tick
@@ -326,7 +405,7 @@ class H2HStateMachine(StateMachine):
         OVERTAKE read the static cache for what may be a dynamic opponent.
         """
         slow_enough = self.cur_vs < self.static_overtake_max_speed_mps
-        closing = self._closing_on_nearest_static(threshold_m=7.0)
+        closing = self._closing_on_nearest_avoidable(threshold_m=7.0)
         have_path = self._check_latest_wpnts(
             self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)
         path_free = self._check_free_frenet(self.cur_static_avoidance_wpnts)
@@ -676,19 +755,54 @@ class H2HStateMachine(StateMachine):
         blocked = [rec for rec in records if rec.get("blocked")]
         if not blocked:
             return False
-        static_gaps = [
+
+        # By OPPONENT, not by is_static, for the same reason
+        # _closing_on_nearest_avoidable no longer asks that question: with
+        # nothing but boxes on the track, 39 of 41 tracks read DYNAMIC for
+        # their whole life. Keyed on is_static this was harmless but inert -
+        # static_gaps came out empty and it never excused anything - and in the
+        # cases where one box did confirm static it could have excused a path a
+        # second box was blocking. The distinction it always wanted is "the
+        # obstacle this path is for" against "the opponent, which has its own
+        # planner", and only the second of those is knowable.
+        opponent_ids = self._opponent_record_ids(records)
+        reference_gaps = [
             rec["gap"] for rec in records
-            if rec.get("static") and rec.get("gap") is not None]
-        if not static_gaps:
-            # No static obstacle in the list at all - this path is not for
-            # anything, so there is nothing to excuse the refusal.
+            if rec.get("gap") is not None and rec.get("id") not in opponent_ids]
+        if not reference_gaps or not opponent_ids:
+            # Either the path is not for anything, or there is no opponent to
+            # excuse the refusal. Both mean the refusal stands.
             return False
-        horizon = min(static_gaps) + self.static_path_dynamic_margin_m
+        horizon = min(reference_gaps) + self.static_path_dynamic_margin_m
         return all(
-            not rec.get("static")
+            rec.get("id") in opponent_ids
             and rec.get("gap") is not None
             and rec["gap"] > horizon
             for rec in blocked)
+
+    def _opponent_record_ids(self, records):
+        """Ids in a free_dbg record set that are the selected opponent.
+
+        The records carry the raw tracker id and the gap they were measured at,
+        so the opponent is found the same way as everywhere else in this class
+        - by position - and then reported by the id the record uses.
+        """
+        positions = self._opponent_positions()
+        if not positions or not self.max_s:
+            return set()
+        ids = set()
+        for rec in records:
+            gap = rec.get("gap")
+            if gap is None or rec.get("id") is None:
+                continue
+            for s_center, _ in positions:
+                opponent_gap = (s_center - self.cur_s) % self.max_s
+                # The record rounds the gap to two decimals; nothing else in
+                # the list will be within a centimetre of the opponent.
+                if abs(opponent_gap - gap) < 0.02:
+                    ids.add(rec["id"])
+                    break
+        return ids
 
     def _check_free_frenet(self, wpnts_data):
         """Use physical body width and debounce only the global-path result."""
