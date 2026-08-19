@@ -72,6 +72,15 @@ state_machine:
     # avoidance cleared by 0.022 m against a 0.034 m margin, was refused, and
     # the raceline it fell back to was 0.203 m inside the obstacle.
     static_overtake_better_by_m: 0.05
+    # [m] Tightest clearance an avoidance path may have and still be driven
+    # when the raceline is also blocked. Nothing overrides it.
+    #
+    # free_dist is the gap between the car's SIDE and the obstacle's edge, so
+    # 0.0 means "the body may touch but not overlap". static_overtake_better_by_m
+    # alone would drive a path 0.117 m INSIDE an obstacle because the raceline
+    # was 0.284 m inside - measured, four times in one run. Both are collisions.
+    # Raise it to keep real margin; do not go below zero.
+    static_overtake_min_clearance_m: 0.0
     # safety
     volt_threshold: 11.0
     # dynamic (replaces dyn_statemachine_tuner.cfg)

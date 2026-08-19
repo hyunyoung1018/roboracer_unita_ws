@@ -228,8 +228,9 @@ class StateMachine(Node):
         self.gb_horizon_m = self.params.gb_horizon_m
         self.interest_horizon_m = self.params.interest_horizon_m
         self.static_overtake_max_speed_mps = self.params.static_overtake_max_speed_mps
-        self.static_overtake_better_by_m = getattr(
-            self.params, 'static_overtake_better_by_m', 0.05)
+        self.static_overtake_better_by_m = self.params.static_overtake_better_by_m
+        self.static_overtake_min_clearance_m = (
+            self.params.static_overtake_min_clearance_m)
         self.overtake_min_closing_mps = self.params.overtake_min_closing_mps
 
         self.last_recovery_update_time = None
@@ -1400,6 +1401,28 @@ class StateMachine(Node):
             return False
         avoid_room = self._worst_free(wpnts_data)
         line_room = self._worst_free(self.cur_gb_wpnts)
+        # A floor the comparison cannot argue past, the same lesson
+        # min_path_clearance_m taught the planner: better than the raceline is
+        # not the same as passable.
+        #
+        # free_dist is already the gap between the car's SIDE and the
+        # obstacle's edge, so a negative value means the body overlaps it.
+        # Without this the comparison happily drove that, because the raceline
+        # overlapped further. Measured over one run, four of the twelve
+        # acceptances were negative - the worst took a path 0.117 m inside an
+        # obstacle because the raceline was 0.284 m inside. Both are collisions;
+        # the avoidance was simply a slower one.
+        #
+        # When neither clears, the honest answer is to trail and stop, which is
+        # what refusing here produces.
+        if avoid_room is not None and avoid_room < self.static_overtake_min_clearance_m:
+            self.get_logger().warn(
+                f"[{wpnts_data.name}] leaves only {avoid_room:+.3f} m at its "
+                f"tightest, under the {self.static_overtake_min_clearance_m:.3f} m "
+                f"floor - refusing even though the raceline is worse "
+                f"({line_room if line_room is None else f'{line_room:+.3f}'} m)",
+                throttle_duration_sec=1.0)
+            return False
         if (avoid_room is None or line_room is None
                 or avoid_room <= line_room + self.static_overtake_better_by_m):
             return False

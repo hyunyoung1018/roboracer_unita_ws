@@ -37,6 +37,8 @@ class StateMachineParams:
         "overtaking_horizon_m",
         "overtake_min_closing_mps",
         "static_overtake_max_speed_mps",
+        "static_overtake_better_by_m",
+        "static_overtake_min_clearance_m",
     }
 
     def __init__(self, node: "StateMachine") -> None:
@@ -151,6 +153,42 @@ class StateMachineParams:
         )
         self.static_overtake_max_speed_mps: float = node.get_parameter(
             "static_overtake_max_speed_mps").value
+
+        # Both of these were read with getattr(self.params, ...) and a default,
+        # which silently ignored the yaml: _declare puts the parameter on the
+        # NODE, and an attribute only appears on this object when someone
+        # changes it at runtime. So the tuned value never arrived and the
+        # hardcoded default was in force - the same shape as lateral_width_gb_m,
+        # which cost two tuning sessions.
+        self._declare(
+            "static_overtake_better_by_m", 0.05,
+            ParameterDescriptor(
+                description=(
+                    "How much more room an avoidance path must leave than the "
+                    "raceline before it is driven despite failing the free "
+                    "check [m]. Only consulted when the raceline is blocked too."
+                ),
+                type=ParameterType.PARAMETER_DOUBLE,
+            ),
+        )
+        self.static_overtake_better_by_m: float = node.get_parameter(
+            "static_overtake_better_by_m").value
+
+        self._declare(
+            "static_overtake_min_clearance_m", 0.0,
+            ParameterDescriptor(
+                description=(
+                    "Tightest clearance an avoidance path may have and still be "
+                    "driven when the raceline is also blocked [m]. Nothing "
+                    "overrides it. free_dist is measured from the car's SIDE, so "
+                    "below zero the body overlaps the obstacle - better than the "
+                    "raceline is not the same as passable."
+                ),
+                type=ParameterType.PARAMETER_DOUBLE,
+            ),
+        )
+        self.static_overtake_min_clearance_m: float = node.get_parameter(
+            "static_overtake_min_clearance_m").value
 
         self._declare("emergency_break_horizon", 0.5)
         self.emergency_break_horizon: float = node.get_parameter("emergency_break_horizon").value
