@@ -243,7 +243,7 @@ spline_node:
     # global_tracking.yaml moves to 0.16 with this; head-to-head stays at its
     # own 0.24 pairing via h2h_perception.yaml and
     # h2h_state_machine_params.yaml.
-    raceline_clearance_m: 0.24
+    raceline_clearance_m: 0.28
 
     lookahead: 10.0
 
@@ -444,7 +444,7 @@ spline_node:
     # this track now has 3 cm to give - if "no room either side" or "path
     # leaves the track" bails reappear there, step the trio down together
     # (0.27 / 0.27 / 0.13) rather than lowering this value alone.
-    evasion_distance: 0.24
+    evasion_distance: 0.28
 
     trajectory_threshold: 0.6
 
