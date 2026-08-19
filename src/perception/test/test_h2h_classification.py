@@ -24,6 +24,9 @@ PARAMS = {
     'static_min_samples': 6,
     'static_speed_threshold': 0.15,
     'static_classification_median': True,
+    'static_confirm_frames': 1,
+    'dynamic_confirm_frames': 4,
+    'static_speed_hysteresis_mps': 0.10,
 }
 
 
@@ -129,3 +132,60 @@ def test_the_measured_approach_drift_is_reported_honestly():
     n = node()
     d = [0.15 - 0.15 * DT * i for i in range(20)]   # 0.15 m/s of drift
     assert speed(n, track([5.0] * 20, d)) == pytest.approx(0.15, rel=0.05)
+
+
+# ------------------------------------------------------------- hysteresis
+def confirming(n, was_static, speeds):
+    """Feed a sequence of classification speeds and return the class each frame."""
+    tr = SimpleNamespace(obstacle=SimpleNamespace(is_static=was_static),
+                         class_streak=0)
+    out = []
+    for value in speeds:
+        verdict = n._confirmed_class(tr, value)
+        tr.obstacle.is_static = verdict
+        out.append(verdict)
+    return out
+
+
+def test_one_fast_frame_does_not_unstick_a_box():
+    # The chatter this exists to stop: obs 50 went STA -> DYN on a single frame.
+    n = node()
+    assert confirming(n, True, [0.02, 0.9, 0.02, 0.02]) == [True] * 4
+
+
+def test_leaving_static_takes_the_full_count():
+    n = node()
+    # dynamic_confirm_frames is 4, and the speed has to clear 0.15 + 0.10.
+    assert confirming(n, True, [0.9] * 5) == [True, True, True, False, False]
+
+
+def test_becoming_static_is_not_delayed():
+    # static_confirm_frames is 1: entering STATIC costs exactly what it did
+    # before, because it is already the rare direction on this car.
+    n = node()
+    assert confirming(n, False, [0.02] * 3) == [True, True, True]
+
+
+def test_the_streak_resets_on_a_disagreeing_frame():
+    n = node()
+    # Three fast frames, one slow, then fast again: never reaches four in a row.
+    assert confirming(n, True, [0.9, 0.9, 0.9, 0.02, 0.9, 0.9, 0.9]) == [True] * 7
+
+
+def test_the_dead_band_argues_for_nothing():
+    # 0.20 is over the threshold but under threshold + band: no evidence.
+    n = node()
+    assert confirming(n, True, [0.20] * 10) == [True] * 10
+    assert confirming(n, False, [0.20] * 10) == [False] * 10
+
+
+def test_a_real_opponent_is_confirmed_promptly():
+    n = node()
+    # 1 m/s clears the band by a mile; four frames is 0.2 s at 20 Hz.
+    assert confirming(n, True, [1.0] * 4)[-1] is False
+
+
+def test_hysteresis_is_tunable_to_off():
+    n = node(static_confirm_frames=1, dynamic_confirm_frames=1,
+             static_speed_hysteresis_mps=0.0)
+    assert confirming(n, True, [0.9]) == [False]

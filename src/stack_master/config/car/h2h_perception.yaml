@@ -124,6 +124,35 @@ tracking:
     #   ros2 param set /tracking static_classification_median false
     static_classification_median: true
 
+    # ---- classification hysteresis --------------------------------------
+    # Consecutive frames a track must disagree with its current class before
+    # the class changes, and a dead band above the speed threshold where
+    # nothing argues either way.
+    #
+    # The shared tracker has no hysteresis at all - it re-decides from one
+    # threshold every frame - and the deleted stable_obstacle_router was where
+    # the confirmation counts used to live. In time trials a flip only picks
+    # which branch of _check_free_frenet runs and the planner keeps seeing the
+    # obstacle regardless. Here the class decides which TOPIC the obstacle goes
+    # on, so a flip removes it from the spline planner's input outright: the
+    # path appears and disappears, have_path chatters, and the avoidance
+    # stutters. Same tracker, much sharper consequence.
+    #
+    # Asymmetric, and the opposite way round from the router's 3-static /
+    # 2-dynamic. Calling a box dynamic costs an avoidance - the obstacle leaves
+    # the planner's input and the car trails it instead. Calling a car static
+    # costs a gap. So leaving STATIC is the guarded direction, and entering it
+    # keeps its old cost of one frame: becoming static is already the hard,
+    # rare transition here and delaying it would slow down what is already too
+    # slow. A real opponent clears the band by a wide margin either way.
+    static_confirm_frames: 1
+    dynamic_confirm_frames: 4
+
+    # [m/s] Added to static_speed_threshold to leave DYNAMIC. Under 0.15 argues
+    # static, over 0.25 argues dynamic, and in between nothing changes - which
+    # is where a stationary obstacle's estimate actually sits.
+    static_speed_hysteresis_mps: 0.10
+
 # spline_node: nothing here on purpose.
 #
 # This used to pin evasion_distance and raceline_clearance_m at 0.24

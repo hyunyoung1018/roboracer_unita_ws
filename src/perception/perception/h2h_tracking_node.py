@@ -119,6 +119,15 @@ class HeadToHeadTrackingNode(TrackingNode):
         # frame-to-frame difference. See _classification_speed. False restores
         # the shared tracker's own verdict exactly, which is the A/B.
         'static_classification_median': True,
+        # Consecutive frames a track has to disagree with its current class
+        # before the class changes. See _confirmed_class.
+        'static_confirm_frames': 1,
+        'dynamic_confirm_frames': 4,
+        # [m/s] Dead band above static_speed_threshold. Under the threshold
+        # argues STATIC, over threshold+band argues DYNAMIC, and in between
+        # nothing argues at all - which is where a stationary obstacle's
+        # estimate actually sits.
+        'static_speed_hysteresis_mps': 0.10,
     }
 
     def __init__(self):
@@ -275,17 +284,71 @@ class HeadToHeadTrackingNode(TrackingNode):
             np.median(track.d_history[-2 * half:-half]))
         return math.hypot(ds, dd) / (half * dt)
 
+    def _confirmed_class(self, track, speed):
+        """Flip the class only after N consecutive frames agree.
+
+        The shared tracker re-decides from one threshold every frame with no
+        hysteresis of any kind, so an estimate sitting near
+        static_speed_threshold flips the class on whichever side of it the
+        current frame lands. In time trials that only picks which branch of
+        _check_free_frenet runs and the planner keeps seeing the obstacle
+        either way. Here the class decides which TOPIC the obstacle is
+        published on, so every flip takes it out of the spline planner's input
+        entirely - the path appears and disappears, have_path chatters, and the
+        avoidance visibly stutters. Same tracker, much sharper consequence.
+
+        The counters are what the deleted stable_obstacle_router had, and this
+        is the half of it that was worth keeping. Two thresholds rather than
+        one: a track must be under the speed limit to earn STATIC and over it
+        to earn DYNAMIC, and in the band between them nothing changes at all.
+
+        Asymmetric on purpose, and the other way round from the router's 3/2.
+        The router made DYNAMIC the easier verdict; here that is the wrong bias
+        entirely. Calling a box dynamic costs an avoidance - the obstacle
+        leaves the planner's input and the car trails it instead. Calling a car
+        static costs a gap. So leaving STATIC is the guarded direction, and
+        static_confirm_frames stays at 1: entering STATIC is already the hard,
+        rare transition on this car, and delaying it would slow down the thing
+        that is already too slow. A real opponent clears the band by a wide
+        margin and confirms in dynamic_confirm_frames either way.
+        """
+        limit = float(self.get_parameter('static_speed_threshold').value)
+        band = float(self.get_parameter('static_speed_hysteresis_mps').value)
+        was_static = bool(track.obstacle.is_static)
+
+        if speed < limit:
+            candidate = True
+        elif speed > limit + band:
+            candidate = False
+        else:
+            # Inside the band: no evidence either way, hold and reset.
+            track.class_streak = 0
+            return was_static
+
+        if candidate == was_static:
+            track.class_streak = 0
+            return was_static
+
+        needed = int(self.get_parameter(
+            'static_confirm_frames' if candidate else 'dynamic_confirm_frames'
+        ).value)
+        track.class_streak = getattr(track, 'class_streak', 0) + 1
+        if track.class_streak < needed:
+            return was_static
+        track.class_streak = 0
+        return candidate
+
     def _reclassify_on_medians(self, track, measurement, stamp, previous_stamp):
         """Revise is_static, and the centre that depends on it."""
         speed = self._classification_speed(track, stamp - previous_stamp)
         if speed is None:
             return
         obstacle = track.obstacle
-        is_static = bool(
+        enough_history = (
             len(track.s_history)
-            >= int(self.get_parameter('static_min_samples').value)
-            and speed < float(self.get_parameter('static_speed_threshold').value)
-        )
+            >= int(self.get_parameter('static_min_samples').value))
+        is_static = (
+            self._confirmed_class(track, speed) if enough_history else False)
         if is_static == bool(obstacle.is_static):
             return
 
