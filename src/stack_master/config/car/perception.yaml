@@ -254,32 +254,6 @@ spline_node:
     corridor_max_len_m: 8.0
 
     # [m] How far past the PREVIOUS member the next obstacle may sit and still
-    # join, scaled by speed like the return leg. 3.0 is exactly what the code
-    # did before this was a parameter, so it starts as a no-op - RAISE IT to
-    # link obstacles that currently get a swerve-return-swerve each.
-    #
-    # It is a reachability limit first. Shifting 0.5 m sideways at 3 m/s needs
-    # about 6.8 m/s2 of lateral grip over 2 m and 1.7 over 4, so obstacles
-    # closer than roughly 3 m cannot be passed at different offsets anyway.
-    corridor_link_gap_m: 8.0
-
-    # [m] How far covering the next obstacle may push the corridor's offset
-    # out, measured on whichever side is cheaper. 0 means the merge is free:
-    # the obstacle is already inside what the corridor holds.
-    #
-    # This replaced a test on how far the next obstacle's d was from the
-    # leader's, which rejected the case it was meant to help. Three obstacles
-    # at d -0.10, +0.25, -0.05: the middle one differs from the leader by 0.35
-    # and was refused, so the corridor became the leader alone - and that path
-    # returns to the raceline exactly where the middle obstacle is and drives
-    # into it. Merging it costs NOTHING going right, because the offset is set
-    # by whichever obstacle reaches furthest towards the line and that is still
-    # the leader. Shift 0.00 m, invisible to a d difference.
-    # [m] How far past the FIRST obstacle the corridor may reach to pick up
-    # further ones.
-    corridor_max_len_m: 8.0
-
-    # [m] How far past the PREVIOUS member the next obstacle may sit and still
     # join, scaled by speed like the return leg. It is a reachability limit
     # before it is a tuning one: shifting 0.5 m sideways at 3 m/s needs about
     # 6.8 m/s2 of lateral grip over 2 m and 1.7 over 4, so obstacles closer
@@ -321,75 +295,6 @@ spline_node:
     # nodes agree about whether a path is drivable. Below this the planner
     # refuses the side rather than publishing something that gets thrown back.
     min_path_clearance_m: 0.20
-
-    lookahead: 10.0
-
-    # [m] How far past the FIRST obstacle the corridor may reach to pick up
-    # further ones. Obstacles inside it share one held offset instead of being
-    # planned one at a time; beyond it the path is planned for what it can hold
-    # and the next replan takes the rest.
-    corridor_max_len_m: 8.0
-
-    # [m] How far past the PREVIOUS member the next obstacle may sit and still
-    # join, scaled by speed like the return leg. 3.0 is exactly what the code
-    # did before this was a parameter, so it starts as a no-op - RAISE IT to
-    # link obstacles that currently get a swerve-return-swerve each.
-    #
-    # It is a reachability limit first. Shifting 0.5 m sideways at 3 m/s needs
-    # about 6.8 m/s2 of lateral grip over 2 m and 1.7 over 4, so obstacles
-    # closer than roughly 3 m cannot be passed at different offsets anyway.
-    corridor_link_gap_m: 8.0
-
-    # [m] How far covering the next obstacle may push the corridor's offset
-    # out, measured on whichever side is cheaper. 0 means the merge is free:
-    # the obstacle is already inside what the corridor holds.
-    #
-    # This replaced a test on how far the next obstacle's d was from the
-    # leader's, which rejected the case it was meant to help. Three obstacles
-    # at d -0.10, +0.25, -0.05: the middle one differs from the leader by 0.35
-    # and was refused, so the corridor became the leader alone - and that path
-    # returns to the raceline exactly where the middle obstacle is and drives
-    # into it. Merging it costs NOTHING going right, because the offset is set
-    # by whichever obstacle reaches furthest towards the line and that is still
-    # the leader. Shift 0.00 m, invisible to a d difference.
-
-
-    # [s] How long a corridor commitment survives without being renewed.
-    #
-    # Once a corridor covers more than one obstacle the planner commits to it:
-    # the side and the offset cannot shrink, and the span cannot end early,
-    # until the car has driven out the far end. Without that, passing the first
-    # obstacle drops it from the candidate list, the offset is recomputed from
-    # whatever is left, and the manoeuvre goes soft halfway through.
-    #
-    # The car normally reaches the end long before this expires. The timeout is
-    # for the corridor whose obstacles were picked up - otherwise the car would
-    # be held off the line until something else noticed.
-
-    # [m] Spacing of the control points holding the offset between the first
-    # and last obstacle. Without them a cubic through two equal knots bulges
-    # between them - the samples are clipped anyway, but flat control points
-    # keep the curvature, and therefore the speed, honest.
-    #
-    # Floored at 0.2 in code: the control-point loop advances by exactly this,
-    # so 0 would never terminate.
-    corridor_point_spacing_m: 1.0
-
-    # How the avoidance path ENDS when the next obstacle is not in the corridor.
-    #
-    # The return leg used to always run its full 3 m back to the raceline, even
-    # when that crossed an obstacle the corridor had just refused to cover. The
-    # state machine checks the published path against every obstacle and would
-    # not drive it, so the car stopped with a perfectly good path on screen.
-    # Now the path ends short of that obstacle, which puts it past the end
-    # where the state machine ignores it, and the next replan leads with it.
-    #
-    # retreat_clearance_m  how far before that obstacle the path stops.
-    # retreat_floor_m      shortest return leg allowed. Below this the return
-    #                      is too sharp to drive at speed, so the full leg is
-    #                      kept and the side check refuses honestly instead.
-    retreat_clearance_m: 0.5
-    retreat_floor_m: 1.0
     # [m] Shortest approach the path may be pulled in to, when the wide one
     # does not fit.
     #
@@ -412,18 +317,6 @@ spline_node:
     # limit. Below this the path is planned against grip nobody has verified,
     # so refusing is the honest answer instead.
     approach_floor_m: 1.2
-
-
-    # [m] Hard floor on how close the published path may pass an obstacle,
-    # measured from the path's CENTRELINE to the obstacle's edge. Nothing
-    # overrides it - not even "the raceline would be worse".
-    #
-    # The car is 0.28 m wide, so its half width is 0.14, and the state machine
-    # then wants lateral_width_m (0.05) on top before it will drive the path.
-    # 0.20 is those two with a little rounding, which is what makes the two
-    # nodes agree about whether a path is drivable. Below this the planner
-    # refuses the side rather than publishing something that gets thrown back.
-    min_path_clearance_m: 0.20
 
     # [m] How far the path passes the obstacle's edge. Squeezed from both
     # sides, and on test_213 the window is only 0.03 m wide.
