@@ -107,6 +107,19 @@ class HeadToHeadTrackingNode(TrackingNode):
         'dynamic_reid_ambiguity_margin_m': 0.20,
         'dynamic_speed_hold_sec': 0.75,
         'dynamic_speed_valid_min_mps': 0.15,
+        # [m/s] and [frames] a track must ROLL before it can be ACQUIRED as
+        # the opponent. Being DYNAMIC is what the classifier says; being the
+        # opponent is a much stronger claim. See
+        # OpponentSelector._moving_enough_to_acquire.
+        #
+        # 0.8 is deliberately well clear of static_speed_threshold (0.15).
+        # Setting it at the classification threshold would be a no-op: a track
+        # only reaches DYNAMIC by exceeding that in the first place, so it
+        # would exclude nothing. Measured on 2026-08-19, the apparent speed of
+        # a stationary box is over 0.15 m/s 60% of the time but over 0.8 only
+        # 20%, and 10 consecutive frames of it is 0.5 s at 20 Hz.
+        'opponent_acquire_speed_mps': 0.8,
+        'opponent_acquire_frames': 10,
         # [m/s] Upper sanity bound on a believable opponent speed, and it is
         # new. The router had only the lower one, so a single bad frame
         # reporting 8.55 m/s for a stationary box was accepted as valid and

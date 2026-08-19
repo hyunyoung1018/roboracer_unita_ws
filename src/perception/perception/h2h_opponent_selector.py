@@ -122,6 +122,9 @@ class OpponentSelector:
         self._log = log if log is not None else (lambda message: None)
         self.active_id = None
         self.retired_ids = {}
+        # Consecutive frames each track has been seen genuinely rolling. Only
+        # consulted for ACQUISITION - see _moving_enough_to_acquire.
+        self.motion_streaks = {}
         self.last_speed = None
         self.last_speed_at = None
         self.last_s = None
@@ -243,6 +246,52 @@ class OpponentSelector:
             or now - self.last_position_at > timeout
         )
 
+    def _update_motion_streaks(self, obstacles):
+        """Count consecutive frames each visible track is genuinely rolling."""
+        floor = float(self._param("opponent_acquire_speed_mps"))
+        present = set()
+        for obstacle in obstacles:
+            obstacle_id = int(obstacle.id)
+            present.add(obstacle_id)
+            if not obstacle.is_visible:
+                continue
+            speed = float(obstacle.vs)
+            if math.isfinite(speed) and abs(speed) >= floor:
+                self.motion_streaks[obstacle_id] = (
+                    self.motion_streaks.get(obstacle_id, 0) + 1)
+            else:
+                self.motion_streaks[obstacle_id] = 0
+        for obstacle_id in list(self.motion_streaks):
+            if obstacle_id not in present:
+                del self.motion_streaks[obstacle_id]
+
+    def _moving_enough_to_acquire(self, obstacle):
+        """Has this track actually been rolling, for long enough to believe?
+
+        ACQUISITION ONLY. Being DYNAMIC is what the classifier says; being the
+        opponent is a much stronger claim, and it should be, because the two
+        mistakes do not cost the same. Acquiring a real opponent late costs a
+        late trailing arm. Acquiring a BOX costs a crash - and not one crash
+        but two at once, because the selected opponent is pulled out of
+        /tracking/static_obstacles so the spline planner cannot plan around it,
+        and h2h_spline_node then treats it as a wall and narrows the corridor
+        to nothing. Measured on 2026-08-19 with no opponent on the track at
+        all: eleven acquisitions, "left 1.30 -> 0.00 m, right 0.35 -> 0.00 m",
+        and no avoidance path for a box that was sitting on the raceline.
+
+        A box reads DYNAMIC because its APPARENT speed brushes the threshold
+        for a frame or two - 0.5 to 2.9 m/s of it, measured, and mostly from
+        the ego pose rather than from the box. What it does not do is roll at a
+        credible speed for a run of frames, which is the one thing a real
+        opponent does continuously. So that is what acquisition asks for.
+
+        Nothing here holds a target that is already locked: an opponent that
+        stops behind a box must stay the opponent, and _select's retained
+        branch returns before this is ever consulted.
+        """
+        frames = int(self._param("opponent_acquire_frames"))
+        return self.motion_streaks.get(int(obstacle.id), 0) >= frames
+
     def select(self, obstacles, classes, now, waypoints, track_length, ego_s):
         """Return the one locked opponent obstacle, or ``None``.
 
@@ -258,6 +307,8 @@ class OpponentSelector:
         }
         self._maybe_handoff(
             obstacles, classes, now, waypoints, track_length, ego_s)
+
+        self._update_motion_streaks(obstacles)
 
         self.gates = {}
         candidates = []
@@ -284,7 +335,8 @@ class OpponentSelector:
         if self.active_id is not None:
             return None
 
-        visible = [obs for obs in candidates if obs.is_visible]
+        visible = [obs for obs in candidates
+                   if obs.is_visible and self._moving_enough_to_acquire(obs)]
         if not visible:
             return None
         selected = min(

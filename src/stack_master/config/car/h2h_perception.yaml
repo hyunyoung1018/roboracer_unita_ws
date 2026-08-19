@@ -102,6 +102,31 @@ tracking:
     # and held for the hold time - and the trailing controller commands
     # opponent speed minus a correction, so the car accelerated towards it.
     dynamic_speed_valid_min_mps: 0.15
+
+    # [m/s] and [frames] a track must ROLL before it can be ACQUIRED as the
+    # opponent. Acquisition only - a locked opponent that stops behind a box
+    # stays the opponent.
+    #
+    # Being DYNAMIC is what the classifier says; being the opponent is a much
+    # stronger claim, and it should be, because the two mistakes do not cost
+    # the same. Acquiring a real opponent late costs a late trailing arm.
+    # Acquiring a BOX costs two failures at once: the selected opponent is held
+    # back from /tracking/static_obstacles so the spline planner cannot plan
+    # around it, and h2h_spline_node then folds it in as a wall and narrows the
+    # corridor to nothing. On 2026-08-19, with no opponent on the track at all,
+    # that produced eleven acquisitions, "left 1.30 -> 0.00 m, right 0.35 ->
+    # 0.00 m", and no avoidance path for a box sitting on the raceline.
+    #
+    # 0.8 is deliberately well clear of static_speed_threshold. Putting it AT
+    # that threshold would exclude nothing, because a track only reaches
+    # DYNAMIC by exceeding it. Measured on the same run, a stationary box's
+    # apparent speed is over 0.15 m/s 60% of the time but over 0.8 only 20%,
+    # and it does not hold that for ten frames running the way a rolling car
+    # does. The cost is that an opponent crawling under 0.8 m/s is never
+    # acquired - which is the right answer, because a car moving that slowly is
+    # something to drive around, not something to trail.
+    opponent_acquire_speed_mps: 0.8
+    opponent_acquire_frames: 10
     dynamic_speed_valid_max_mps: 6.0
 
     # /tracking/classification_debug, built only while something subscribes.

@@ -35,6 +35,8 @@ PARAMS = {
     'dynamic_speed_valid_min_mps': 0.15,
     'dynamic_speed_valid_max_mps': 6.0,
     'classification_debug': True,
+    'opponent_acquire_speed_mps': 0.8,
+    'opponent_acquire_frames': 10,
 }
 
 WAYPOINTS = [
@@ -54,7 +56,17 @@ def selector(**overrides):
     return OpponentSelector(params.get)
 
 
-def select(sel, obstacles, classes, now=0.0, ego_s=0.0):
+def select(sel, obstacles, classes, now=0.0, ego_s=0.0, rolling=True):
+    """One tick. `rolling` pre-fills the motion streak acquisition needs.
+
+    Acquisition requires opponent_acquire_frames of sustained speed; the tests
+    that are about the gates themselves say so once here rather than feeding
+    ten identical frames each.
+    """
+    if rolling:
+        for obstacle in obstacles:
+            sel.motion_streaks[int(obstacle.id)] = PARAMS[
+                'opponent_acquire_frames']
     return sel.select(obstacles, classes, now, WAYPOINTS, TRACK, ego_s)
 
 
@@ -166,3 +178,63 @@ def test_an_impossible_speed_is_not_believed():
     bad = obstacle(1, 4.2, vs=8.55)
     sel.stabilize_speed(bad, 0.1)
     assert sel.last_speed == 2.0
+
+
+# ------------------------------------------------- acquisition needs motion
+def test_a_box_reading_dynamic_is_not_acquired():
+    """The 2026-08-19 run: eleven acquisitions with no opponent on the track.
+
+    A box reads DYNAMIC because its apparent speed brushes the threshold. That
+    costs two failures at once - it leaves /tracking/static_obstacles so the
+    spline planner cannot plan around it, and h2h_spline_node folds it in as a
+    wall and narrows the corridor to nothing.
+    """
+    sel = selector()
+    box = obstacle(1, 3.0, vs=0.3)      # over the 0.15 class threshold, under 0.8
+    for _ in range(20):
+        assert select(sel, [box], {1: DYNAMIC}, rolling=False) is None
+
+
+def test_a_rolling_car_is_acquired_once_it_has_rolled():
+    sel = selector()
+    car = obstacle(1, 3.0, vs=2.0)
+    for _ in range(9):
+        assert select(sel, [car], {1: DYNAMIC}, rolling=False) is None
+    assert select(sel, [car], {1: DYNAMIC}, rolling=False).id == 1
+
+
+def test_the_streak_resets_on_a_slow_frame():
+    sel = selector()
+    car = obstacle(1, 3.0, vs=2.0)
+    slow = obstacle(1, 3.0, vs=0.1)
+    for _ in range(9):
+        select(sel, [car], {1: DYNAMIC}, rolling=False)
+    select(sel, [slow], {1: DYNAMIC}, rolling=False)
+    assert select(sel, [car], {1: DYNAMIC}, rolling=False) is None
+
+
+def test_an_invisible_frame_neither_counts_nor_resets():
+    sel = selector()
+    car = obstacle(1, 3.0, vs=2.0)
+    for _ in range(9):
+        select(sel, [car], {1: DYNAMIC}, rolling=False)
+    select(sel, [obstacle(1, 3.0, vs=0.0, visible=False)], {1: DYNAMIC},
+           rolling=False)
+    assert select(sel, [car], {1: DYNAMIC}, rolling=False).id == 1
+
+
+def test_a_locked_opponent_that_stops_stays_the_opponent():
+    """Acquisition only. An opponent stopping behind a box is still the
+    opponent - the retained branch returns before the motion gate is asked."""
+    sel = selector()
+    assert select(sel, [obstacle(1, 3.0, vs=2.0)], {1: DYNAMIC}).id == 1
+    stopped = obstacle(1, 3.0, vs=0.0)
+    assert select(sel, [stopped], {1: DYNAMIC}, rolling=False).id == 1
+
+
+def test_the_streak_is_forgotten_when_the_track_goes():
+    sel = selector()
+    for _ in range(10):
+        select(sel, [obstacle(1, 3.0, vs=2.0)], {1: DYNAMIC}, rolling=False)
+    select(sel, [], {}, rolling=False)
+    assert 1 not in sel.motion_streaks
