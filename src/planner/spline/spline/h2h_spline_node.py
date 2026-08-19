@@ -114,10 +114,9 @@ class HeadToHeadSplineNode(SplineNode):
         ``bound_left - left_apex`` and ``bound_right + right_apex``. An
         obstacle's own d_left/d_right are SIGNED offsets, so an opponent on the
         left has a positive d_right (its near edge) and one on the right has a
-        negative d_left. An opponent straddling the raceline takes room from
-        both sides and drives them to zero, which is the honest answer: there
-        is no way past it here, and the shared planner then bails with its own
-        "no room either side" rather than publishing a path into it.
+        negative d_left. An opponent that ends up taking BOTH sides names no
+        side at all, and is handed straight back to the shared bounds - see the
+        guard at the end.
         """
         bound_left, bound_right = super()._tightest_bounds(
             s_values, reference, start_s, end_s, max_s)
@@ -149,6 +148,48 @@ class HeadToHeadSplineNode(SplineNode):
 
         limited_left = max(0.0, limited_left)
         limited_right = max(0.0, limited_right)
+
+        # An opponent that takes BOTH sides has not chosen a side. It has
+        # deleted the path.
+        #
+        # This whole file exists to answer one question - which side of a
+        # STATIC obstacle to go - and it answers it by taking room away on the
+        # side the opponent is on. An opponent straddling the raceline takes
+        # room away on both, and a bound is a single half-width, so there is no
+        # way for it to say "not through the middle, but wide is fine": both
+        # sides clamp to zero and the shared planner bails with "no room either
+        # side". Nothing is published, so the state machine has no static
+        # avoidance at all and trails into the box.
+        #
+        # And an opponent being TRAILED is on the raceline by definition, which
+        # is exactly when a static obstacle needs avoiding. Measured on
+        # 2026-08-19 over eleven laps: thirteen corridors narrowed, SEVEN of
+        # them to 0.00/0.00, alongside 142 empty paths and 136 refusals reading
+        # have_path=False. The one case this is meant to help is the one it was
+        # breaking.
+        #
+        # So give the bounds back untouched and let the shared planner draw its
+        # path for the static obstacle. This does not drive the car into the
+        # opponent: the state machine measures every published path against the
+        # full obstacle list, opponent included (_check_free_frenet), and
+        # refuses it if it is genuinely blocked. The only thing that changes is
+        # that the refusal is now made by the check that can see everything,
+        # instead of by a planner that silenced itself first.
+        #
+        # Guarded on the shared bounds so a corridor the TRACK already closed
+        # is not reported as an opponent doing it.
+        if (limited_left <= 0.0 and limited_right <= 0.0
+                and (bound_left > 0.0 or bound_right > 0.0)):
+            self.get_logger().info(
+                'opponent straddles the raceline at '
+                f's={start_s % max_s:.2f}..{end_s % max_s:.2f}: it would leave '
+                f'0.00 m both sides (track allows {bound_left:.2f}/'
+                f'{bound_right:.2f}), so it names no side - planning the static '
+                'obstacle on the shared bounds and leaving the free check to '
+                'judge the result',
+                throttle_duration_sec=2.0)
+            return bound_left, bound_right
+
         if limited_left < bound_left or limited_right < bound_right:
             self.get_logger().info(
                 'opponent narrows the corridor at '

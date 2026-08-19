@@ -24,7 +24,7 @@ def opponent(s_center, d_right, d_left):
 
 
 def bounds(opponents, start_s=5.0, end_s=5.0, age=0.0, enabled=True,
-           span=1.5, clearance=0.10):
+           span=1.5, clearance=0.10, shared=SHARED):
     params = {
         'opponent_bound_span_m': span,
         'opponent_extra_clearance_m': clearance,
@@ -40,7 +40,7 @@ def bounds(opponents, start_s=5.0, end_s=5.0, age=0.0, enabled=True,
 
     import spline.h2h_spline_node as module
     original = module.SplineNode._tightest_bounds
-    module.SplineNode._tightest_bounds = lambda *a, **k: SHARED
+    module.SplineNode._tightest_bounds = lambda *a, **k: shared
     try:
         return HeadToHeadSplineNode._tightest_bounds(
             node, None, None, start_s, end_s, TRACK)
@@ -73,10 +73,45 @@ def test_opponent_on_the_right_takes_the_right():
     assert right == 0.15
 
 
-def test_opponent_across_the_raceline_takes_both():
-    # No way past it here; the shared planner then bails on "no room either
-    # side" rather than publishing a path into it.
-    assert bounds([opponent(5.0, -0.20, 0.20)]) == (0.0, 0.0)
+# ------------------------------------------ an opponent that names no side
+def test_opponent_across_the_raceline_gives_the_bounds_back():
+    """Both sides at zero is not an answer, it is the absence of one.
+
+    This file's whole job is to say which side of a STATIC obstacle to go, and
+    it says it by taking room away on the opponent's side. A straddling
+    opponent takes it away on both, and the shared planner then bails on "no
+    room either side" and publishes nothing - so the state machine gets no
+    static avoidance at all and trails into the box.
+
+    Which is the case this is FOR: an opponent being trailed sits on the
+    raceline by definition. Measured on 2026-08-19 over eleven laps, seven of
+    thirteen narrowings went to 0.00/0.00, with 142 empty paths behind them.
+    """
+    assert bounds([opponent(5.0, -0.20, 0.20)]) == SHARED
+
+
+def test_zeroing_only_one_side_still_narrows_it():
+    # The guard must not fire here: the opponent named a side, and "no left
+    # room, go right" is exactly the answer this file exists to give.
+    assert bounds([opponent(5.0, 0.05, 0.60)]) == (0.0, SHARED[1])
+
+
+def test_two_opponents_closing_both_sides_also_give_the_bounds_back():
+    # Same principle with the work split over two of them. The path is then
+    # published and refused by _check_free_frenet, which can see both.
+    left = opponent(5.0, 0.05, 0.60)
+    right = opponent(5.0, -0.60, -0.05)
+    assert bounds([left, right]) == SHARED
+
+
+def test_a_track_that_is_already_closed_is_not_blamed_on_the_opponent():
+    # Shared bounds already zero: nothing to give back, and no claim that the
+    # opponent did it.
+    assert bounds([opponent(5.0, -0.20, 0.20)], shared=(0.0, 0.0)) == (0.0, 0.0)
+
+
+def test_a_straddling_opponent_outside_the_span_changes_nothing():
+    assert bounds([opponent(2.0, -0.20, 0.20)]) == SHARED
 
 
 def test_opponent_never_widens_a_bound():
