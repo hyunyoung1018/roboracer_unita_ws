@@ -44,6 +44,26 @@ state_machine:
     # expired and OVERTAKE was held by a car on the far side of the track.
     gb_horizon_m: 8.0
 
+    # [m] How far off the raceline an obstacle may sit and still be something
+    # this car trails or plans around. Beyond it, it is scenery.
+    #
+    # The car drove into a wall following a pillar. Every candidate list in the
+    # head-to-head wrapper was "the nearest thing ahead" with no lateral test
+    # at all, so a table leg 0.8 m off the line - which the raceline clears by
+    # a wide margin and no planner would ever move for - became the trailing
+    # target, and head to head trails at 0.8 m. time_trials never meets this:
+    # its trailing target is only ever something that actually blocks the
+    # raceline, and it holds 2.5 m.
+    #
+    # 0.6 is spline_node's trajectory_threshold, deliberately. The planner
+    # already uses exactly this number to decide which obstacles are worth
+    # looking at, and a target the planner will not plan for is not a target
+    # the state machine should offer either. Move the two together.
+    #
+    # The selected opponent is exempt: the corridor gate that picks it allows
+    # it anywhere its footprint fits the track, which is wider than this.
+    trailing_lateral_threshold_m: 0.6
+
     # --- dynamic avoidance planner (lane_change) -----------------------------
     # These keys live in state_machine/config/planners/dynamic_avoidance_planner.yaml
     # for both launches; overriding them here keeps that file - and therefore

@@ -35,6 +35,7 @@ def machine(obstacles, opponents=(), cur_vs=1.0, cur_s=0.0, stamp=0.0):
     m.max_s = TRACK
     m.track_length = TRACK
     m.static_path_dynamic_margin_m = 1.5
+    m.trailing_lateral_threshold_m = 0.6
     m.opponent_stream_timeout_sec = 0.5
     m._opponent_obstacles = list(opponents)
     m._opponent_stamp = stamp

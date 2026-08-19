@@ -93,6 +93,23 @@ class H2HStateMachine(StateMachine):
         # pull out with the opponent closer to its rejoin point.
         self.static_path_dynamic_margin_m = float(
             self._get_or_declare("static_path_dynamic_margin_m", 1.5))
+        # [m] How far off the raceline an obstacle may sit and still be
+        # something this car trails or plans around. Beyond it, it is scenery.
+        #
+        # The car drove into a wall following a pillar. Every candidate list in
+        # this wrapper was "the nearest thing ahead" with no lateral test at
+        # all, so a desk leg 0.8 m off the line - which the raceline clears by
+        # a wide margin and no planner would ever move for - became the
+        # trailing target, and head to head trails at 0.8 m. time_trials never
+        # met this: its trailing target is only ever an obstacle that actually
+        # blocks the raceline, and it holds 2.5 m.
+        #
+        # 0.6 is spline_node's trajectory_threshold, deliberately: the planner
+        # already uses exactly this number to decide which obstacles are worth
+        # looking at, and a target the planner will not plan for is not a
+        # target this should offer either.
+        self.trailing_lateral_threshold_m = float(
+            self._get_or_declare("trailing_lateral_threshold_m", 0.6))
         self._last_gb_blocked_at = None
         self._last_trailing_target = None
         self._last_trailing_target_at = None
@@ -324,17 +341,31 @@ class H2HStateMachine(StateMachine):
             and abs(float(obstacle.d_center) - d) < 1e-3
             for s, d in positions)
 
+    def _near_the_line(self, obstacle):
+        """Is this obstacle close enough to the raceline to matter at all?
+
+        Scenery is not an obstacle. The lidar returns pillars, table legs and
+        anything else standing near the wall, and on this track those are
+        metres off the driving line - the raceline clears them, no planner
+        moves for them, and nothing should trail them either.
+        """
+        return abs(float(obstacle.d_center)) <= self.trailing_lateral_threshold_m
+
     def _avoidable_obstacles(self):
         """What the static planner is actually planning around.
 
-        Exactly the contents of /tracking/static_obstacles: everything except
-        the one selected opponent, which has a planner of its own.
+        The contents of /tracking/static_obstacles - everything except the one
+        selected opponent, which has a planner of its own - narrowed to what is
+        near the line, which is the same narrowing spline_node applies to that
+        stream before it plans. Without it a pillar by the wall satisfies the
+        closing gate on a lap where nothing is really in the way; path_free
+        catches that afterwards, so it was the milder of the two leaks, but it
+        is the same leak.
         """
         positions = self._opponent_positions()
-        if not positions:
-            return list(self.cur_obstacles_in_interest)
         return [obs for obs in self.cur_obstacles_in_interest
-                if not self._is_opponent(obs, positions)]
+                if self._near_the_line(obs)
+                and not self._is_opponent(obs, positions)]
 
     def _closing_on_nearest_avoidable(self, threshold_m) -> bool:
         """Is the car closing on the nearest obstacle the static path is for?
@@ -566,8 +597,30 @@ class H2HStateMachine(StateMachine):
         return target
 
     def _nearest_interest_target(self):
+        """The nearest thing ahead that is worth trailing.
+
+        This is the fallback for "the free check found no blocking target but
+        the raceline was blocked a moment ago", and it used to take the nearest
+        obstacle of any kind, at any lateral offset. That is how a pillar by
+        the wall became the trailing target and the car followed it into the
+        wall at the 0.8 m head-to-head gap.
+
+        The intent was only ever to survive a frame where the detector or the
+        id churned - to keep hold of a target that was already there. Something
+        the raceline passes by half a metre was never that target, so the list
+        is narrowed to what is near the line before the nearest is taken.
+
+        The selected opponent is exempt from that narrowing, and it has to be:
+        it IS the trailing target when there is one, and the corridor gate that
+        selected it allows it anywhere its footprint fits between the track
+        bounds - about 0.75 m on this track, wider than this threshold. An
+        opponent that swings wide to overtake would otherwise stop being
+        trailed at the moment it draws alongside.
+        """
+        positions = self._opponent_positions()
         gap, target = nearest_ahead(
-            self.cur_obstacles_in_interest,
+            [obs for obs in self.cur_obstacles_in_interest
+             if self._near_the_line(obs) or self._is_opponent(obs, positions)],
             self.cur_s,
             self.track_length,
             self.interest_horizon_m,
