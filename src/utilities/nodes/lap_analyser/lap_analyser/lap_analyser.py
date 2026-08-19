@@ -42,6 +42,25 @@ class LapAnalyser(Node):
         # this behaves exactly as it did before.
         self.lap_start_from_initialpose = bool(
             self._get_or_declare('lap_start_from_initialpose', True))
+
+        # [s] A lap shorter than this did not happen.
+        #
+        # The finish line retriggers while the car sits on it: the wrap test
+        # below fires on any forward crossing of the boundary, and a stationary
+        # car's s wanders across it at the odometry rate. Measured, straight
+        # off the car: "completed lap #1 in 0.034", "#2 in 0.029", "#3 in
+        # 0.032" - three laps in a tenth of a second.
+        #
+        # relocalizer.py already refuses to re-seed on those, but it can only
+        # do that for itself. The count, the log file and the statistics had
+        # already been written by then, so the same guard belongs here, where
+        # the lap is decided. Both default to 2.0 and mean the same thing.
+        #
+        # Sized against the track, not the car: these maps are 20-22 m, so 2.0
+        # is a lap at 10-11 m/s, well over anything this car does. On a much
+        # shorter track, lower it.
+        self.MIN_LAP_TIME_S = float(self._get_or_declare('min_lap_time_s', 2.0))
+
         self.s_finish = 0.0
         self.track_length = None
         self.last_rel = 0.0
@@ -266,14 +285,36 @@ class LapAnalyser(Node):
         self.lap_count = -1
         self.n_datapoints = 0
 
+    def _seconds_since_lap_start(self):
+        return (self.get_clock().now() - self.lap_start_time).nanoseconds * 1e-9
+
     def check_for_finish_line_pass(self, current_rel):
         # Detect the wrap of the distance since the lap boundary, which happens
         # exactly once per round. With s_finish = 0 this is the old test on the
         # raw s; with the boundary at the pose estimate it moves with it.
-        if (self.last_rel - current_rel) > 1.0:
-            return True
-        else:
+        if (self.last_rel - current_rel) <= 1.0:
             return False
+
+        # The wrap alone is not a lap. See min_lap_time_s: a car standing on
+        # the boundary crosses it repeatedly, and every crossing used to count.
+        # Rejected here rather than at publish time so the counter, the log
+        # file and the statistics never see it - and so lap_start_time is left
+        # alone, which is what makes the real lap still time correctly.
+        #
+        # lap_count -1 is the first crossing of the run, which starts the
+        # clock rather than ending a lap; there is nothing to be too soon for.
+        if self.lap_count >= 0:
+            elapsed = self._seconds_since_lap_start()
+            if elapsed < self.MIN_LAP_TIME_S:
+                self.get_logger().warn(
+                    f"ignoring a finish-line crossing {elapsed:.3f} s after the "
+                    f"last one (min_lap_time_s {self.MIN_LAP_TIME_S:.1f}) - the "
+                    f"line is retriggering, not a lap. Lap {self.lap_count} "
+                    f"continues.",
+                    throttle_duration_sec=5.0)
+                return False
+
+        return True
 
         # ? Future extension: would be cool to check for sector times...
 
