@@ -390,6 +390,29 @@ spline_node:
     #                      kept and the side check refuses honestly instead.
     retreat_clearance_m: 0.5
     retreat_floor_m: 1.0
+    # [m] Shortest approach the path may be pulled in to, when the wide one
+    # does not fit.
+    #
+    # The approach normally reaches 4 m behind the leader and NOTHING shortens
+    # it unless the boundary check rejects a sample before the apex - every
+    # obstacle that fits keeps the wide, gentle entry it has always had. This
+    # is only for the case where the track narrows between the car and the
+    # obstacle, which is exactly where an obstacle is worth avoiding: the
+    # inside of a corner.
+    #
+    # Later means tighter, and the controller answers curvature by slowing
+    # down. Computed for this offset at a 5 m/s^2 lateral limit, which is about
+    # what speed_scaling 0.6 implies: a 4.0 m approach carries 4.00 m/s, 1.5 m
+    # carries 2.45, 1.2 m carries 2.19, 1.0 m carries 2.00. So this is paid for
+    # in lap time and must not be paid on obstacles that never needed it.
+    #
+    # Braking is not the constraint - reaching 2.19 m/s from 2.5 needs 0.14 m
+    # and the approach is 1.2. Grip is: 1.2 m needs 6.5 m/s^2 of the twelve
+    # ggv.csv claims, and ggv is a flat placeholder rather than a measured
+    # limit. Below this the path is planned against grip nobody has verified,
+    # so refusing is the honest answer instead.
+    approach_floor_m: 1.2
+
 
     # [m] Hard floor on how close the published path may pass an obstacle,
     # measured from the path's CENTRELINE to the obstacle's edge. Nothing

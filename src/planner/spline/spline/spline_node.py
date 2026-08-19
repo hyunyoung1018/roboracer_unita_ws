@@ -110,6 +110,7 @@ class SplineNode(Node):
             'corridor_point_spacing_m': 1.0,
             'retreat_clearance_m': 0.5,
             'retreat_floor_m': 1.0,
+            'approach_floor_m': 1.2,
             'min_path_clearance_m': 0.20,
             'measure': False,
         }
@@ -151,6 +152,8 @@ class SplineNode(Node):
             self.get_parameter('retreat_clearance_m').value)
         self.retreat_floor_m = float(
             self.get_parameter('retreat_floor_m').value)
+        self.approach_floor_m = float(
+            self.get_parameter('approach_floor_m').value)
         self.min_path_clearance_m = float(
             self.get_parameter('min_path_clearance_m').value)
         self.corridor_point_spacing_m = max(
@@ -173,6 +176,7 @@ class SplineNode(Node):
             'corridor_point_spacing_m': 'corridor_point_spacing_m',
             'retreat_clearance_m': 'retreat_clearance_m',
             'retreat_floor_m': 'retreat_floor_m',
+            'approach_floor_m': 'approach_floor_m',
             'min_path_clearance_m': 'min_path_clearance_m',
             'measure': 'measure',
         }
@@ -903,6 +907,76 @@ class SplineNode(Node):
 
         spline = path_profile(apex_d)
         clip_lo, clip_hi = clip_bounds(apex_d)
+
+        # Pull the approach in, but ONLY if the wide one does not fit.
+        #
+        # The approach knots reach 4*scale behind the leader, so the path
+        # starts drifting towards the apex four metres out. Where the track
+        # narrows in between - a wall corner on the inside of a corner, which
+        # is exactly where an obstacle is worth avoiding - that gentle drift
+        # clips the narrow point and the whole plan is refused, while the apex
+        # itself has most of a metre to spare.
+        #
+        # So: try the wide approach first. If a sample BEFORE the apex leaves
+        # the track, shorten the approach and try again. Later means tighter,
+        # which the controller answers by slowing down - measured, an approach
+        # of 4.0 m carries about 4.0 m/s through this offset and 1.0 m carries
+        # about 2.0 m/s - so this is bought at real cost and must not be paid
+        # on obstacles that never needed it.
+        #
+        # It is not. Every obstacle where the wide approach fits keeps it
+        # exactly as before: the first candidate IS the current geometry, and
+        # nothing is shortened unless the bound check rejects it. This is the
+        # same shape retreat_floor_m already has on the other side of the
+        # obstacle - shorten rather than abandon, with a floor.
+        #
+        # approach_floor_m is where it stops. Below about a metre the required
+        # lateral acceleration passes what the raceline is scaled to, and ggv
+        # is a flat 12.0 placeholder rather than a measured limit, so a path
+        # planned there is planned against grip nobody has verified. If it does
+        # not fit at the floor, refusing is the honest answer.
+        def fits_before_apex(cand_control_s, cand_spline):
+            """Where the path first leaves the track, and whether it is early.
+
+            Returns (bad_sample, is_before_apex). Only d is needed, so this
+            runs on the spline alone - no cartesian conversion, which is what
+            makes retrying cheap enough to do inside the loop.
+            """
+            frm = max(cand_control_s[0], car_s)
+            xs = np.arange(frm, cand_control_s[-1], self.resolution)
+            if xs.size == 0:
+                return None, False
+            ds = np.clip(cand_spline(xs), clip_lo, clip_hi)
+            ss = xs % max_s
+            idxs = np.argmin(np.abs(s_values[None, :] - ss[:, None]), axis=1)
+            for k, (s_m, d_m) in enumerate(zip(ss, ds)):
+                base = reference[int(idxs[k])]
+                avail = base.d_left if d_m >= 0.0 else base.d_right
+                if abs(d_m) > max(0.0, avail - self.boundary_margin):
+                    return k, bool(xs[k] < apex_s - 1e-6)
+            return None, False
+
+        approach_full = float(-approach[0])
+        shrink = 1.0
+        while True:
+            bad, early = fits_before_apex(control_s, spline)
+            if bad is None or not early:
+                break
+            nxt = shrink * 0.7
+            if approach_full * nxt < self.approach_floor_m:
+                break
+            shrink = nxt
+            control_s = np.concatenate(
+                (first_s + approach * shrink, np.asarray(hold_s, dtype=float),
+                 last_s + retreat))
+            spline = path_profile(apex_d)
+            self.get_logger().info(
+                f"pulling the approach in to {approach_full * shrink:.2f} m "
+                f"(from {approach_full:.2f} m): the wider one leaves the track "
+                f"before the apex at s={apex_s:.2f}. Later means tighter, so "
+                f"the controller will take this slower",
+                throttle_duration_sec=2.0)
+
         # Sampling starts AT THE CAR, not at the first control point.
         #
         # The approach knots reach 4*scale behind the leader, which is usually
