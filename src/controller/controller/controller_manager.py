@@ -109,6 +109,13 @@ class ControllerManager(Node):
             self._get_param('opponent_speed_valid_min_mps', 0.15))
         self.opponent_speed_valid_max_mps = float(
             self._get_param('opponent_speed_valid_max_mps', 6.0))
+        # [m] Centre-to-centre gap to hold behind a target the tracker calls
+        # STATIC, when single_opponent_mode is on. trailing_gap is tuned for a
+        # car that is driving away from us; a box is not, and the head-to-head
+        # value (0.8) puts the bumper about 0.39 m from a 0.5 m box. Only
+        # consulted in single_opponent_mode, so time trials keeps one gap.
+        self.trailing_gap_static = float(
+            self._get_param('trailing_gap_static', 2.5))
         self.trailing_rate_limit_enabled = bool(
             self._get_param('trailing_rate_limit_enabled', False))
 
@@ -265,6 +272,11 @@ class ControllerManager(Node):
                 setattr(self, name, param.value)
                 if self.controller is not None:
                     setattr(self.controller, name, param.value)
+            elif name == 'trailing_gap_static':
+                # Not an L1 param: the Controller has no such attribute. It is
+                # selected against trailing_gap per behaviour message, so only
+                # the manager's copy has to follow a live set.
+                self.trailing_gap_static = float(param.value)
             elif name in FTG_PARAMS:
                 self._apply_ftg_param(name, param.value)
             elif name == 'save_params' and param.value:
@@ -357,48 +369,87 @@ class ControllerManager(Node):
             opponent_visible = opponent.is_visible
             opponent_static = opponent.is_static
             opponent_id = int(opponent.id)
-            if self.single_opponent_mode and not opponent_static:
+            if self.single_opponent_mode:
                 now_sec = now.nanoseconds * 1e-9
-                # An upper bound as well as a lower one.
+                # THE HELD SPEED BELONGS TO ONE TARGET, and it used to belong
+                # to none.
                 #
-                # Only the lower one existed, so a single bad frame was
-                # accepted as a real reading, stored, and then HELD for
-                # opponent_speed_hold_sec. Trailing commands opponent speed
-                # minus a correction, so an impossible opponent speed makes
-                # the car accelerate towards it. Logged on the car:
-                # "opponent ID changed 47 -> 1000000; using continuous speed
-                # 269.88 m/s", which is 972 km/h, from a velocity computed
-                # across an id switch on a dt of nearly nothing.
-                #
-                # The tracker caps the same quantity for the dynamic stream
-                # with dynamic_speed_valid_max_mps, but that cap is on
-                # /tracking/dynamic_obstacles and this reads trailing_targets,
-                # which the state machine builds from /tracking/obstacles -
-                # a path the cap never covered. Keep the two numbers equal.
-                speed_is_valid = (
-                    np.isfinite(opponent_vs)
-                    and opponent_vs >= self.opponent_speed_valid_min_mps
-                    and opponent_vs <= self.opponent_speed_valid_max_mps
-                )
-                if speed_is_valid:
-                    self.last_valid_opponent_speed = opponent_vs
-                    self.last_valid_opponent_speed_at = now_sec
-                elif (
-                    self.last_valid_opponent_speed is not None
-                    and self.last_valid_opponent_speed_at is not None
-                    and now_sec - self.last_valid_opponent_speed_at
-                    <= self.opponent_speed_hold_sec
-                ):
-                    opponent_vs = self.last_valid_opponent_speed
+                # last_valid_opponent_speed was keyed on time alone, so when
+                # the trailing target changed - which it does constantly; 185
+                # changes in one run - the new object inherited the old one's
+                # speed. Trailing a car at 2 m/s and then switching to a box
+                # ahead of it commanded 2 m/s AT THE BOX: the box's own vs of
+                # ~0 fell under opponent_speed_valid_min_mps, was called an
+                # invalid reading, and was replaced by the car's. Nothing ever
+                # asked for the brakes. Dropping the hold on an id change is
+                # what makes it a hold on ONE opponent rather than on the
+                # trailing slot.
                 if (
                     self.last_opponent_id is not None
                     and self.last_opponent_id != opponent_id
                 ):
+                    self.last_valid_opponent_speed = None
+                    self.last_valid_opponent_speed_at = None
                     self.get_logger().warn(
-                        f'controller opponent ID changed '
+                        f'controller trailing target changed '
                         f'{self.last_opponent_id} -> {opponent_id}; '
-                        f'using continuous speed {opponent_vs:.2f} m/s')
+                        f'held speed dropped, reading {opponent_vs:.2f} m/s '
+                        f'from the new target',
+                        throttle_duration_sec=1.0)
                 self.last_opponent_id = opponent_id
+
+                # STOPPED IS A MEASUREMENT, NOT A FAILURE.
+                #
+                # The hold exists for a target whose speed could not be read
+                # this frame. A target the tracker calls static, or one
+                # reporting a speed near zero, HAS been read - the answer is
+                # "it is not moving", which is the single most important thing
+                # the brakes need to hear. Treating it as a dropout and
+                # substituting the last moving speed is how the car drove into
+                # a stationary box. Only genuinely unusable readings - not
+                # finite, or above what anything on this track can do - fall
+                # through to the hold now.
+                #
+                # The upper bound is the other half of the same lesson: with
+                # only a lower bound, one bad frame was stored and held. On the
+                # car, "using continuous speed 269.88 m/s" - 972 km/h, from a
+                # velocity computed across an id switch on a dt of nearly
+                # nothing. The tracker caps the dynamic stream with
+                # dynamic_speed_valid_max_mps; trailing_targets comes off
+                # /tracking/obstacles, which that cap never covered. Keep the
+                # two numbers equal.
+                unusable = (
+                    not np.isfinite(opponent_vs)
+                    or abs(opponent_vs) > self.opponent_speed_valid_max_mps
+                )
+                stopped = (
+                    opponent_static
+                    or (np.isfinite(opponent_vs)
+                        and abs(opponent_vs) < self.opponent_speed_valid_min_mps)
+                )
+                if unusable:
+                    if (
+                        self.last_valid_opponent_speed is not None
+                        and self.last_valid_opponent_speed_at is not None
+                        and now_sec - self.last_valid_opponent_speed_at
+                        <= self.opponent_speed_hold_sec
+                    ):
+                        opponent_vs = self.last_valid_opponent_speed
+                    else:
+                        opponent_vs = 0.0
+                elif stopped:
+                    # Believe it, and do not let it become the held speed.
+                    opponent_vs = 0.0 if opponent_static else opponent_vs
+                else:
+                    self.last_valid_opponent_speed = opponent_vs
+                    self.last_valid_opponent_speed_at = now_sec
+
+                # A box is not driving away from us, so it does not get the gap
+                # tuned for something that is. See trailing_gap_static.
+                if self.controller is not None:
+                    self.controller.trailing_gap = (
+                        self.trailing_gap_static if opponent_static
+                        else self.trailing_gap)
             self.opponent = [opponent_s, opponent_d, opponent_vs, opponent_static, opponent_visible]
         else:
             self.opponent = None

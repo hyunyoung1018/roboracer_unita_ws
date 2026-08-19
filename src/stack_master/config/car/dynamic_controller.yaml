@@ -25,3 +25,11 @@ controller_manager:
     # Keep equal to the tracker's dynamic_speed_valid_max_mps - the tracker
     # caps /tracking/dynamic_obstacles, this caps the trailing_targets path.
     opponent_speed_valid_max_mps: 6.0
+
+    # [m] Centre-to-centre gap behind a target the tracker calls STATIC.
+    #
+    # trailing_gap (0.8) is tuned for a car that is driving away from us. A box
+    # is not, and 0.8 leaves about 0.39 m of bumper gap to a 0.5 m box. This is
+    # time trials' number, used only when the target is static, so head to head
+    # keeps the tight gap for the opponent and the safe one for everything else.
+    trailing_gap_static: 2.5
