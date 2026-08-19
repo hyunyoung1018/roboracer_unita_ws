@@ -92,6 +92,6 @@ state_machine:
     overtake_min_closing_mps: 2.5
     ftg_speed_mps: 0.1
     ftg_timer_sec: 3.0
-    ftg_active: true
+    ftg_active: false
     force_RACELINE: false
     use_force_trailing: false

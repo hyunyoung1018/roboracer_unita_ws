@@ -214,7 +214,7 @@ spline_node:
     # between frames, so a bare comparison flipped sides several times a
     # second - and every flip is a completely different path, which the state
     # machine then rejects because the car is not on it.
-    side_hysteresis_m: 0.05
+    side_hysteresis_m: 0.1
 
     # [m] How far from the raceline an obstacle's near edge has to be before
     # this planner says the line already clears it and publishes nothing.
