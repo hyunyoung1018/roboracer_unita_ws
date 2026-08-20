@@ -26,7 +26,7 @@
        INPUT rather than a view: the first run on a new map waits 30 s for a
        "2D Pose Estimate" to set where the raceline starts. That is saved to
        track_meta.yaml and reused, so only a NEW MAP needs rviz:=true. -->
-  <arg name="rviz"    default="false"   description="Launch RViz. Needed the
+  <arg name="rviz"    default="true"   description="Launch RViz. Needed the
                                                      first time a map is used -
                                                      the start pose is clicked
                                                      in it."/>

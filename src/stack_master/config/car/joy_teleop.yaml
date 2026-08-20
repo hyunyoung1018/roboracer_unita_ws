@@ -60,7 +60,7 @@ joy_teleop:
           scale: 0.2954
           offset: 0.0
 
-    # Hold A to map: constant speed, steering still yours.
+    # Hold RB to map: constant speed, steering still yours.
     #
     # Mapping wants an even pass, and a thumb on a stick does not give one.
     # Speed sags in the corners, which is exactly where cartographer is
@@ -77,18 +77,18 @@ joy_teleop:
     # computes axes[axis] * scale + offset, so the stick is read and then
     # multiplied away. The axis still has to name a real one.
     #
-    # Do not hold A and LB together - both commands publish to the same topic
+    # Do not hold RB and LB together - both commands publish to the same topic
     # and they will fight.
     mapping_control:
       type: topic
       interface_type: ackermann_msgs/msg/AckermannDriveStamped
       topic_name: teleop
-      deadman_buttons: [0]
+      deadman_buttons: [5]
       axis_mappings:
         drive-speed:
           axis: 1
           scale: 0.0
-          offset: 0.8
+          offset: 1.0
         drive-steering_angle:
           axis: 3
           scale: 0.2954
