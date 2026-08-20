@@ -118,7 +118,7 @@ controller_manager:
     # a hard constraint and everything else is a preference, which is the
     # right way round here: brushing an obstacle costs nothing, leaving the
     # course costs the run.
-    ftg_use_map: false
+    ftg_use_map: true
     # [px] Erosion of the map FTG steers by, at 0.05 m/cell. 3 -> 0.05 m.
     # Deliberately under lane_change_planner's 7: that one keeps a planned
     # path off the boundary, this one only has to stop an escape leaving the

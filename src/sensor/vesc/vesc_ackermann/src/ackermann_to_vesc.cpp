@@ -53,8 +53,10 @@ namespace
 // Software hard stop in addition to the vesc_driver brake_max limit. Raising
 // this requires an intentional code/config change after physical validation.
 // The VESC's own Motor Current Max Brake (VESC Tool, not in this repo) still
-// caps whatever is asked for here.
-constexpr double kHardBrakeCurrentLimit = 30.0;
+// caps whatever is asked for here: measured 60 A on this car, so 50 A keeps
+// the firmware limit as the outermost ceiling rather than the one this code
+// races against. vesc.yaml's driver-side brake_max is kept in step with this.
+constexpr double kHardBrakeCurrentLimit = 50.0;
 }
 
 AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
@@ -75,6 +77,9 @@ AckermannToVesc::AckermannToVesc(const rclcpp::NodeOptions & options)
   // positive motor-phase current; VESC's negative Motor Current Max Brake is
   // the firmware-side limit, not the sign expected on this topic.
   brake_control_enabled_ = declare_parameter<bool>("brake_control_enabled", true);
+  // Deliberately weak fallbacks: vesc.yaml carries the tuned values and always
+  // overrides these, so a default that never runs on the car should be the
+  // conservative one for the case where the file is missing.
   brake_current_max_ = declare_parameter<double>("brake_current_max", 10.0);
   brake_current_start_ = declare_parameter<double>("brake_current_start", 5.0);
   brake_current_gain_ = declare_parameter<double>("brake_current_gain", 10.0);
@@ -143,7 +148,8 @@ rcl_interfaces::msg::SetParametersResult AckermannToVesc::onSetParameters(
   rcl_interfaces::msg::SetParametersResult result;
   result.successful = false;
   if (next_brake_current_max < 0.0 || next_brake_current_max > kHardBrakeCurrentLimit) {
-    result.reason = "brake_current_max must be in [0, 30] A";
+    result.reason = "brake_current_max must be in [0, " +
+      std::to_string(static_cast<int>(kHardBrakeCurrentLimit)) + "] A";
     return result;
   }
   if (next_brake_current_start < 0.0 ||

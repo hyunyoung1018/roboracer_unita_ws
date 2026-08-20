@@ -166,7 +166,7 @@ class ControllerManager(Node):
             bubble_m=self._get_param('ftg_bubble_m', 0.30),
             steer_ema=self._get_param('ftg_steer_ema', 0.0),
             max_steer=self._get_param('ftg_max_steer', 0.4),
-            use_map=self._get_param('ftg_use_map', False),
+            use_map=self._get_param('ftg_use_map', True),
             heading_step_deg=self._get_param('ftg_heading_step_deg', 2.0),
             map_probe_m=self._get_param('ftg_map_probe_m', 1.5),
             map_probe_step_m=self._get_param('ftg_map_probe_step_m', 0.15),

@@ -46,7 +46,7 @@ class FTG:
     # the whole reason this exists, and it sets the priority. Staying on the
     # map is HARD. Missing an obstacle is soft; brushing one costs nothing
     # here, and stopping costs the run.
-    USE_MAP = False                   # ftg_use_map
+    USE_MAP = True                   # ftg_use_map
     HEADING_STEP_DEG = 2.0            # candidate spacing, ftg_heading_step_deg
     MAP_PROBE_M = 1.5                 # how far a candidate is followed, ftg_map_probe_m
     MAP_PROBE_STEP_M = 0.15           # spacing along it, ftg_map_probe_step_m

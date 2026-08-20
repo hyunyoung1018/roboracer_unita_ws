@@ -3,4 +3,4 @@ start_pose:
   y: 1.4000002145767212
   theta: -1.542766271020937
 reverse: false
-start_pose_source: rviz
+start_pose_source: meta

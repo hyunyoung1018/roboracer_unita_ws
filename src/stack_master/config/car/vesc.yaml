@@ -68,11 +68,13 @@
     current_max: 100.0
     # /vesc/commands/motor/brake is a POSITIVE motor-phase current in amps
     # (COMM_SET_CURRENT_BRAKE). The old +/-200000 values were meaningless in
-    # this unit, so brake_limit_ in vesc_driver.cpp clipped nothing. 30 A is an
+    # this unit, so brake_limit_ in vesc_driver.cpp clipped nothing. 50 A is an
     # independent driver-side hard limit matching kHardBrakeCurrentLimit in
-    # ackermann_to_vesc.cpp - keep it even if the bridge is retuned.
+    # ackermann_to_vesc.cpp - keep the two in step even if the bridge is
+    # retuned. This car's VESC reads 60 A Motor Current Max Brake, so the
+    # firmware, not this file, stays the outermost ceiling.
     brake_min: 0.0
-    brake_max: 30.0
+    brake_max: 50.0
     # Sanity clamp on the ERPM command, in the only unit that means anything
     # here: 35400 = 8 m/s at the calibrated speed_to_erpm_gain above. Re-derive
     # it (4425 * v_max) if that gain is ever recalibrated, or this silently
@@ -109,17 +111,27 @@
     # this after the file, and it is live-togglable while driving:
     #   ros2 param set /vesc/ackermann_to_vesc_node brake_control_enabled true
     brake_control_enabled: true
-    # CAPPED AT 10 A until Motor Current Max Brake / Battery Current Max Regen
-    # are read out of this car's VESC in VESC Tool - those firmware limits, not
-    # this number, are the real ceiling on braking force. The donor team ran
-    # 30.0 after physical validation; kHardBrakeCurrentLimit (30 A, code) and
-    # brake_max above bound whatever ends up here.
-    brake_current_max: 10.0
-    # Donor team's tuned values (their code defaults max 10 / start 5 /
-    # gain 10 / ramp 100 were judged too weak on track). brake_current_ resets
-    # to 0 on release, so every stop ramps up from 0 A; at ~50 Hz commands
-    # (dt~0.02 s) the ramp rate dominates stopping time - 100 A/s reached 30 A
-    # in 0.3 s, 300 A/s in 0.1 s.
+    # 30 A, raised from the provisional 10 A now that this car's VESC has been
+    # read out in VESC Tool: Motor Current Max Brake is 60 A. That firmware
+    # number is the real ceiling on braking force; kHardBrakeCurrentLimit
+    # (50 A, code) and brake_max above sit between it and this value.
+    #
+    # Battery Current Max Regen is the OTHER firmware limit, and it is the one
+    # this pack cares about: regen current is roughly brake current * duty, so
+    # a 30 A brake applied at speed pushes most of that back into the 3S
+    # 8000 mAh LiPo. Its 120C rating is DISCHARGE - charge/regen on a pack like
+    # this is 1-5C, i.e. 8-40 A, and a near-full 3S also has little headroom
+    # before the VESC's overvoltage cutoff drops the brake mid-stop. Set
+    # Battery Current Max Regen explicitly in VESC Tool rather than leaving it
+    # at whatever the profile shipped with.
+    brake_current_max: 30.0
+    # At the old 10 A cap start/gain below never mattered: 8 + 15 * err reached
+    # 10 A at 0.13 m/s of error, under the 0.15 engage threshold, so every stop
+    # was a flat 10 A. With the cap at 30 A the curve is live again and
+    # saturates at ~1.5 m/s of error. brake_current_ resets to 0 on release, so
+    # every stop ramps up from 0 A; at ~50 Hz commands (dt~0.02 s) the ramp
+    # rate dominates stopping time - 100 A/s reached 30 A in 0.3 s, 300 A/s in
+    # 0.1 s.
     brake_current_start: 8.0        # first-contact target current [A]
     brake_current_gain: 15.0        # A per m/s of speed error; start+gain*err
     brake_current_ramp_rate: 300.0  # A/s
