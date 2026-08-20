@@ -39,6 +39,22 @@ state_machine:
     # this is a ceiling on the list, not the thing that limits acquisition.
     interest_horizon_m: 9.0
 
+    # [m] How far ahead of the car the static avoidance path may begin and
+    # still be accepted, with the raceline filling the gap.
+    #
+    # spline samples from max(control_s[0], car_s), so while the car is still
+    # behind the first approach knot the path starts 4*scale metres before the
+    # obstacle, scale = clip(1 + v/v_max, 1, 1.5). The shared on-spline test
+    # wants the car within on_spline_min_dist_thres_m (1.5 m) of it, which
+    # happens around 7.5 m of gap - while trailing has been braking since
+    # 11.8 m at 3 m/s. Those four metres are the window where the planner has
+    # already drawn a path and the state machine will not take it.
+    #
+    # Raise it and the car commits to an avoidance further out; lower it
+    # towards 0 and the old brake-then-swerve comes back. Only ever used while
+    # the car is on the raceline, because the gap is filled with raceline.
+    static_path_lead_in_m: 4.0
+
     # [m] _check_enemy_in_front, which is what refreshes the OVERTAKE TTL. At
     # 15.0 on a 21.9 m lap the answer was almost always yes, so the TTL never
     # expired and OVERTAKE was held by a car on the far side of the track.

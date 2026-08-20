@@ -97,6 +97,19 @@ class H2HStateMachine(StateMachine):
         # target this should offer either.
         self.trailing_lateral_threshold_m = float(
             self._get_or_declare("trailing_lateral_threshold_m", 0.6))
+        # [m] How far AHEAD of the car the static avoidance path may begin and
+        # still count as usable. See _check_on_spline and get_splini_wpts.
+        #
+        # Sized from the geometry it exists to cover. spline samples from
+        # max(control_s[0], car_s), so while the car is still behind the first
+        # approach knot the path begins 4*scale metres before the obstacle,
+        # with scale = clip(1 + v/v_max, 1, 1.5). The shared on-spline test
+        # demands the car be within on_spline_min_dist_thres_m (1.5 m) of it,
+        # which is only true from about 4*1.5 + 1.5 = 7.5 m out - while
+        # trailing has been braking since 11.8 m at 3 m/s. 4.0 covers the whole
+        # of that window and stops well short of the 9 m the car can even see.
+        self.static_path_lead_in_m = float(
+            self._get_or_declare("static_path_lead_in_m", 4.0))
         self._last_gb_blocked_at = None
         self._last_trailing_target = None
         self._last_trailing_target_at = None
@@ -997,6 +1010,107 @@ class H2HStateMachine(StateMachine):
                 self._remember_trailing_target(fallback_target)
             return False
         return True
+
+    def _static_path_lead_in(self, wpnt_data):
+        """Metres from the car to the start of a path that begins ahead of it.
+
+        None when that is not the situation - no path, not the static cache,
+        or a path that already starts at or behind the car.
+        """
+        if wpnt_data is not self.cur_static_avoidance_wpnts:
+            return None
+        if not wpnt_data.is_init or not len(wpnt_data.list):
+            return None
+        if self.max_s is None or self.max_s <= 0.0:
+            return None
+        lead_in = (float(wpnt_data.list[0].s_m) - self.cur_s) % self.max_s
+        # A path that starts behind us is the ordinary case the shared test
+        # already handles; only a genuine gap in front is this one.
+        if lead_in <= 0.0 or lead_in > self.static_path_lead_in_m:
+            return None
+        return lead_in
+
+    def _check_on_spline(self, wpnt_data) -> bool:
+        """Also accept a static avoidance path that starts a few metres ahead.
+
+        The shared test asks whether the car is within
+        on_spline_min_dist_thres_m of the path. For the static avoidance path
+        that is not "is this path mine", it is "have I arrived at it yet", and
+        the answer is no for several metres longer than it should be.
+
+        spline samples from max(control_s[0], car_s), so while the car is
+        behind the first approach knot the published path starts 4*scale
+        metres before the obstacle. At scale 1.5 the car is therefore not
+        within 1.5 m of it until roughly 7.5 m of gap - but trailing has been
+        commanding a brake since 11.8 m (P 0.5, D 0.25, vel_gain 0.10,
+        trailing_gap 2.0, 3 m/s behind a stationary box). Four metres of
+        braking for an obstacle the planner has already drawn a way around,
+        which _check_latest_wpnts refuses only because the car has not reached
+        the drawing yet.
+
+        Nothing is filled in here - this decides acceptance only. What the car
+        drives over the gap is get_splini_wpts' problem, and the two have to
+        change together: accepting the path without the raceline lead-in puts
+        local_wpnts several metres in front of the car, and the controller's
+        AEB_for_weird_local_wpnt clamps to 2.0 m/s whenever the nearest local
+        waypoint is further than AEB_thres (0.5 m). That trades one
+        deceleration for another.
+
+        Only widened while the car is on the raceline. The lead-in is built
+        out of raceline waypoints, so it is a truthful description of what the
+        car will do only if the car is on the raceline to begin with; off it,
+        the shared answer stands and RECOVERY keeps its job.
+        """
+        if super()._check_on_spline(wpnt_data):
+            return True
+        if self._static_path_lead_in(wpnt_data) is None:
+            return False
+        if not self._check_close_to_raceline():
+            return False
+        # The path still has to extend past us, same as the shared test wants.
+        gap = (float(wpnt_data.list[-1].s_m) - self.cur_s) % self.max_s
+        return bool(gap > wpnt_data.on_spline_front_horizon_thres_m)
+
+    def get_splini_wpts(self):
+        """Fill the gap between the car and a path that starts ahead of it.
+
+        The shared version picks the nearest point of the avoidance path and
+        slices forward from there, so when the path begins three metres ahead
+        the published local path does too, and the controller sees its nearest
+        waypoint three metres away. AEB_for_weird_local_wpnt then clamps the
+        command to 2.0 m/s - the deceleration this whole change exists to
+        remove, arriving through a different door.
+
+        So prepend the raceline the car is already on, from where the car is
+        to where the avoidance path starts. This is the same operation the
+        shared code already performs at the other end: when the avoidance path
+        runs out before n_loc_wpnts it extends the tail with cur_gb_wpnts. Only
+        the head was missing.
+
+        The avoidance path itself is untouched - not extended, not resampled,
+        not replanned. spline_node.py is what time_trials runs and it is not
+        involved at all.
+        """
+        wpnts = super().get_splini_wpts()
+        if not wpnts:
+            return wpnts
+        lead_in = self._static_path_lead_in(self.cur_static_avoidance_wpnts)
+        if lead_in is None:
+            return wpnts
+        # Only when the slice really did start at the path's own first point;
+        # if the car is already inside the path there is no gap to fill.
+        if float(wpnts[0].s_m) != float(self.cur_static_avoidance_wpnts.list[0].s_m):
+            return wpnts
+        if not self.num_glb_wpnts or self.waypoints_dist <= 0.0:
+            return wpnts
+
+        start = int(self.cur_s / self.waypoints_dist + 0.5)
+        count = int(lead_in / self.waypoints_dist)
+        if count <= 0:
+            return wpnts
+        prefix = [self.cur_gb_wpnts.list[(start + i) % self.num_glb_wpnts]
+                  for i in range(count)]
+        return (prefix + wpnts)[:self.n_loc_wpnts]
 
     def get_farthest_target(self, local_wpnts_src):
         """Never publish TRAILING without a usable opponent target."""
