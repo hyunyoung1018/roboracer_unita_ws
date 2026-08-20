@@ -80,6 +80,22 @@ class H2HStateMachine(StateMachine):
         # keep the planner on.
         self.dynamic_avoidance_enabled = bool(
             self._get_or_declare("dynamic_avoidance_enabled", True))
+        # [m/s] How much faster than the opponent this car has to be CAPABLE
+        # of going before a dynamic overtake may arm. Measured against the
+        # scaled raceline, not against the current speed - see
+        # _check_getting_closer for why the current speed cannot carry a
+        # positive bar.
+        #
+        # The floor is arithmetic: 1 m of car-plus-margin over a 2 s
+        # prediction horizon needs 0.5 m/s. 1.0 doubles it, because the
+        # horizon is the OPTIMISTIC case - the lane-change planner validates
+        # only prediction_span_m (3 m) of the opponent's future, and a pass
+        # that runs past that finishes on a prediction nobody checked.
+        #
+        # Lower it to overtake more; the cost is time spent alongside a car
+        # whose next move is not covered by any check that was run.
+        self.overtake_min_speed_advantage_mps = float(
+            self._get_or_declare("overtake_min_speed_advantage_mps", 1.0))
         # [m] How far off the raceline an obstacle may sit and still be
         # something this car trails or plans around. Beyond it, it is scenery.
         #
@@ -238,6 +254,14 @@ class H2HStateMachine(StateMachine):
         ``threshold_m`` was also accepted and then ignored, so the 10 m the
         dynamic branch asks for and the 7 m the static branch asks for were the
         same test.
+
+        AND it now asks a second question, because the first one cannot be
+        asked while trailing. See _raceline_speed_here.
+
+        Head to head only, and dynamic only: the static branch stopped calling
+        this when it moved to _closing_on_nearest_avoidable, which deliberately
+        does not read the target's speed at all. A box does not need to be
+        slower than the car to be worth driving around.
         """
         _, target = nearest_ahead(
             self.cur_obstacles_in_interest,
@@ -247,7 +271,73 @@ class H2HStateMachine(StateMachine):
         )
         if target is None:
             return False
-        return bool(self.cur_vs - float(target.vs) > -0.5)
+        opponent_vs = float(target.vs)
+
+        # ONE: not actually losing ground. The original test, unchanged.
+        #
+        # This is what catches "the car is crawling round a box at the
+        # static planner's max_speed_mps while the opponent drives away" -
+        # a case the potential-advantage test below cannot see, because the
+        # raceline does not know the car is mid-evasion.
+        if not (self.cur_vs - opponent_vs > -0.5):
+            return False
+
+        # TWO: a real speed advantage exists, whether or not it is being used.
+        #
+        # The test above cannot carry a positive threshold, and that is not a
+        # tuning choice - it is arithmetic. Trailing's whole job is to drive
+        # the ego at the opponent's speed, so once the gap has settled
+        # cur_vs - opponent_vs is ZERO by construction. Any bar above zero
+        # would shut the gate exactly when trailing is working, which is
+        # exactly when an overtake is wanted. Hence the raceline speed: what
+        # this car could do here if nothing were holding it back.
+        #
+        # WHY A BAR AT ALL. Time spent alongside is (car length + margin) /
+        # speed advantage, about 1 m over the advantage. The predictor's
+        # horizon is 2 s and the lane-change planner only validates
+        # prediction_span_m (3 m) of the opponent's future, so an overtake
+        # that takes longer than that finishes outside anything that was
+        # checked. 1.0 / 2.0 = 0.5 m/s is the arithmetic floor;
+        # overtake_min_speed_advantage_mps is set above it.
+        advantage = self._raceline_speed_here()
+        if advantage is None:
+            # No raceline speed to judge by. Fall back to the measured speed,
+            # which is the conservative direction - it is never higher than
+            # the raceline's.
+            advantage = self.cur_vs
+        advantage -= opponent_vs
+        minimum = self.overtake_min_speed_advantage_mps
+        if advantage < minimum:
+            self.get_logger().info(
+                "dynamic overtake refused: only "
+                f"{advantage:+.2f} m/s of speed advantage over the opponent "
+                f"({opponent_vs:.2f} m/s), under the {minimum:.2f} m/s floor - "
+                "there is no room to complete a pass inside the prediction "
+                "horizon",
+                throttle_duration_sec=2.0)
+            return False
+        return True
+
+    def _raceline_speed_here(self):
+        """What the raceline asks for at the car's own s, or None.
+
+        /global_waypoints_scaled, so speed_scaling.yaml is already baked in -
+        this is the speed the car would actually be driving here, not the
+        unscaled optimiser output.
+
+        The car's own s rather than the obstacle's: the question is "what is
+        holding me at this speed", and the honest comparison against
+        cur_vs is at the same point on the track.
+        """
+        if not self.num_glb_wpnts or self.waypoints_dist <= 0.0:
+            return None
+        wpnts = getattr(getattr(self, "gb_wpnts", None), "wpnts", None)
+        if not wpnts:
+            return None
+        index = int(self.cur_s / self.waypoints_dist) % self.num_glb_wpnts
+        if index >= len(wpnts):
+            return None
+        return float(wpnts[index].vx_mps)
 
     def _check_overtaking_mode(self) -> bool:
         """Let the predictor veto ENTERING an overtake.

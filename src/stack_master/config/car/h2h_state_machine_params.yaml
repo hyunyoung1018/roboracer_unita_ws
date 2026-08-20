@@ -80,6 +80,28 @@ state_machine:
     # it anywhere its footprint fits the track, which is wider than this.
     trailing_lateral_threshold_m: 0.6
 
+    # [m/s] Speed advantage a dynamic overtake needs before it may arm, taken
+    # against the SCALED raceline speed at the car's own s rather than against
+    # its current speed.
+    #
+    # It cannot be measured against the current speed, and that is arithmetic
+    # rather than tuning: trailing drives the ego at the opponent's speed, so
+    # once the gap settles the difference is zero and any positive bar would
+    # shut the gate exactly when trailing is working. The raceline says what
+    # this car could do here with nothing in the way.
+    #
+    # Time spent alongside is about (car length + margin) / advantage, so 1 m
+    # over a 2 s prediction horizon puts the floor at 0.5 m/s. 1.0 is double
+    # that, because 2 s is the optimistic figure - the lane-change planner
+    # validates only 3 m of the opponent's future (prediction_span_m), and a
+    # pass that outlasts that ends on a prediction nothing checked.
+    #
+    # The old gate (cur_vs - opponent_vs > -0.5) is unchanged and still runs
+    # first; this is an additional condition, not a replacement. That one
+    # catches "already losing ground", which this one cannot see - the
+    # raceline does not know the car is crawling round a box.
+    overtake_min_speed_advantage_mps: 1.0
+
     # --- dynamic avoidance planner (lane_change) -----------------------------
     # These keys live in state_machine/config/planners/dynamic_avoidance_planner.yaml
     # for both launches; overriding them here keeps that file - and therefore

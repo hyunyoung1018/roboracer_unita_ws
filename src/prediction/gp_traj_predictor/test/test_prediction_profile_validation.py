@@ -75,26 +75,32 @@ def test_profile_outside_physical_corridor_forces_trailing():
 
 # --- constant-velocity authorization -----------------------------------------
 
-def _authorizer(ego_vs, params=None):
+def _authorizer(ego_vs, params=None, raceline_mps=3.5):
     """Bind OpponentPredictor's unbound method to a minimal stand-in."""
     from types import SimpleNamespace
     values = {
         'fallback_min_opponent_speed_mps': 0.30,
-        'fallback_min_closing_mps': 0.25,
+        'fallback_max_losing_mps': 0.5,
+        'fallback_min_speed_advantage_mps': 1.0,
         'opponent_width': 0.28,
         'trajectory_boundary_margin': 0.03,
         'n_time_steps': 10,
         'dt': 0.10,
     }
     values.update(params or {})
-    wpnts = [SimpleNamespace(s_m=s, d_left=0.9, d_right=0.9)
+    wpnts = [SimpleNamespace(s_m=s, d_left=0.9, d_right=0.9, vx_mps=raceline_mps)
              for s in [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]]
-    return SimpleNamespace(
+    stand_in = SimpleNamespace(
         ego_vs=ego_vs,
+        ego_s=0.0,
         track_length=21.9,
         global_msg=SimpleNamespace(wpnts=wpnts),
+        scaled_msg=None,
         get_parameter=lambda name: SimpleNamespace(value=values[name]),
     )
+    stand_in._raceline_speed_at = (
+        lambda s_m: OpponentPredictor._raceline_speed_at(stand_in, s_m))
+    return stand_in
 
 
 def _obstacle(vs, obstacle_id=1000000):
@@ -118,11 +124,54 @@ def test_constvel_refuses_a_near_stopped_opponent():
     assert status == 'CONSTVEL_OPPONENT_TOO_SLOW'
 
 
-def test_constvel_refuses_when_not_closing():
+def test_constvel_allows_a_settled_trail():
+    """The case the old gate could never pass, and the reason for the change.
+
+    Trailing drives the ego at the opponent's speed, so a settled trail has
+    ego_vs == opponent_vs and a closing speed of exactly zero. The old bar
+    (closing >= 0.25) refused that, force_trailing went true, and the state
+    machine's entry was vetoed on top - so the one situation an overtake is
+    for was the one situation it could not be authorized in.
+    """
     ok, status, _ = OpponentPredictor._fallback_authorized(
-        _authorizer(ego_vs=1.6), _obstacle(1.5), [0.0, 1.0], [0.0, 0.0])
+        _authorizer(ego_vs=1.5, raceline_mps=3.5),
+        _obstacle(1.5), [0.0, 1.0], [0.0, 0.0])
+    assert ok is True
+    assert status == 'CONSTVEL_READY'
+
+
+def test_constvel_refuses_when_actively_losing_ground():
+    # What the closing test still answers: the ego crawling round a static
+    # obstacle while the opponent drives away. The raceline cannot see this -
+    # it does not know the car is mid-evasion.
+    ok, status, _ = OpponentPredictor._fallback_authorized(
+        _authorizer(ego_vs=0.8, raceline_mps=3.5),
+        _obstacle(1.5), [0.0, 1.0], [0.0, 0.0])
     assert ok is False
     assert status == 'CONSTVEL_NOT_CLOSING'
+
+
+def test_constvel_refuses_without_a_speed_advantage():
+    # Fast opponent: the ego is keeping up but could never get past. Time
+    # alongside is (car + margin) / advantage, and at 0.3 m/s that is more
+    # than three seconds - past the 2 s the prediction covers.
+    ok, status, _ = OpponentPredictor._fallback_authorized(
+        _authorizer(ego_vs=2.8, raceline_mps=3.1),
+        _obstacle(2.8), [0.0, 1.0], [0.0, 0.0])
+    assert ok is False
+    assert status == 'CONSTVEL_NO_SPEED_ADVANTAGE'
+
+
+def test_constvel_falls_back_to_the_measured_speed_without_a_raceline():
+    # No waypoints yet: judge on ego_vs, which is never higher than the
+    # raceline's, so the fallback can only refuse more.
+    from types import SimpleNamespace
+    stand_in = _authorizer(ego_vs=3.0)
+    stand_in.global_msg = SimpleNamespace(wpnts=[])
+    ok, status, _ = OpponentPredictor._fallback_authorized(
+        stand_in, _obstacle(2.5), [0.0, 1.0], [0.0, 0.0])
+    assert ok is False
+    assert status == 'CONSTVEL_NO_SPEED_ADVANTAGE'
 
 
 def test_constvel_refuses_a_prediction_outside_the_track():

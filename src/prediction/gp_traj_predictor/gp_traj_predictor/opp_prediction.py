@@ -153,9 +153,37 @@ class OpponentPredictor(Node):
             # about to be reclassified STATIC by the router anyway, and static
             # avoidance is the correct planner for a stopped car.
             'fallback_min_opponent_speed_mps': 0.30,
-            # [m/s] Ego must actually be closing. Without this the car commits to
-            # an evasion it cannot complete and rides the corridor for a whole lap.
-            'fallback_min_closing_mps': 0.25,
+            # [m/s] How far the ego may be LOSING ground and still be allowed
+            # to pass, as a negative number read through `closing >= -this`.
+            #
+            # It was 0.25 the other way round - "ego must actually be closing" -
+            # and that could never be satisfied. Trailing drives the ego at the
+            # opponent's speed, so once the gap settles `ego_vs - opponent_vs`
+            # is zero by construction and 0.25 shut the gate exactly when
+            # trailing was working. Every authorization then failed
+            # CONSTVEL_NOT_CLOSING, force_trailing stayed true, and the state
+            # machine's own entry gate was vetoed on top of it.
+            #
+            # The claim it was making - "this pass can be completed" - is now
+            # made properly by fallback_min_speed_advantage_mps below, against
+            # a speed that trailing does not suppress. What is left here is the
+            # narrower question this measurement CAN answer: is the car falling
+            # behind right now, whatever the raceline says it could do. Matches
+            # the state machine's own -0.5.
+            'fallback_max_losing_mps': 0.5,
+            # [m/s] Speed advantage the ego must be CAPABLE of before a
+            # constant-velocity prediction may authorize a pass, measured
+            # against the scaled raceline at the ego's s.
+            #
+            # Time spent alongside is about (car length + margin) / advantage,
+            # so 1 m over the 2 s prediction horizon is a 0.5 m/s floor. 1.0
+            # doubles it because 2 s is optimistic - the lane-change planner
+            # validates only prediction_span_m of the opponent's future.
+            #
+            # Kept equal to the state machine's overtake_min_speed_advantage_mps
+            # on purpose. This node vetoes through force_trailing, so a stricter
+            # bar here would silently become the binding one.
+            'fallback_min_speed_advantage_mps': 1.0,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -163,6 +191,7 @@ class OpponentPredictor(Node):
         self.ego_s = None
         self.ego_vs = None
         self.global_msg = None
+        self.scaled_msg = None
         self.updated_msg = None
         self.center_msg = None
         self.track_length = None
@@ -196,6 +225,12 @@ class OpponentPredictor(Node):
         self.create_subscription(
             Odometry, '/car_state/odom_frenet', self._odom_cb, 10)
         self.create_subscription(WpntArray, '/global_waypoints', self._global_cb, 10)
+        # Speeds only, and the SCALED ones: speed_scaling.yaml is baked into
+        # this topic, so it is what the car would actually drive here.
+        # /global_waypoints above carries the unscaled optimiser output,
+        # which would overstate the advantage by 1/scaling.
+        self.create_subscription(
+            WpntArray, '/global_waypoints_scaled', self._scaled_cb, 10)
         self.create_subscription(
             WpntArray, '/global_waypoints_updated', self._updated_cb, 10)
         self.create_subscription(
@@ -224,6 +259,22 @@ class OpponentPredictor(Node):
         y = np.asarray([w.y_m for w in msg.wpnts], dtype=float)
         psi = np.asarray([w.psi_rad for w in msg.wpnts], dtype=float)
         self.converter = FrenetConverter(x, y, psi)
+
+    def _scaled_cb(self, msg):
+        if msg.wpnts:
+            self.scaled_msg = msg
+
+    def _raceline_speed_at(self, s_m):
+        """Scaled raceline speed at ``s_m``, or None if it is not known yet."""
+        msg = self.scaled_msg or self.global_msg
+        if msg is None or not msg.wpnts or not self.track_length:
+            return None
+        wpnts = msg.wpnts
+        spacing = self.track_length / len(wpnts)
+        if spacing <= 0.0:
+            return None
+        index = int((float(s_m) % self.track_length) / spacing) % len(wpnts)
+        return float(wpnts[index].vx_mps)
 
     def _updated_cb(self, msg):
         if msg.wpnts:
@@ -375,12 +426,38 @@ class OpponentPredictor(Node):
 
         if self.ego_vs is None:
             return False, 'CONSTVEL_NO_EGO_SPEED', {}
+
+        # ONE: not falling behind right now. Narrow on purpose - this is the
+        # only thing the measured speed can say while trailing is holding it
+        # at the opponent's. It catches the ego crawling round a static
+        # obstacle at the static planner's max_speed_mps, which the raceline
+        # test below cannot see.
         closing = float(self.ego_vs) - speed
-        min_closing = float(self.get_parameter('fallback_min_closing_mps').value)
-        if closing < min_closing:
+        max_losing = float(self.get_parameter('fallback_max_losing_mps').value)
+        if closing < -max_losing:
             return False, 'CONSTVEL_NOT_CLOSING', {
                 'closing_mps': round(closing, 3),
-                'limit_mps': min_closing,
+                'limit_mps': round(-max_losing, 3),
+            }
+
+        # TWO: a pass is completable at all. Against the scaled raceline,
+        # because trailing suppresses the measured speed to the opponent's by
+        # design and no positive bar on that difference can ever be met.
+        raceline_speed = self._raceline_speed_at(self.ego_s) \
+            if self.ego_s is not None else None
+        if raceline_speed is None:
+            # Fall back to the measured speed, which is never higher than the
+            # raceline's - the conservative direction.
+            raceline_speed = float(self.ego_vs)
+        advantage = raceline_speed - speed
+        min_advantage = float(
+            self.get_parameter('fallback_min_speed_advantage_mps').value)
+        if advantage < min_advantage:
+            return False, 'CONSTVEL_NO_SPEED_ADVANTAGE', {
+                'advantage_mps': round(advantage, 3),
+                'raceline_mps': round(raceline_speed, 3),
+                'opponent_vs': round(speed, 3),
+                'limit_mps': min_advantage,
             }
 
         inside, _, detail = profile_inside_track(

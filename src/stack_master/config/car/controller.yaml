@@ -87,7 +87,7 @@ controller_manager:
     # live-tunable via rqt. Beam/FOV independent (no beam-count params).
     ftg_debug: true
     ftg_max_lidar_dist: 4.0      # NaN / no-return beams clipped to this [m]
-    ftg_max_speed: 2.5           # top speed; speed schedule scales off this [m/s]
+    ftg_max_speed: 1.5           # top speed; speed schedule scales off this [m/s]
     ftg_track_width: 2.0         # returns closer than half this are ignored [m]
     ftg_front_fov_deg: 80.0      # TOTAL front field of view considered [deg] (+-45)
     ftg_smooth_deg: 1.0          # scan smoothing window width [deg]
