@@ -34,7 +34,6 @@ def machine(obstacles, opponents=(), cur_vs=1.0, cur_s=0.0, stamp=0.0):
     m.cur_vs = cur_vs
     m.max_s = TRACK
     m.track_length = TRACK
-    m.static_path_dynamic_margin_m = 1.5
     m.trailing_lateral_threshold_m = 0.6
     m.opponent_stream_timeout_sec = 0.5
     m._opponent_obstacles = list(opponents)
@@ -118,40 +117,57 @@ def test_the_targets_own_speed_is_never_read():
     assert closing([obstacle(3.0, vs=5.0)])
 
 
-# ------------------------------------------- the distant-opponent excuse
-def record(rec_id, gap, blocked):
-    return {"id": rec_id, "gap": gap, "blocked": blocked, "branch": "geom"}
+# ----------------------------------------------------- the opponent excuse
+#
+# The static path says WHERE to drive; the trailing controller says HOW CLOSE
+# to get. A box cannot be trailed past, so it keeps its veto. The opponent can,
+# so it loses one. Measured 2026-08-19 over thirteen laps: 37 of 60 aborted
+# evasions were path_free refusals and 28 of those named the selected opponent
+# - every one of them NEARER than the box, which is what trailing means, and
+# which the old distance form of this excuse could never reach.
+def record(rec_id, gap, blocked, free_dist=None):
+    return {"id": rec_id, "gap": gap, "blocked": blocked, "branch": "geom",
+            "free_dist": free_dist}
 
 
-def excused(records, opponents=(), margin=1.5, cur_s=0.0):
+def excused(records, opponents=(), cur_s=0.0):
     m = machine([], opponents, cur_s=cur_s)
-    m.static_path_dynamic_margin_m = margin
     cache = SimpleNamespace(free_dbg={"is_init": True, "obs": records})
-    return H2HStateMachine._blocked_only_by_distant_dynamics(m, cache)
+    return H2HStateMachine._blocked_only_by_the_opponent(m, cache)
 
 
-def test_a_distant_opponent_stops_vetoing_the_path():
-    # Box at 3 m is what the path is for; opponent at 6 m is past it + 1.5.
+def test_an_opponent_between_the_car_and_the_box_no_longer_refuses():
+    """The trailing case, and the whole point of the change.
+
+    Box at 3 m is what the path is for; the opponent at 1 m is between the car
+    and it. The old form refused here - correctly under its own reasoning, and
+    it is why static avoidance never armed while trailing.
+    """
+    assert excused([record(1, 3.0, False), record(2, 1.0, True)],
+                   opponents=[obstacle(1.0)])
+
+
+def test_a_distant_opponent_still_stops_vetoing():
     assert excused([record(1, 3.0, False), record(2, 6.0, True)],
                    opponents=[obstacle(6.0)])
 
 
-def test_an_opponent_between_the_car_and_the_box_still_refuses():
-    # The trailing case: swerving here drives into the opponent.
-    assert not excused([record(1, 3.0, False), record(2, 1.0, True)],
-                       opponents=[obstacle(1.0)])
-
-
-def test_an_opponent_just_past_the_box_still_refuses():
-    assert not excused([record(1, 3.0, False), record(2, 4.0, True)],
-                       opponents=[obstacle(4.0)])
+def test_an_opponent_just_past_the_box_no_longer_refuses():
+    assert excused([record(1, 3.0, False), record(2, 4.0, True)],
+                   opponents=[obstacle(4.0)])
 
 
 def test_a_blocking_box_always_refuses():
-    # The case the is_static version could get wrong: a second box blocking,
-    # misread as dynamic. It is not the opponent, so it still refuses.
+    # A box does not move, so no gap controller gets the car past it. This is
+    # the case the excuse must never reach, at any distance.
     assert not excused([record(1, 3.0, True), record(2, 6.0, True)],
                        opponents=[obstacle(6.0)])
+
+
+def test_a_box_and_the_opponent_together_still_refuse():
+    # Mixture: the opponent alone would be excused, the box drags it back.
+    assert not excused([record(1, 3.0, True), record(2, 1.0, True)],
+                       opponents=[obstacle(1.0)])
 
 
 def test_no_opponent_means_no_excuse():
@@ -165,13 +181,46 @@ def test_nothing_blocked_is_not_this_functions_business():
 def test_an_uninitialised_cache_is_never_excused():
     m = machine([], [obstacle(6.0)])
     cache = SimpleNamespace(free_dbg={"is_init": False, "obs": []})
-    assert not H2HStateMachine._blocked_only_by_distant_dynamics(m, cache)
+    assert not H2HStateMachine._blocked_only_by_the_opponent(m, cache)
 
 
-def test_the_margin_is_tunable():
-    far = [record(1, 3.0, False), record(2, 6.0, True)]
-    assert excused(far, opponents=[obstacle(6.0)], margin=1.5)
-    assert not excused(far, opponents=[obstacle(6.0)], margin=4.0)
+def test_a_stale_opponent_stream_excuses_nobody():
+    # No live opponent to name, so the refusal stands.
+    m = machine([], [obstacle(1.0)], stamp=-10.0)
+    cache = SimpleNamespace(
+        free_dbg={"is_init": True, "obs": [record(1, 1.0, True)]})
+    assert not H2HStateMachine._blocked_only_by_the_opponent(m, cache)
+
+
+# ------------------------------------- and the same opponent out of the floor
+def worst(records, opponents=(), is_static_cache=True):
+    m = machine([], opponents)
+    cache = SimpleNamespace(free_dbg={"is_init": True, "obs": records})
+    m.cur_static_avoidance_wpnts = cache if is_static_cache else object()
+    return H2HStateMachine._worst_free(m, cache)
+
+
+def test_the_opponent_is_left_out_of_the_static_paths_worst_clearance():
+    # Without this the veto only moves: is_free is excused, then the same
+    # opponent refuses through static_overtake_min_clearance_m.
+    records = [record(1, 3.0, True, free_dist=0.10),
+               record(2, 1.0, True, free_dist=-0.30)]
+    assert worst(records, opponents=[obstacle(1.0)]) == 0.10
+
+
+def test_the_box_still_sets_the_worst_clearance():
+    records = [record(1, 3.0, True, free_dist=-0.05),
+               record(2, 1.0, True, free_dist=-0.30)]
+    assert worst(records, opponents=[obstacle(1.0)]) == -0.05
+
+
+def test_another_cache_keeps_the_shared_answer():
+    # The raceline's own number must NOT be filtered - an opponent on it is
+    # exactly what makes the car trail, and _worth_driving compares against it.
+    records = [record(1, 3.0, True, free_dist=0.10),
+               record(2, 1.0, True, free_dist=-0.30)]
+    assert worst(records, opponents=[obstacle(1.0)],
+                 is_static_cache=False) == -0.30
 
 
 # ----------------------------------------- the gate must see as far as we do

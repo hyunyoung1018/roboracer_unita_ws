@@ -80,19 +80,6 @@ class H2HStateMachine(StateMachine):
         # keep the planner on.
         self.dynamic_avoidance_enabled = bool(
             self._get_or_declare("dynamic_avoidance_enabled", True))
-        # [m] How far PAST the static obstacle a moving one has to be before it
-        # stops vetoing the static avoidance path. See
-        # _blocked_only_by_distant_dynamics.
-        #
-        # The static path holds its offset across the box and returns to the
-        # raceline about a metre later, so anything inside that is still on the
-        # manoeuvre and must keep refusing it. 1.5 m puts the boundary past the
-        # return leg with room for the opponent to have moved between the check
-        # and the car arriving. Raise it to be more conservative - the cost is
-        # the car trailing behind a box it could pass; lower it and the car will
-        # pull out with the opponent closer to its rejoin point.
-        self.static_path_dynamic_margin_m = float(
-            self._get_or_declare("static_path_dynamic_margin_m", 1.5))
         # [m] How far off the raceline an obstacle may sit and still be
         # something this car trails or plans around. Beyond it, it is scenery.
         #
@@ -426,7 +413,7 @@ class H2HStateMachine(StateMachine):
                      is actually planning around, rather than the nearest
                      obstacle of any kind - see _closing_on_nearest_avoidable.
           path_free  a distant opponent no longer vetoes it - see
-                     _blocked_only_by_distant_dynamics. That correction lives
+                     _blocked_only_by_the_opponent. That correction lives
                      in _check_free_frenet so that OVERTAKE's per-tick
                      sustainability check gets it too, not just this entry gate.
 
@@ -801,40 +788,52 @@ class H2HStateMachine(StateMachine):
         return all(
             rec.get("branch") == "dyn/nopred/beyond_path" for rec in blocked)
 
-    def _blocked_only_by_distant_dynamics(self, wpnts_data) -> bool:
-        """Was the STATIC avoidance path refused only by a far-off opponent?
+    def _blocked_only_by_the_opponent(self, wpnts_data) -> bool:
+        """Was the STATIC avoidance path refused only by the selected opponent?
 
         The sibling of _blocked_only_beyond_path, for the opponent that is
         inside the path rather than past its end.
 
-        The static avoidance path exists to get around one static obstacle. It
-        leaves the raceline before it, holds an offset past it, and returns.
-        Launched with prediction:=false the opponent has no predicted future, so
-        the shared check measures it as a FROZEN BOX at wherever it happens to
-        be right now - and if that is anywhere near the raceline, which is where
-        a racing opponent lives, it refuses the whole path.
+        It used to excuse the opponent only when it was FURTHER along the path
+        than the box the path is for, reasoning that it would have driven on by
+        the time the car got there. That left the trailing case untouched, and
+        the trailing case is where the whole thing falls over: an opponent
+        being trailed is by definition NEARER than the box. Measured on
+        2026-08-19 over thirteen laps - of 60 aborted evasions, 37 were
+        path_free refusals and 28 of those named the selected opponent, every
+        one of them nearer than the box. The distance form of this excuse fired
+        4 times.
 
-        Concretely, and this is what the car does on track: box three metres
-        ahead, opponent six metres ahead on the line, static path returning to
-        the raceline at five. The opponent blocks the path at six, path_free is
-        false, static avoidance never arms, and the car trails to a stop behind
-        a box it had the room to drive around. Nothing recovers from there: a
-        stopped car in front of a stationary obstacle is a fixed point.
+        So it now excuses the opponent wherever it is, on a separation of
+        concerns the stack already makes everywhere else:
 
-        The opponent will not be at six metres when the car gets there - it is
-        moving, and the car is limited to static_avoidance_planner's
-        max_speed_mps while on this path. So a moving obstacle FURTHER ahead
-        than the static one this path is for is the next decision's problem,
-        exactly as an obstacle past the path's end already is. The check re-runs
-        every tick; as the opponent comes inside the margin it vetoes again and
-        OVERTAKE drops back to trailing.
+          LATERAL, where to drive, is the path's job. A box does not move, so
+          the only way past it is around it.
 
-        Deliberately narrow. All of these still refuse the path:
-          - anything static, at any distance
-          - a moving obstacle NEARER than the static one, which includes the
-            whole trailing case: an opponent between the car and the box is
-            what the car must not swerve into, and it keeps refusing
-          - a moving obstacle within static_path_dynamic_margin_m of the box
+          LONGITUDINAL, how fast, is the trailing controller's job. The
+          opponent does move, and the gap to it is held by a PID on
+          trailing_gap - not by the shape of the path.
+
+        A collision needs both cars in the same place at the same TIME. This
+        check only measures place. Refusing a path because the opponent's
+        CURRENT position lies on it throws away a manoeuvre whose longitudinal
+        safety is being enforced by something else - and the fallback is the
+        raceline, which is the line the box is sitting on.
+
+        WHAT IT ASSUMES, and this is not free: that something holds the gap to
+        the opponent while the car is on this path. Controller.py runs the
+        trailing PID only in state TRAILING, so once OVERTAKE is entered the
+        car takes the path at its planned speed with no gap control. Until the
+        controller keeps trailing whenever an opponent is ahead, the guarantee
+        this leans on stops at the moment the evasion starts.
+
+        Still refused, exactly as before:
+          - anything static, at any distance. A box cannot be trailed past.
+          - a mixture. If a box blocks the path as well, the refusal stands.
+
+        Scoped by the caller to the static cache: the lane-change path is
+        planned around the opponent, so an opponent refusing THAT one is the
+        check working, not a false refusal.
         """
         debug = getattr(wpnts_data, "free_dbg", None)
         if not isinstance(debug, dict) or not debug.get("is_init"):
@@ -847,26 +846,43 @@ class H2HStateMachine(StateMachine):
         # By OPPONENT, not by is_static, for the same reason
         # _closing_on_nearest_avoidable no longer asks that question: with
         # nothing but boxes on the track, 39 of 41 tracks read DYNAMIC for
-        # their whole life. Keyed on is_static this was harmless but inert -
-        # static_gaps came out empty and it never excused anything - and in the
-        # cases where one box did confirm static it could have excused a path a
-        # second box was blocking. The distinction it always wanted is "the
-        # obstacle this path is for" against "the opponent, which has its own
-        # planner", and only the second of those is knowable.
+        # their whole life. The distinction that matters is "the obstacle this
+        # path is for" against "the opponent, which the trailing gap covers",
+        # and only the second of those is knowable.
         opponent_ids = self._opponent_record_ids(records)
-        reference_gaps = [
-            rec["gap"] for rec in records
-            if rec.get("gap") is not None and rec.get("id") not in opponent_ids]
-        if not reference_gaps or not opponent_ids:
-            # Either the path is not for anything, or there is no opponent to
-            # excuse the refusal. Both mean the refusal stands.
+        if not opponent_ids:
             return False
-        horizon = min(reference_gaps) + self.static_path_dynamic_margin_m
-        return all(
-            rec.get("id") in opponent_ids
-            and rec.get("gap") is not None
-            and rec["gap"] > horizon
-            for rec in blocked)
+        return all(rec.get("id") in opponent_ids for rec in blocked)
+
+    def _worst_free(self, wpnts_data):
+        """Tightest clearance, with the opponent left out of the static path.
+
+        The same principle as _blocked_only_by_the_opponent, one step later.
+        _worth_driving compares this path's worst clearance against the
+        raceline's, and the shared version takes the minimum over every
+        obstacle - so an opponent sitting on the path drags the number under
+        static_overtake_min_clearance_m and the floor refuses, even though the
+        opponent is the one obstacle a longitudinal gap can handle.
+
+        Without this the veto only moves: is_free is excused above, then the
+        same opponent refuses through the floor whenever a box is blocking too.
+
+        The raceline's own number is deliberately NOT filtered. An opponent on
+        the raceline is exactly what makes the car trail, and hiding it would
+        make the fallback look better than it is - which is the comparison this
+        feeds.
+        """
+        if wpnts_data is not self.cur_static_avoidance_wpnts:
+            return super()._worst_free(wpnts_data)
+        debug = getattr(wpnts_data, "free_dbg", None)
+        if not isinstance(debug, dict):
+            return super()._worst_free(wpnts_data)
+        records = debug.get("obs", ())
+        opponent_ids = self._opponent_record_ids(records)
+        room = [rec["free_dist"] for rec in records
+                if rec.get("free_dist") is not None
+                and rec.get("id") not in opponent_ids]
+        return min(room) if room else None
 
     def _opponent_record_ids(self, records):
         """Ids in a free_dbg record set that are the selected opponent.
@@ -918,21 +934,23 @@ class H2HStateMachine(StateMachine):
             wpnts_data.free_dbg["is_free"] = True
 
         # The same reasoning one step earlier: an opponent INSIDE the static
-        # avoidance path but further along it than the box the path is for.
-        # Applied here rather than in _check_static_overtaking_mode so that
-        # OVERTAKE's per-tick sustainability check sees it too - correcting only
-        # the entry gate would arm the manoeuvre and abort it on the next tick.
+        # avoidance path. The path says where to drive; the trailing gap says
+        # how close to get. Applied here rather than in
+        # _check_static_overtaking_mode so that OVERTAKE's per-tick
+        # sustainability check sees it too - correcting only the entry gate
+        # would arm the manoeuvre and abort it on the next tick, which is
+        # exactly the 0.45 s median lifetime measured on 2026-08-19.
         # Scoped by identity to the static cache: the lane-change path is
         # planned around the opponent, so an opponent refusing it is the check
         # working, not a false refusal.
         if (
             not is_free
             and wpnts_data is self.cur_static_avoidance_wpnts
-            and self._blocked_only_by_distant_dynamics(wpnts_data)
+            and self._blocked_only_by_the_opponent(wpnts_data)
         ):
             self.get_logger().info(
-                f"[{wpnts_data.name}] only blocked by a moving obstacle further "
-                f"ahead than the static one this path is for - going around it",
+                f"[{wpnts_data.name}] only blocked by the opponent, whose gap "
+                f"the trailing controller holds - driving it anyway",
                 throttle_duration_sec=5.0)
             is_free = True
             wpnts_data.closest_target = None

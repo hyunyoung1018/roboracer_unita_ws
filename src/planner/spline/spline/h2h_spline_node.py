@@ -31,7 +31,7 @@ and never moves the apex. It only takes room away, over the stretch the
 corridor holds its offset. An opponent the car is trailing, several metres
 before the obstacle, is outside that stretch and changes nothing - which is
 what leaves the state machine's own distant-opponent handling
-(_blocked_only_by_distant_dynamics) free to do its job.
+(_blocked_only_by_the_opponent) free to do its job.
 """
 
 import rclpy
