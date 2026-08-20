@@ -436,7 +436,42 @@ class H2HStateMachine(StateMachine):
         OVERTAKE read the static cache for what may be a dynamic opponent.
         """
         slow_enough = self.cur_vs < self.static_overtake_max_speed_mps
-        closing = self._closing_on_nearest_avoidable(threshold_m=7.0)
+        # The horizon the car SEES on, not a number of its own.
+        #
+        # This was a literal 7.0 while interest_horizon_m is 9.0, and the two
+        # metres between them are a hole the car falls into on every straight.
+        # An obstacle enters cur_obstacles_in_interest at 9 m and becomes the
+        # trailing target on the same tick, and trailing's command is
+        #
+        #     clip(v_opp - P (gap_should - gap) - D (v_ego - v_opp), 0, v_path)
+        #
+        # which stops being clipped to v_path - stops braking, that is - only
+        # inside
+        #
+        #     gap = trailing_gap + vel_gain v_ego + (v_path - v_opp
+        #                                            + D (v_ego - v_opp)) / P
+        #
+        # With the head-to-head gains (P 0.5, D 0.25, vel_gain 0.10) behind a
+        # stationary box that is 9.30 m at 2.5 m/s and 10.60 m at 3.0 m/s -
+        # further out than the car can see. So above about 2.4 m/s the obstacle
+        # is already inside the braking region the instant it appears, and for
+        # the next two metres this gate answered False and static avoidance
+        # could not arm. Brake, then release and swerve, every time.
+        #
+        # Tying it to interest_horizon_m closes the hole by construction: the
+        # gate can no longer refuse something the state machine can see. It
+        # only OPENS the gate - have_path, path_free and worth_driving are
+        # untouched and still do the actual refusing, and the planner has had a
+        # path since 10 m (spline's lookahead), so there is one to check.
+        #
+        # The other two ways to close it were both worse. Raising
+        # interest_horizon_m moves first sight but not the braking point, so
+        # the car brakes at the new horizon instead - and it widens the
+        # obstacle list every other check pays for. Raising trailing_p_gain
+        # moves the braking point but also changes how the car follows a moving
+        # opponent, which is the one behaviour on this car that measured good.
+        closing = self._closing_on_nearest_avoidable(
+            threshold_m=self.interest_horizon_m)
         have_path = self._check_latest_wpnts(
             self.static_avoidance_wpnts, self.cur_static_avoidance_wpnts)
         path_free = self._check_free_frenet(self.cur_static_avoidance_wpnts)

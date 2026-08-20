@@ -172,3 +172,58 @@ def test_the_margin_is_tunable():
     far = [record(1, 3.0, False), record(2, 6.0, True)]
     assert excused(far, opponents=[obstacle(6.0)], margin=1.5)
     assert not excused(far, opponents=[obstacle(6.0)], margin=4.0)
+
+
+# ----------------------------------------- the gate must see as far as we do
+#
+# The threshold was a literal 7.0 while interest_horizon_m is 9.0. An obstacle
+# enters cur_obstacles_in_interest at 9 m and becomes the trailing target on
+# the same tick; trailing's command stops being clipped to the path speed only
+# inside
+#
+#     trailing_gap + vel_gain v_ego + (v_path - v_opp + D (v_ego - v_opp)) / P
+#
+# which with the head-to-head gains is 9.30 m at 2.5 m/s and 10.60 m at 3.0.
+# So above about 2.4 m/s the car brakes from first sight, and for the next two
+# metres this gate answered False and static avoidance could not arm.
+
+
+def test_the_gate_reaches_as_far_as_the_obstacle_list_does():
+    """Anything the state machine can see, this gate can arm on."""
+    horizon = 9.0
+    for gap in (7.5, 8.0, 8.9):
+        assert H2HStateMachine._closing_on_nearest_avoidable(
+            machine([obstacle(gap)]), horizon), f"refused a box at {gap} m"
+
+
+def test_the_gate_still_stops_at_the_horizon():
+    """It reaches further, it does not reach forever."""
+    assert not H2HStateMachine._closing_on_nearest_avoidable(
+        machine([obstacle(9.5)]), 9.0)
+
+
+def test_the_call_site_passes_the_interest_horizon_not_a_literal():
+    """Pin the wiring, not just the function.
+
+    Testing _closing_on_nearest_avoidable with an explicit threshold cannot
+    catch the call site drifting back to a literal, which is what the bug was.
+    """
+    m = machine([obstacle(8.0)])
+    m.interest_horizon_m = 9.0
+    m.static_overtake_max_speed_mps = 6.0
+    seen = {}
+
+    def record(threshold_m):
+        seen["threshold"] = threshold_m
+        return False
+
+    m._closing_on_nearest_avoidable = record
+    m._check_latest_wpnts = lambda *a: False
+    m._check_free_frenet = lambda *a: False
+    m._worth_driving = lambda *a: False
+    m.static_avoidance_wpnts = None
+    m.cur_static_avoidance_wpnts = None
+    m.get_logger = lambda: SimpleNamespace(info=lambda *a, **k: None)
+
+    H2HStateMachine._check_static_overtaking_mode(m)
+    assert seen["threshold"] == m.interest_horizon_m
