@@ -19,6 +19,8 @@
   <depend>tf_transformations</depend>
   <depend>f110_msgs</depend>
   <depend>frenet_conversion</depend>
+  <!-- FTG's map check. Imported lazily, only when ftg_use_map is set. -->
+  <depend>grid_filter</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

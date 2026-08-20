@@ -95,4 +95,45 @@ controller_manager:
     ftg_bubble_m: 0.3            # safety bubble blown at each disparity [m]
     ftg_steer_ema: 0.0           # steering low-pass 0..1 (0=off, higher=smoother)
     ftg_max_steer: 0.4           # steering command clip [rad]
+    # [m] What has to fit through a gap before it is worth steering at. The
+    # search used to compare gaps by their width in BEAMS, which is biased
+    # towards the nearest gap - a 20 deg run is 0.17 m at 0.5 m and 0.69 m at
+    # 2 m. The car is 0.28 m wide; 0.34 leaves 3 cm a side.
+    ftg_min_gap_m: 0.34
+    # Share of the front FOV one disparity's bubble may consume. ftg_bubble_m
+    # is metres, so its ANGLE grows as the obstacle nears - 31 deg at 0.5 m,
+    # 37 at 0.4 - and it is blown into the opening beside it. Uncapped, an
+    # obstacle at 0.4 m spends 92% of an 80 deg view on its own two edges.
+    ftg_bubble_max_frac: 0.25
+
+    # --- FTG's map check --------------------------------------------------
+    # OFF, so nothing below changes how the car behaves until it is switched
+    # on at launch. It cannot be switched on live: the grid is only built at
+    # startup when this is already true.
+    #
+    # What it buys: the gap search reads a wall and a cone as the same thing,
+    # because to a lidar they are. So it can be steered off the course by a
+    # gap in the barriers as readily as around an obstacle. The map knows the
+    # difference - what is in it is track. With this on, staying on the map is
+    # a hard constraint and everything else is a preference, which is the
+    # right way round here: brushing an obstacle costs nothing, leaving the
+    # course costs the run.
+    ftg_use_map: false
+    # [px] Erosion of the map FTG steers by, at 0.05 m/cell. 3 -> 0.05 m.
+    # Deliberately under lane_change_planner's 7: that one keeps a planned
+    # path off the boundary, this one only has to stop an escape leaving the
+    # track, and this course is 0.92 m across at its narrowest.
+    ftg_map_erosion: 3
+    ftg_heading_step_deg: 2.0    # candidate spacing across the front FOV
+    ftg_map_probe_m: 1.5         # how far each candidate is followed [m]
+    ftg_map_probe_step_m: 0.15   # sample spacing along it [m]
+    # [m] A beam shorter than this refuses its heading whatever the map says.
+    # The map is where the car believes the track is; the scan is what is
+    # actually there. This is what a wrong pose runs into instead of through.
+    ftg_min_lidar_clearance_m: 0.35
+    # [1/rad] Penalty for pointing away from straight ahead, against a score
+    # in metres. 0 takes the roomiest heading wherever it points.
+    ftg_forward_bias: 0.35
+    # [m] base_link -> laser, from albomb_sensors.xacro's laser_joint.
+    ftg_laser_offset_x: 0.259
     save_params: false

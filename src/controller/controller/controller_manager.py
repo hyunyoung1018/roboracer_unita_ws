@@ -45,6 +45,10 @@ FTG_PARAMS = [
     'ftg_debug', 'ftg_max_lidar_dist', 'ftg_max_speed', 'ftg_track_width',
     'ftg_front_fov_deg', 'ftg_smooth_deg', 'ftg_disp_thresh', 'ftg_bubble_m',
     'ftg_steer_ema', 'ftg_max_steer',
+    'ftg_use_map', 'ftg_heading_step_deg', 'ftg_map_probe_m',
+    'ftg_map_probe_step_m', 'ftg_min_lidar_clearance_m', 'ftg_forward_bias',
+    'ftg_laser_offset_x', 'ftg_map_erosion',
+    'ftg_min_gap_m', 'ftg_bubble_max_frac',
 ]
 
 
@@ -162,7 +166,31 @@ class ControllerManager(Node):
             bubble_m=self._get_param('ftg_bubble_m', 0.30),
             steer_ema=self._get_param('ftg_steer_ema', 0.0),
             max_steer=self._get_param('ftg_max_steer', 0.4),
+            use_map=self._get_param('ftg_use_map', False),
+            heading_step_deg=self._get_param('ftg_heading_step_deg', 2.0),
+            map_probe_m=self._get_param('ftg_map_probe_m', 1.5),
+            map_probe_step_m=self._get_param('ftg_map_probe_step_m', 0.15),
+            min_lidar_clearance_m=self._get_param('ftg_min_lidar_clearance_m', 0.35),
+            forward_bias=self._get_param('ftg_forward_bias', 0.35),
+            laser_offset_x=self._get_param('ftg_laser_offset_x', 0.259),
+            min_gap_m=self._get_param('ftg_min_gap_m', 0.34),
+            bubble_max_frac=self._get_param('ftg_bubble_max_frac', 0.25),
         )
+
+        # The map FTG steers by, built only when it is going to be used.
+        #
+        # Its own erosion, deliberately smaller than the lane-change planner's
+        # 7 (0.15 m). That number is sized to keep a planned path off the
+        # boundary; this one only has to stop the car leaving the track while
+        # it escapes, and on a course 0.92 m across at its narrowest an
+        # erosion that large refuses every heading there is.
+        self.ftg_grid = None
+        if self._get_param('ftg_use_map', False):
+            from grid_filter.grid_filter import GridFilter
+            self.ftg_grid = GridFilter(
+                self, map_topic='/map',
+                kernel_size=int(self._get_param('ftg_map_erosion', 3)),
+                unknown_is_occupied=True)
 
         # Subscribers
         self.create_subscription(BehaviorStrategy, '/behavior_strategy', self.behavior_cb, 10)
@@ -302,6 +330,35 @@ class ControllerManager(Node):
             f.DISP_THRESH = float(value)
         elif name == 'ftg_bubble_m':
             f.BUBBLE_M = float(value)
+        elif name == 'ftg_use_map':
+            # Only the switch is live. Turning it on without a grid built at
+            # startup leaves USE_MAP true and grid None, which process_lidar
+            # reads as "no map" and runs the gap search - the same answer as
+            # off, and not a silent half-state.
+            f.USE_MAP = bool(value)
+            if f.USE_MAP and self.ftg_grid is None:
+                self.get_logger().warn(
+                    "ftg_use_map set true but no grid was built at startup; "
+                    "relaunch with ftg_use_map:=true to give FTG the map")
+        elif name == 'ftg_heading_step_deg':
+            f.HEADING_STEP_DEG = float(value)
+        elif name == 'ftg_map_probe_m':
+            f.MAP_PROBE_M = float(value)
+        elif name == 'ftg_map_probe_step_m':
+            f.MAP_PROBE_STEP_M = max(0.02, float(value))
+        elif name == 'ftg_min_lidar_clearance_m':
+            f.MIN_LIDAR_CLEARANCE_M = float(value)
+        elif name == 'ftg_forward_bias':
+            f.FORWARD_BIAS = float(value)
+        elif name == 'ftg_laser_offset_x':
+            f.LASER_OFFSET_X = float(value)
+        elif name == 'ftg_min_gap_m':
+            f.MIN_GAP_M = float(value)
+        elif name == 'ftg_bubble_max_frac':
+            f.BUBBLE_MAX_FRAC = float(value)
+        elif name == 'ftg_map_erosion':
+            if self.ftg_grid is not None:
+                self.ftg_grid.set_erosion_kernel_size(int(value))
         elif name == 'ftg_steer_ema':
             f.STEER_EMA = float(value)
         elif name == 'ftg_max_steer':
@@ -615,8 +672,18 @@ class ControllerManager(Node):
         return speed, acceleration, jerk, steering_angle
 
     def ftg_cycle(self):
+        # position_in_map is base_link's (x, y, yaw) and is what FTG needs to
+        # place its candidate headings on the map. It stays None until the
+        # first odometry, and FTG falls back to the plain gap search then -
+        # which is the right answer, not a degraded one.
+        pose = None
+        if len(self.position_in_map) != 0:
+            pose = (float(self.position_in_map[0, 0]),
+                    float(self.position_in_map[0, 1]),
+                    float(self.position_in_map[0, 2]))
         speed, steer = self.ftg_controller.process_lidar(
-            self.scan.ranges, self.scan.angle_min, self.scan.angle_increment)
+            self.scan.ranges, self.scan.angle_min, self.scan.angle_increment,
+            pose=pose, grid=self.ftg_grid)
         self.get_logger().warning(f"[{self.name}] FTGONLY!!!")
         return speed, steer
 
