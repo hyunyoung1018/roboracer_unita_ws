@@ -125,7 +125,7 @@ tracking:
     # does. The cost is that an opponent crawling under 0.8 m/s is never
     # acquired - which is the right answer, because a car moving that slowly is
     # something to drive around, not something to trail.
-    opponent_acquire_speed_mps: 0.8
+    opponent_acquire_speed_mps: 0.5
     opponent_acquire_frames: 10
     dynamic_speed_valid_max_mps: 6.0
 
