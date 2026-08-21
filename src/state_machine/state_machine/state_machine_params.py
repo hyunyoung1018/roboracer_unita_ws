@@ -260,7 +260,7 @@ class StateMachineParams:
         self.overtaking_ttl_sec: float = node.get_parameter("overtaking_ttl_sec").value
 
         self._declare(
-            "ftg_speed_mps", 0.1,
+            "ftg_speed_mps", 0.5,
             ParameterDescriptor(
                 description="Speed threshold below which ftg counter is incremented [mps]",
                 type=ParameterType.PARAMETER_DOUBLE,

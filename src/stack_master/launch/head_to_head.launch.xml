@@ -52,7 +52,7 @@
        stop also becomes max-current braking instead of a PID coast-down.
        Live A/B while driving:
          ros2 param set /vesc/ackermann_to_vesc_node brake_control_enabled true|false -->
-  <arg name="braking" default="false"
+  <arg name="braking" default="true"
        description="VESC current braking in the ackermann bridge. See vesc.yaml."/>
 
   <arg name="joy_max_speed" default="5.0"/>

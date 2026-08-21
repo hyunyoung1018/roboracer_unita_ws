@@ -127,7 +127,7 @@
   <!-- Opt-in, same flag as head_to_head. Obstacles here are static, so hard
        braking matters less - but this solo mode is where it gets validated
        first (wheels up, then clean laps) before head-to-head turns it on. -->
-  <arg name="braking" default="false"
+  <arg name="braking" default="true"
        description="VESC current braking in the ackermann bridge. See vesc.yaml."/>
 
   <!-- ===== race day ===== -->
@@ -144,8 +144,8 @@
        description="[laps] Phase 1 runs to the end of this lap, phase 2 after."/>
   <arg name="qual_phase1_scaling" default="0.5"/>
   <arg name="qual_phase1_t_clip_min" default="1.05"/>
-  <arg name="qual_phase2_scaling" default="0.6"/>
-  <arg name="qual_phase2_t_clip_min" default="1.10"/>
+  <arg name="qual_phase2_scaling" default="0.75"/>
+  <arg name="qual_phase2_t_clip_min" default="1.20"/>
   <arg name="relocalize_every_n_laps" default="3"
        description="[laps] Re-seed the particle filter this often. 0 disables
                     it without taking the node out of the launch."/>
