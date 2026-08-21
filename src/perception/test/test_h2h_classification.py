@@ -189,3 +189,87 @@ def test_hysteresis_is_tunable_to_off():
     n = node(static_confirm_frames=1, dynamic_confirm_frames=1,
              static_speed_hysteresis_mps=0.0)
     assert confirming(n, True, [0.9]) == [False]
+
+
+# --- a car that stops is still a car --------------------------------------
+#
+# The extent floor is a claim about what the object physically IS. It used to
+# be gated on the LIVE class, so the moment a stopped opponent was reclassified
+# STATIC the floor was released and the parent's slow leak took the believed
+# width from 0.40 m to 0.20 m in two seconds - and every planner downstream
+# subtracts that width from the room either side.
+#
+# Latched on having been the SELECTED OPPONENT, never on reading DYNAMIC:
+# reading DYNAMIC is nearly free (39 of 41 tracks did it for their whole life
+# on 2026-08-19), so that would put the car floor under every box and inflate
+# a 0.15 m cone to 0.40 m.
+
+EXTENT_PARAMS = dict(
+    PARAMS,
+    dynamic_extent_min_m=0.202,
+    dynamic_extent_max_m=0.42,
+    dynamic_extent_decay_mps=0.5,
+    extent_max_m=0.50,
+    extent_decay_mps=0.05,
+)
+
+
+def extent_node(**overrides):
+    return node(**dict(EXTENT_PARAMS, **overrides))
+
+
+def extent_track(is_static, history=10, extents=None, was_opponent=False):
+    obstacle = SimpleNamespace(id=7, is_static=is_static, s_center=3.0,
+                               d_center=0.0, vs=0.0, vd=0.0)
+    t = SimpleNamespace(
+        track_id=7, obstacle=obstacle, stamp=0.0, missed=0,
+        s_history=[3.0] * history, d_history=[0.0] * history,
+        extents=list(extents if extents is not None else [0.202] * 4))
+    if was_opponent:
+        t.was_opponent = True
+    return t
+
+
+def extent_measurement(half=0.10):
+    """A pillar-sized detection: what the lidar actually returns off a car."""
+    return SimpleNamespace(id=7, s_start=3.0 - half, s_end=3.0 + half,
+                           d_right=-half, d_left=half, s_center=3.0,
+                           d_center=0.0, size=2 * half)
+
+
+def test_a_stopped_opponent_keeps_the_car_floor():
+    n = extent_node()
+    stopped = extent_track(is_static=True, was_opponent=True)
+    for _ in range(200):                       # ten seconds
+        stopped.extents = n._hold_extents(stopped, extent_measurement(), DT)
+    assert min(stopped.extents) == pytest.approx(0.202)
+
+
+def test_without_the_latch_it_decays_to_the_pillar():
+    """The bug, stated as a measurement."""
+    n = extent_node()
+    stopped = extent_track(is_static=True, was_opponent=False)
+    for _ in range(200):
+        stopped.extents = n._hold_extents(stopped, extent_measurement(), DT)
+    assert min(stopped.extents) == pytest.approx(0.10)
+
+
+def test_a_box_never_gets_the_car_floor():
+    """Latching on DYNAMIC would inflate every box; latching on the lock does not."""
+    n = extent_node()
+    box = extent_track(is_static=False, was_opponent=False, extents=[0.075] * 4)
+    for _ in range(200):
+        box.extents = n._hold_extents(box, extent_measurement(half=0.075), DT)
+    assert max(box.extents) == pytest.approx(0.202)   # DYNAMIC, so floored now
+    settled = extent_track(is_static=True, was_opponent=False, extents=[0.075] * 4)
+    for _ in range(200):
+        settled.extents = n._hold_extents(settled, extent_measurement(half=0.075), DT)
+    assert max(settled.extents) == pytest.approx(0.075)
+
+
+def test_a_moving_opponent_is_unchanged():
+    n = extent_node()
+    moving = extent_track(is_static=False, was_opponent=True)
+    for _ in range(200):
+        moving.extents = n._hold_extents(moving, extent_measurement(), DT)
+    assert min(moving.extents) == pytest.approx(0.202)

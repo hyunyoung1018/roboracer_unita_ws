@@ -477,6 +477,22 @@ class HeadToHeadTrackingNode(TrackingNode):
             # into an opponent it had a prediction for.
             dynamic_msg.obstacles.append(opponent)
 
+        # A car that stops is still a car. Latch it on the TRACK, so the
+        # extent floor below survives the moment it is reclassified STATIC.
+        #
+        # Latched on being the SELECTED OPPONENT, not on reading DYNAMIC.
+        # Reading DYNAMIC is nearly free - 39 of 41 tracks did it for their
+        # whole life on 2026-08-19 - so latching on that would put the car
+        # floor under every box on the track and inflate a 0.15 m cone to
+        # 0.40 m, which is how passable gaps get thrown away. Acquisition is
+        # the strong claim: 0.25 m of net displacement over a second, which a
+        # box does not reach.
+        if selected_id is not None:
+            for track in self.tracks:
+                if int(track.obstacle.id) == selected_id:
+                    track.was_opponent = True
+                    break
+
         self.static_pub.publish(static_msg)
         self.dynamic_pub.publish(dynamic_msg)
         self._publish_classification_debug(
@@ -527,7 +543,19 @@ class HeadToHeadTrackingNode(TrackingNode):
         of within six seconds - and the believed width stays inside what an
         F1TENTH car can physically be.
         """
-        if not self._is_confirmed_moving(track):
+        # `was_opponent`, not `is moving now`. The floor is a claim about what
+        # the object physically IS, and an opponent that stops - into a wall,
+        # behind a box, waiting - does not become 0.20 m wide by stopping.
+        #
+        # It used to be the live class, and the cost was measured on the
+        # bench: the moment a stopped opponent was reclassified STATIC the
+        # floor was released, the parent's slow leak took over, and the
+        # believed width fell 0.40 m -> 0.20 m in two seconds. Every planner
+        # downstream subtracts that width from the room either side, so the
+        # path it drew cleared a car that was 8 cm wider than the one it was
+        # drawn for.
+        if not (self._is_confirmed_moving(track)
+                or getattr(track, 'was_opponent', False)):
             return super()._hold_extents(track, measurement, dt)
 
         held = track.extents
