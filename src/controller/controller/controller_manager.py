@@ -53,6 +53,12 @@ FTG_PARAMS = [
 
 
 class ControllerManager(Node):
+    # The class built in global_wpnts_cb. A hook rather than a hardcoded name
+    # so h2h_controller_manager can swap in its subclass without repeating the
+    # thirty-argument construction below, which is exactly the kind of thing
+    # that drifts between two copies.
+    CONTROLLER_CLASS = Controller
+
     """UNITA controller manager (Pure-Pursuit only; the
     MAP / steering-lookup branch was intentionally removed).
 
@@ -250,7 +256,7 @@ class ControllerManager(Node):
         # caller in this workspace already passes psi.
         self.converter = FrenetConverter(
             self.waypoints[:, 0], self.waypoints[:, 1], self.waypoints[:, 2])
-        self.controller = Controller(
+        self.controller = self.CONTROLLER_CLASS(
             self.t_clip_min, self.t_clip_max, self.m_l1, self.q_l1,
             self.curvature_factor,
             self.KP, self.KI, self.KD, self.heading_error_thres, self.steer_gain_for_speed,

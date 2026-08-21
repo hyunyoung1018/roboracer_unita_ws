@@ -14,6 +14,7 @@ import rclpy
 from f110_msgs.msg import ObstacleArray
 
 from .state_machine_node import StateMachine, time_to_float
+from .states_types import StateType
 
 
 def nearest_ahead(obstacles, current_s, track_length, horizon):
@@ -815,6 +816,67 @@ class H2HStateMachine(StateMachine):
             self.interest_horizon_m,
         )
         return gap, target
+
+    def get_traling_target(self):
+        """During a static evasion, name the OPPONENT, not what blocked the path.
+
+        The shared version answers "what is the current source refusing to
+        drive through", which for OVERTAKE is ot_closest_target - whatever the
+        free check named. Two things make that the wrong answer here.
+
+        It is usually EMPTY. _blocked_only_by_the_opponent stops the opponent
+        vetoing the static path and clears closest_target when it does, so the
+        one obstacle whose gap must be held is the one that has been removed
+        from this list by design.
+
+        And when it is not empty it names the BOX - the obstacle the path was
+        drawn to get around. Braking for that is the opposite of what the
+        manoeuvre is for; the path already goes around it.
+
+        So while a static evasion is committed, the trailing target is the
+        selected opponent, if it is ahead and inside the interest horizon. The
+        controller then keeps trailing_gap to it through the evasion instead of
+        releasing the car onto the path's planned speed - measured on
+        2026-08-21, 50 entries in 314 s, each one an acceleration from about
+        2.5 m/s onto a 4 m/s path with the opponent two metres ahead.
+
+        Only for the STATIC cache. The lane-change path is planned around the
+        opponent's predicted future, so holding a fixed gap to it there would
+        forbid the pass that path exists to make; that source keeps the shared
+        answer.
+        """
+        if (self.local_wpnts_src == StateType.OVERTAKE
+                and self.static_overtaking_mode):
+            opponent = self._opponent_ahead()
+            if opponent is not None:
+                return [opponent]
+        return super().get_traling_target()
+
+    def _opponent_ahead(self):
+        """The selected opponent if it is in front and worth holding a gap to.
+
+        Reads the same live list _opponent_positions does, so a stale stream
+        answers None and the shared behaviour comes back.
+        """
+        if not self._opponent_obstacles or self._opponent_stamp is None:
+            return None
+        if self.now_sec() - self._opponent_stamp > self.opponent_stream_timeout_sec:
+            return None
+        if not self.track_length:
+            return None
+        best, best_gap = None, None
+        for obstacle in self._opponent_obstacles:
+            gap = (float(obstacle.s_center) - self.cur_s) % self.track_length
+            if gap > 0.5 * self.track_length:
+                gap -= self.track_length
+            # Behind the car is not something to brake for; past the horizon is
+            # the next decision's problem, exactly as it is for every other
+            # target this class picks.
+            if gap < 0.0 or gap > self.interest_horizon_m:
+                continue
+            if best_gap is None or gap < best_gap:
+                best, best_gap = obstacle, gap
+        return best
 
     def _planner_validated_span(self, wpnts_data):
         """Distance ahead over which the lane-change planner checked its path.

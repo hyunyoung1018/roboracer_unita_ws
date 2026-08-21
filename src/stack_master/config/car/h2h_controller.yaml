@@ -1,0 +1,67 @@
+# Controller overrides for racing another car.
+#
+# Layered over controller.yaml, which stays the base and is all time_trials
+# loads. Everything here is about following a moving car at a distance -
+# trailing gains, gaps and rate limits - which time trials never does.
+
+controller_manager:
+  ros__parameters:
+    # About 1.0 m centre-to-centre target at 2 m/s. This applies only to the
+    # moving opponent; time-trials keeps controller.yaml's static-stop values.
+    trailing_gap: 2.0
+    trailing_vel_gain: 0.10
+    trailing_p_gain: 0.5
+    trailing_i_gain: 0.0
+    trailing_d_gain: 0.25
+    trailing_accel_limit: 1.5
+    trailing_decel_limit: 3.0
+    trailing_emergency_gap: 0.5
+    trailing_rate_limit_enabled: true
+    opponent_speed_hold_sec: 0.75
+    opponent_speed_valid_min_mps: 0.15
+    # [m/s] Upper bound on a believable opponent speed. Without it one bad
+    # frame is stored as valid and held for opponent_speed_hold_sec, and
+    # trailing accelerates towards an opponent it thinks is doing 269 m/s.
+    # Keep equal to the tracker's dynamic_speed_valid_max_mps - the tracker
+    # caps /tracking/dynamic_obstacles, this caps the trailing_targets path.
+    opponent_speed_valid_max_mps: 6.0
+
+    # [m] Centre-to-centre gap behind a target the tracker calls STATIC.
+    #
+    # trailing_gap (0.8) is tuned for a car that is driving away from us. A box
+    # is not, and 0.8 leaves about 0.39 m of bumper gap to a 0.5 m box. This is
+    # time trials' number, used only when the target is static, so head to head
+    # keeps the tight gap for the opponent and the safe one for everything else.
+    trailing_gap_static: 2.5
+
+    # Keep holding the opponent's gap while OVERTAKE is the state, instead of
+    # releasing the car onto the evasion path's planned speed.
+    #
+    # The shared controller gates trailing on state == "TRAILING", so arming an
+    # evasion used to end gap control on the same tick. Measured 2026-08-21:
+    # 50 entries in 314 s, each releasing the car from about 2.5 m/s onto a
+    # 4 m/s path with the opponent two metres ahead - "it was trailing, then it
+    # accelerated into the back of the other car and stopped".
+    #
+    # Only the STATIC evasion gets this; the lane-change path is planned around
+    # the opponent's future and a fixed gap there would forbid the pass. That
+    # split is made in H2HStateMachine.get_traling_target, which is what puts
+    # the opponent in trailing_targets in the first place.
+    #
+    # false is the A/B, live: ros2 param set /controller_manager
+    #   trail_while_overtaking false
+    trail_while_overtaking: true
+
+    # [s] Ramp for the heading-gain reduction OVERTAKE applies, replacing the
+    # single-tick 0.65 step in the shared controller.
+    #
+    # With a source change every 1.7 s that step is a 1.54x jump in the gain,
+    # landing on the same tick the path itself jumps about 0.3 m sideways. On a
+    # straight, where the raceline asks for almost no steering, the pair IS the
+    # steering input - which is the heading wobble seen while trailing and
+    # avoiding.
+    #
+    # 0.5 is about a third of that 1.7 s: a manoeuvre that lasts still gets the
+    # full reduction, one abandoned in the measured median 0.41 s barely moves
+    # the gain. 0 restores the shared step exactly.
+    overtake_gain_ramp_sec: 0.5

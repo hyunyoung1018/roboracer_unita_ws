@@ -254,9 +254,14 @@
          is the topic time_trials' state machine reads. One less alias. -->
   </node>
 
-  <node pkg="controller" exec="controller_manager" name="controller_manager" output="screen">
+  <!-- h2h_controller_manager, not controller_manager: a subclass that keeps
+       the trailing gap through an evasion and ramps the OVERTAKE heading
+       gain instead of stepping it. Both are inert without an opponent, and
+       time_trials keeps running the unmodified node. See
+       h2h_controller.py; the two settings live in h2h_controller.yaml. -->
+  <node pkg="controller" exec="h2h_controller_manager" name="controller_manager" output="screen">
     <param from="$(var config_dir)/controller.yaml"/>
-    <param from="$(var config_dir)/dynamic_controller.yaml"/>
+    <param from="$(var config_dir)/h2h_controller.yaml"/>
     <param name="save_yaml_path" value="$(var config_dir)/controller.yaml"/>
     <param name="sim" value="$(var use_sim_time)"/>
     <param name="single_opponent_mode" value="true"/>

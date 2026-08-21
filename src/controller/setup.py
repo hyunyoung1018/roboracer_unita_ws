@@ -23,6 +23,7 @@ setup(
     entry_points={
         'console_scripts': [
             'controller_manager = controller.controller_manager:main',
+            'h2h_controller_manager = controller.h2h_controller_manager:main',
         ],
     },
 )

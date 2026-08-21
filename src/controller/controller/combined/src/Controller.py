@@ -301,7 +301,7 @@ class Controller:
         if self.predict_pub is not None:
             self.predict_pub.publish(marks)
 
-        if (self.state == "TRAILING") and (self.opponent is not None):
+        if self.trailing_active():
             speed_la_for_lu = self.speed_now
         else:
             adv_ts_st = self.speed_lookahead_for_steer
@@ -443,7 +443,7 @@ class Controller:
         else:
             self.boost_mode = False
 
-        if ((self.state == "TRAILING") and (self.opponent is not None)):  # Trailing controller
+        if self.trailing_active():  # Trailing controller
             speed_command = self.trailing_controller(global_speed)
         else:
             self.trailing_speed = global_speed
@@ -454,6 +454,31 @@ class Controller:
         speed_command = self.speed_adjust_lat_err(speed_command, lat_e_norm)
 
         return speed_command
+
+    def trailing_active(self):
+        """Is the trailing controller the one that owns speed right now?
+
+        A method rather than the inline test it replaces so head to head can
+        widen it without a second copy of main_loop. The body is exactly the
+        condition that was written at both call sites, so nothing changes for
+        time trials.
+
+        Two call sites, and they have to agree: the speed command itself, and
+        the speed the L1 lookahead is sized from. Trailing overrides the path's
+        planned speed, so a lookahead still sized on that plan looks further
+        ahead than the car will actually reach.
+        """
+        return self.state == "TRAILING" and self.opponent is not None
+
+    def overtake_gain_scale(self, dt):
+        """Factor on the heading gain while overtaking. 0.65 there, 1.0 here.
+
+        Extracted from an inline `if self.state == "OVERTAKE"` so the step can
+        be smoothed by a subclass. Returns the same two values the inline test
+        did, so time trials is unchanged; `dt` is accepted and ignored, and
+        exists for the subclass that ramps between them.
+        """
+        return 0.65 if self.state == "OVERTAKE" else 1.0
 
     def trailing_controller(self, global_speed):
         """
@@ -643,8 +668,7 @@ class Controller:
         else:
             dynamic_gain = self.KP
 
-        if self.state == "OVERTAKE":
-            dynamic_gain *= 0.65
+        dynamic_gain *= self.overtake_gain_scale(dt)
 
         if not hasattr(self, 'heading_error_integral'):
             self.heading_error_integral = 0.0
