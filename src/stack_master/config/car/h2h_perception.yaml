@@ -127,6 +127,36 @@ tracking:
     # something to drive around, not something to trail.
     opponent_acquire_speed_mps: 0.5
     opponent_acquire_frames: 10
+
+    # Acquire on DISPLACEMENT, not on speed.
+    #
+    # The two above could never both work. A stationary box's apparent speed
+    # was measured at 0.5 to 2.9 m/s - 20 Hz differentiation turns a 2.5 cm
+    # wobble into 0.5 m/s - and a real opponent runs at 0 to 4 m/s, so the two
+    # ranges overlap completely and no floor separates them. Raising the floor
+    # to reject boxes also rejected any opponent slower than the floor, and
+    # that band (static_speed_threshold 0.15 up to the floor) was owned by
+    # nothing: the tracker called it DYNAMIC, the selector would not take it,
+    # and the car trailed a crawling opponent forever.
+    #
+    # Displacement has no such trade. Detector noise is zero-mean so it does
+    # not accumulate however long the window; real motion does. Over 1 s a box
+    # stays inside its own jitter (~15 cm measured) while a 0.3 m/s opponent
+    # has gone 30 cm.
+    #
+    # SET THIS FALSE TO REVERT, live, no rebuild:
+    #   ros2 param set /tracking opponent_acquire_use_displacement false
+    opponent_acquire_use_displacement: true
+    # These two move together. A single-frame outlier is removed outright by
+    # the robust endpoints, but a step that persists for the rest of the window
+    # reads as motion at its full size, and the threshold is the only thing
+    # refusing it - 0.25 m covers the worst jump measured on this car (0.145 m)
+    # with 1.7x to spare. Lengthening the window scales what real motion covers
+    # while a step stays the same size, so 2.0 / 0.50 still acquires a 0.3 m/s
+    # opponent and refuses any step under half a metre, at the cost of taking
+    # a second longer to acquire.
+    opponent_acquire_window_sec: 1.0
+    opponent_acquire_displacement_m: 0.25
     dynamic_speed_valid_max_mps: 6.0
 
     # /tracking/classification_debug, built only while something subscribes.

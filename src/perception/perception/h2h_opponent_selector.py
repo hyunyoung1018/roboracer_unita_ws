@@ -26,6 +26,18 @@ def circular_forward_delta(value, reference, track_length):
     return (float(value) - float(reference)) % float(track_length)
 
 
+def _median(values):
+    """Median without numpy - this module stays dependency-light on purpose."""
+    ordered = sorted(values)
+    count = len(ordered)
+    if not count:
+        return 0.0
+    middle = count // 2
+    if count % 2:
+        return ordered[middle]
+    return 0.5 * (ordered[middle - 1] + ordered[middle])
+
+
 def circular_delta(a, b, track_length):
     """Signed shortest distance from ``b`` to ``a`` around a closed track."""
     if not track_length:
@@ -125,6 +137,10 @@ class OpponentSelector:
         # Consecutive frames each track has been seen genuinely rolling. Only
         # consulted for ACQUISITION - see _moving_enough_to_acquire.
         self.motion_streaks = {}
+        # {track id: [(time, s_center), ...]} over the acquisition window, for
+        # the displacement test that replaced the streak. See
+        # _acquire_displacement for why displacement and not speed.
+        self.motion_history = {}
         self.last_speed = None
         self.last_speed_at = None
         self.last_s = None
@@ -265,7 +281,98 @@ class OpponentSelector:
             if obstacle_id not in present:
                 del self.motion_streaks[obstacle_id]
 
-    def _moving_enough_to_acquire(self, obstacle):
+    def _update_motion_history(self, obstacles, now, track_length):
+        """Per-track position samples over the acquisition window."""
+        window = float(self._param("opponent_acquire_window_sec"))
+        present = set()
+        for obstacle in obstacles:
+            obstacle_id = int(obstacle.id)
+            present.add(obstacle_id)
+            # An invisible frame is a frame with no measurement in it. Holding
+            # the last position and calling it a sample would let an occluded
+            # track accumulate a span it never earned; skipping means it simply
+            # does not qualify until it is seen again, which is the safe way
+            # round.
+            if not obstacle.is_visible:
+                continue
+            samples = self.motion_history.setdefault(obstacle_id, [])
+            samples.append((float(now), float(obstacle.s_center)))
+            cutoff = float(now) - window
+            while len(samples) > 2 and samples[0][0] < cutoff:
+                samples.pop(0)
+        for obstacle_id in list(self.motion_history):
+            if obstacle_id not in present:
+                del self.motion_history[obstacle_id]
+
+    def _acquire_displacement(self, obstacle_id, track_length):
+        """How far this track has actually GONE over the window, or None.
+
+        None means the window is not full yet - too new, or seen too seldom -
+        which is not the same as "has not moved" and must not read as one.
+
+        WHY DISPLACEMENT AND NOT SPEED. Speed is the derivative of position,
+        and at 20 Hz differentiating multiplies position noise by twenty: a
+        stationary box wobbling 2.5 cm between frames reads as 0.5 m/s. That
+        is not a threshold that was set too low, it is the wrong measurement -
+        the apparent speed of a box (0.5 to 2.9 m/s, measured on the car) and
+        the real speed of an opponent (0 to 4 m/s) occupy the same range, so
+        NO threshold separates them.
+
+        Displacement over a window does, because the two error terms behave
+        differently in time. Detector noise is zero-mean, so it does not
+        accumulate however long the window; real motion does. Over one second
+        a box stays inside its own jitter, about 15 cm, while an opponent
+        creeping at 0.3 m/s has gone 30 cm and one at 0.5 m/s has gone 50.
+        Widen the window and the box column does not move while the opponent
+        column does.
+
+        That is also what fixes the slow opponent. The speed form had to
+        choose between a floor high enough to reject a box and one low enough
+        to accept a crawling car, and there was no value that did both -
+        between static_speed_threshold (0.15) and the acquisition floor lay a
+        band that the tracker called DYNAMIC and the selector would not take,
+        so nothing owned it. Displacement does not make that trade: slow is
+        compensated by looking longer.
+
+        ROBUST ENDPOINTS, not the first and last sample. A single bad frame at
+        either end of the window would otherwise be the whole measurement.
+        Offsets are taken against the newest sample first, so the medians are
+        of small signed numbers and the s=0 seam cannot reach them.
+
+        WHAT THIS DOES NOT CATCH, measured on the bench: a single-frame
+        outlier of any size reads as 0.000 m - the medians remove it outright -
+        but a STEP that persists for the rest of the window is indistinguishable
+        from motion, and is measured at its full size. The threshold is the
+        only thing rejecting it. At 0.25 m over 1 s that covers every jump seen
+        on this car (the worst measured is 0.145 m) with 1.7x to spare; a
+        larger step would read as motion.
+
+        The tuning axis for that is the window, not a consistency check.
+        Lengthening the window scales what real motion covers while a step
+        stays the same size, so window and threshold can rise together and buy
+        step rejection: 2.0 s and 0.50 m still acquires a 0.3 m/s opponent
+        (0.60 m) while refusing any step under half a metre. The cost is that
+        acquisition takes that much longer. A consistency check across the two
+        halves was considered and rejected - it would refuse an opponent
+        accelerating from rest, which is a real racing case, to guard against a
+        localisation jump that has never been measured.
+        """
+        samples = self.motion_history.get(int(obstacle_id))
+        if not samples or len(samples) < 4:
+            return None
+        window = float(self._param("opponent_acquire_window_sec"))
+        span = samples[-1][0] - samples[0][0]
+        # A track seen twice in a second has not been observed for a second.
+        if span < 0.8 * window:
+            return None
+        anchor = samples[-1][1]
+        offsets = [circular_delta(s, anchor, track_length) for _, s in samples]
+        edge = max(1, len(offsets) // 5)
+        early = _median(offsets[:edge])
+        late = _median(offsets[-edge:])
+        return abs(late - early)
+
+    def _moving_enough_to_acquire(self, obstacle, track_length=None):
         """Has this track actually been rolling, for long enough to believe?
 
         ACQUISITION ONLY. Being DYNAMIC is what the classifier says; being the
@@ -289,6 +396,14 @@ class OpponentSelector:
         stops behind a box must stay the opponent, and _select's retained
         branch returns before this is ever consulted.
         """
+        if bool(self._param("opponent_acquire_use_displacement")):
+            moved = self._acquire_displacement(obstacle.id, track_length)
+            if moved is None:
+                return False
+            return moved >= float(
+                self._param("opponent_acquire_displacement_m"))
+        # The speed form, kept whole so the change can be undone on the car
+        # with one `ros2 param set` rather than a rebuild.
         frames = int(self._param("opponent_acquire_frames"))
         return self.motion_streaks.get(int(obstacle.id), 0) >= frames
 
@@ -309,6 +424,7 @@ class OpponentSelector:
             obstacles, classes, now, waypoints, track_length, ego_s)
 
         self._update_motion_streaks(obstacles)
+        self._update_motion_history(obstacles, now, track_length)
 
         self.gates = {}
         candidates = []
@@ -336,7 +452,8 @@ class OpponentSelector:
             return None
 
         visible = [obs for obs in candidates
-                   if obs.is_visible and self._moving_enough_to_acquire(obs)]
+                   if obs.is_visible
+                   and self._moving_enough_to_acquire(obs, track_length)]
         if not visible:
             return None
         selected = min(

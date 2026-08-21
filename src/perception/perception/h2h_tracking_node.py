@@ -120,6 +120,22 @@ class HeadToHeadTrackingNode(TrackingNode):
         # 20%, and 10 consecutive frames of it is 0.5 s at 20 Hz.
         'opponent_acquire_speed_mps': 0.8,
         'opponent_acquire_frames': 10,
+        # Measure how far the track has GONE instead, over a window. Speed is
+        # the derivative of position and at 20 Hz that multiplies position
+        # noise by twenty, which is why no speed floor separates a box from a
+        # car: their apparent speeds occupy the same range. Displacement does
+        # separate them - detector noise is zero-mean and does not accumulate,
+        # real motion does. See OpponentSelector._acquire_displacement.
+        #
+        # False restores the speed/streak form exactly, live, without a
+        # rebuild. That is the A/B and the rollback.
+        'opponent_acquire_use_displacement': True,
+        'opponent_acquire_window_sec': 1.0,
+        # [m] Over that window. A stationary box stays inside its own jitter,
+        # measured at up to 15 cm; 0.25 is 1.7x that, and an opponent doing
+        # 0.3 m/s covers 30 cm in the same second. Raise it to demand more
+        # proof of motion, lower it to acquire slower opponents sooner.
+        'opponent_acquire_displacement_m': 0.25,
         # [m/s] Upper sanity bound on a believable opponent speed, and it is
         # new. The router had only the lower one, so a single bad frame
         # reporting 8.55 m/s for a stationary box was accepted as valid and

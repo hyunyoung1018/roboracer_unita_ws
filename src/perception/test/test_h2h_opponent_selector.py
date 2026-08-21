@@ -8,6 +8,8 @@ the car, and every case here is one it was written to survive.
 
 from types import SimpleNamespace
 
+import pytest
+
 from perception.h2h_opponent_selector import (
     DYNAMIC,
     STATIC,
@@ -37,6 +39,9 @@ PARAMS = {
     'classification_debug': True,
     'opponent_acquire_speed_mps': 0.8,
     'opponent_acquire_frames': 10,
+    'opponent_acquire_use_displacement': True,
+    'opponent_acquire_window_sec': 1.0,
+    'opponent_acquire_displacement_m': 0.25,
 }
 
 WAYPOINTS = [
@@ -57,17 +62,29 @@ def selector(**overrides):
 
 
 def select(sel, obstacles, classes, now=0.0, ego_s=0.0, rolling=True):
-    """One tick. `rolling` pre-fills the motion streak acquisition needs.
+    """One tick. `rolling` pre-fills what acquisition needs to see motion.
 
-    Acquisition requires opponent_acquire_frames of sustained speed; the tests
-    that are about the gates themselves say so once here rather than feeding
-    ten identical frames each.
+    Both mechanisms, so a test about the gates themselves reads the same under
+    either setting of opponent_acquire_use_displacement: the streak the speed
+    form counts, and a window of positions the displacement form measures.
+    Tests that are ABOUT acquisition pass rolling=False and build their own.
     """
     if rolling:
         for obstacle in obstacles:
             sel.motion_streaks[int(obstacle.id)] = PARAMS[
                 'opponent_acquire_frames']
+            sel.motion_history[int(obstacle.id)] = rolling_history(
+                obstacle.s_center, now)
     return sel.select(obstacles, classes, now, WAYPOINTS, TRACK, ego_s)
+
+
+def rolling_history(s_end, now, speed=1.0, window=1.0, rate=20.0):
+    """A track that has genuinely been moving, ending where it is now."""
+    count = int(window * rate) + 1
+    return [
+        (now - window + i / rate, (s_end - speed * (window - i / rate)) % TRACK)
+        for i in range(count)
+    ]
 
 
 # ------------------------------------------------------------------ gates
@@ -195,8 +212,14 @@ def test_a_box_reading_dynamic_is_not_acquired():
         assert select(sel, [box], {1: DYNAMIC}, rolling=False) is None
 
 
+# --- the speed/streak form, kept for rollback -----------------------------
+#
+# opponent_acquire_use_displacement False restores it exactly, live. These
+# three feed a track that reports vs while its POSITION never changes - which
+# is the box case, and which is why the displacement form refuses it. They
+# pin the old path, not the shipped one.
 def test_a_rolling_car_is_acquired_once_it_has_rolled():
-    sel = selector()
+    sel = selector(opponent_acquire_use_displacement=False)
     car = obstacle(1, 3.0, vs=2.0)
     for _ in range(9):
         assert select(sel, [car], {1: DYNAMIC}, rolling=False) is None
@@ -204,7 +227,7 @@ def test_a_rolling_car_is_acquired_once_it_has_rolled():
 
 
 def test_the_streak_resets_on_a_slow_frame():
-    sel = selector()
+    sel = selector(opponent_acquire_use_displacement=False)
     car = obstacle(1, 3.0, vs=2.0)
     slow = obstacle(1, 3.0, vs=0.1)
     for _ in range(9):
@@ -214,7 +237,7 @@ def test_the_streak_resets_on_a_slow_frame():
 
 
 def test_an_invisible_frame_neither_counts_nor_resets():
-    sel = selector()
+    sel = selector(opponent_acquire_use_displacement=False)
     car = obstacle(1, 3.0, vs=2.0)
     for _ in range(9):
         select(sel, [car], {1: DYNAMIC}, rolling=False)
@@ -238,3 +261,116 @@ def test_the_streak_is_forgotten_when_the_track_goes():
         select(sel, [obstacle(1, 3.0, vs=2.0)], {1: DYNAMIC}, rolling=False)
     select(sel, [], {}, rolling=False)
     assert 1 not in sel.motion_streaks
+
+
+# --- the displacement form, which is what ships ---------------------------
+#
+# The speed form had to choose. A stationary box's apparent speed was measured
+# at 0.5 to 2.9 m/s (20 Hz differentiation turns a 2.5 cm wobble into 0.5) and
+# a real opponent runs at 0 to 4, so the ranges overlap completely: a floor
+# high enough to reject the box also rejected any opponent slower than it, and
+# the band between static_speed_threshold and that floor was owned by nothing.
+# The car trailed a crawling opponent forever.
+#
+# Displacement does not make that trade. Noise is zero-mean and does not
+# accumulate over a window; motion does. These two tests are the trade, and
+# they pass together - which is the whole point of the change.
+
+def feed(sel, obstacle_id, positions, start=0.0, rate=20.0, d=0.0,
+         vs=0.0, visible=True, ego_s=0.0):
+    """Drive `select` one real frame at a time, at 20 Hz, from `positions`."""
+    result = None
+    for index, s in enumerate(positions):
+        now = start + index / rate
+        obs = SimpleNamespace(id=obstacle_id, s_center=s % TRACK, d_center=d,
+                              vs=vs, is_visible=visible, is_static=False)
+        result = sel.select([obs], {obstacle_id: DYNAMIC}, now, WAYPOINTS,
+                            TRACK, ego_s)
+    return result
+
+
+def test_a_box_wobbling_at_two_metres_a_second_is_not_acquired():
+    """The measured failure: 2.9 m/s of apparent speed, going nowhere.
+
+    Zero-mean wobble of 7 cm either way - larger than anything measured on the
+    car - sustained for two full windows.
+    """
+    sel = selector()
+    wobble = [3.0 + (0.07 if i % 2 else -0.07) for i in range(40)]
+    assert feed(sel, 1, wobble, vs=2.9) is None
+
+
+def test_a_single_frame_outlier_is_removed_outright():
+    """Whatever its size. This is what the robust endpoints buy."""
+    sel = selector()
+    positions = [3.0] * 10 + [5.0] + [3.0] * 20
+    assert feed(sel, 1, positions, vs=2.9) is None
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_the_worst_measured_localisation_step_stays_under_the_threshold():
+    """A persisting step IS measured at full size - the threshold refuses it.
+
+    14.5 cm in one frame is the worst jump measured on this car, and it sits
+    at 0.145 m against a 0.25 m threshold. Pinned because a threshold that
+    drifted under it would let localisation acquire an opponent.
+    """
+    sel = selector()
+    step = [3.0] * 10 + [3.145] * 11
+    sel.motion_history[1] = [(i / 20.0, s) for i, s in enumerate(step)]
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.145, abs=1e-6)
+    assert 0.145 < PARAMS['opponent_acquire_displacement_m']
+
+
+def test_an_opponent_crawling_at_a_third_of_a_metre_a_second_is_acquired():
+    """The case the speed floor could never reach.
+
+    0.3 m/s is under opponent_acquire_speed_mps at 0.8 AND at 0.5, so the
+    streak form never acquired it however long it ran - and an unacquired
+    opponent is excluded from every opponent-aware check downstream.
+    """
+    sel = selector()
+    crawl = [3.0 + 0.3 * (i / 20.0) for i in range(40)]
+    acquired = feed(sel, 1, crawl, vs=0.3)
+    assert acquired is not None and acquired.id == 1
+
+
+def test_the_window_has_to_be_full_before_anything_is_acquired():
+    """Three frames of fast motion is not a second of observation."""
+    sel = selector()
+    assert feed(sel, 1, [3.0, 3.2, 3.4], vs=4.0) is None
+
+
+def test_a_track_seen_twice_in_a_second_does_not_qualify():
+    """Span, not sample count: two samples a second apart span a second."""
+    sel = selector()
+    obs = SimpleNamespace(id=1, s_center=3.0, d_center=0.0, vs=2.0,
+                          is_visible=True, is_static=False)
+    sel.select([obs], {1: DYNAMIC}, 0.0, WAYPOINTS, TRACK, 0.0)
+    moved = SimpleNamespace(id=1, s_center=4.0, d_center=0.0, vs=2.0,
+                            is_visible=True, is_static=False)
+    assert sel.select([moved], {1: DYNAMIC}, 1.0, WAYPOINTS, TRACK, 0.0) is None
+
+
+def test_displacement_is_measured_across_the_start_line():
+    """s wraps; the offsets the medians run on are anchored, so it cannot."""
+    sel = selector()
+    crossing = [(TRACK - 0.5 + 0.5 * (i / 20.0)) for i in range(40)]
+    acquired = feed(sel, 1, crossing, vs=0.5, ego_s=TRACK - 2.0)
+    assert acquired is not None and acquired.id == 1
+
+
+def test_an_invisible_frame_contributes_no_displacement():
+    sel = selector()
+    obs = SimpleNamespace(id=1, s_center=3.0, d_center=0.0, vs=0.0,
+                          is_visible=False, is_static=False)
+    for index in range(40):
+        sel.select([obs], {1: DYNAMIC}, index / 20.0, WAYPOINTS, TRACK, 0.0)
+    assert sel._acquire_displacement(1, TRACK) is None
+
+
+def test_the_history_is_forgotten_when_the_track_goes():
+    sel = selector()
+    feed(sel, 1, [3.0 + 0.5 * (i / 20.0) for i in range(30)])
+    sel.select([], {}, 2.0, WAYPOINTS, TRACK, 0.0)
+    assert 1 not in sel.motion_history
