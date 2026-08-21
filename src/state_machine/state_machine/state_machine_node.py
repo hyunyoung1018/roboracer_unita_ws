@@ -1987,6 +1987,24 @@ class StateMachine(Node):
         self.cur_obstacles_in_interest = self.obstacles_in_interest
         return
 
+    def assign_trailing_target(self):
+        """Fill behavior_strategy.trailing_targets for this tick.
+
+        A method rather than the inline branch it replaces, so head to head can
+        widen it without a second copy of loop() - the publish happens a few
+        lines below, so there is no seam after this one. The body is exactly
+        the branch that was here, so time trials is unchanged.
+
+        NOTE: check_ot_cloest_target() intentionally NOT called -- it promoted
+        the src to OVERTAKE while merely trailing (un-committed OT line). See
+        get_farthest_target for the rationale; overtaking is gated by the state.
+        """
+        if self.cur_state == StateType.TRAILING:
+            self.behavior_strategy.trailing_targets, self.local_wpnts_src = \
+                self.get_farthest_target(self.local_wpnts_src)
+        else:
+            self.behavior_strategy.trailing_targets = []
+
     def get_overtaking_target(self):
         if self.cur_gb_wpnts.closest_target is not None:
             return [self.cur_gb_wpnts.closest_target]
@@ -2113,14 +2131,7 @@ class StateMachine(Node):
         else:
             self.cur_state, self.local_wpnts_src = self.state_transitions[self.cur_state](self)
 
-        if self.cur_state == StateType.TRAILING:
-            # NOTE: check_ot_cloest_target() intentionally NOT called -- it promoted the
-            # src to OVERTAKE while merely trailing (un-committed OT line). See
-            # get_farthest_target for the rationale; overtaking is gated by the state.
-            self.behavior_strategy.trailing_targets, self.local_wpnts_src = \
-                self.get_farthest_target(self.local_wpnts_src)
-        else:
-            self.behavior_strategy.trailing_targets = []
+        self.assign_trailing_target()
 
         self.behavior_strategy.overtaking_targets = self.get_overtaking_target()
 

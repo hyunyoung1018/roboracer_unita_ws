@@ -751,6 +751,35 @@ class H2HStateMachine(StateMachine):
         )
         return gap, target
 
+    def assign_trailing_target(self):
+        """Name a trailing target during a static evasion too.
+
+        The shared version fills the list only in TRAILING, so the instant
+        OVERTAKE arms the controller's opponent goes None and the gap to the
+        real opponent stops being held. H2HController.trailing_active() was
+        written to keep trailing through an evasion and could never fire,
+        because the target it needs is cleared one node upstream.
+
+        Only for the STATIC cache. The lane-change path is planned around the
+        opponent's predicted future, so holding a fixed gap to it there would
+        forbid the pass that path exists to make.
+
+        The target is the OPPONENT, not what the free check refused. See
+        get_traling_target for why: that list is usually empty here by design -
+        _blocked_only_by_the_opponent clears it - and when it is not, it names
+        the BOX the path was drawn to get around, which is the one thing the
+        car must NOT brake for mid-evasion.
+        """
+        super().assign_trailing_target()
+        if self.behavior_strategy.trailing_targets:
+            return
+        if not (self.cur_state == StateType.OVERTAKE
+                and self.static_overtaking_mode):
+            return
+        opponent = self._opponent_ahead()
+        if opponent is not None:
+            self.behavior_strategy.trailing_targets = [opponent]
+
     def get_traling_target(self):
         """During a static evasion, name the OPPONENT, not what blocked the path.
 
