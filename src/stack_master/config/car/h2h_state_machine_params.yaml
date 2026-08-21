@@ -164,7 +164,7 @@ state_machine:
       # car's true 0.28 m, so free_dist is the actual gap between the car's side
       # and the obstacle's edge. Dynamic had no reason to be stricter than
       # static - the planner applies its own 0.10 m safety_margin on top.
-      lateral_width_m: 0.2
+      lateral_width_m: 0.16
 
     # --- recovery planner ----------------------------------------------------
     # recovery_node now publishes /planner/recovery/wpnts (it had no publisher
@@ -193,4 +193,4 @@ state_machine:
       #
       # time_trials loads state_machine_params.yaml without this overlay, so
       # its recovery planner stays disabled and its behaviour is unchanged.
-      enabled: true
+      enabled: false
