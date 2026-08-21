@@ -214,15 +214,18 @@ EXTENT_PARAMS = dict(
 )
 
 
-def extent_node(**overrides):
-    return node(**dict(EXTENT_PARAMS, **overrides))
+def extent_node(selected=None, **overrides):
+    n = node(**dict(EXTENT_PARAMS, **overrides))
+    n._opponent_track_id = selected
+    return n
 
 
-def extent_track(is_static, history=10, extents=None, was_opponent=False):
-    obstacle = SimpleNamespace(id=7, is_static=is_static, s_center=3.0,
-                               d_center=0.0, vs=0.0, vd=0.0)
+def extent_track(is_static, history=10, extents=None, was_opponent=False,
+                 obstacle_id=7):
+    obstacle = SimpleNamespace(id=obstacle_id, is_static=is_static,
+                               s_center=3.0, d_center=0.0, vs=0.0, vd=0.0)
     t = SimpleNamespace(
-        track_id=7, obstacle=obstacle, stamp=0.0, missed=0,
+        track_id=obstacle_id, obstacle=obstacle, stamp=0.0, missed=0,
         s_history=[3.0] * history, d_history=[0.0] * history,
         extents=list(extents if extents is not None else [0.202] * 4))
     if was_opponent:
@@ -238,7 +241,7 @@ def extent_measurement(half=0.10):
 
 
 def test_a_stopped_opponent_keeps_the_car_floor():
-    n = extent_node()
+    n = extent_node(selected=None)      # released, but it WAS the opponent
     stopped = extent_track(is_static=True, was_opponent=True)
     for _ in range(200):                       # ten seconds
         stopped.extents = n._hold_extents(stopped, extent_measurement(), DT)
@@ -247,28 +250,45 @@ def test_a_stopped_opponent_keeps_the_car_floor():
 
 def test_without_the_latch_it_decays_to_the_pillar():
     """The bug, stated as a measurement."""
-    n = extent_node()
+    n = extent_node(selected=None)
     stopped = extent_track(is_static=True, was_opponent=False)
     for _ in range(200):
         stopped.extents = n._hold_extents(stopped, extent_measurement(), DT)
     assert min(stopped.extents) == pytest.approx(0.10)
 
 
-def test_a_box_never_gets_the_car_floor():
-    """Latching on DYNAMIC would inflate every box; latching on the lock does not."""
-    n = extent_node()
-    box = extent_track(is_static=False, was_opponent=False, extents=[0.075] * 4)
+def test_a_box_reading_dynamic_is_still_only_a_box():
+    """The 2026-08-22 failure. DYNAMIC is nearly free; a car footprint is not.
+
+    Five obstacles at five different gaps, every one of them "non-static",
+    every one reported 0.404 m wide against a real 0.15 to 0.20 - and on a
+    course 1.30 m across the corridor closed:
+
+        no room either side: left 0.69 m (taken), right -0.37 m (taken)
+    """
+    n = extent_node(selected=None)
+    box = extent_track(is_static=False, was_opponent=False, obstacle_id=39,
+                       extents=[0.075] * 4)
     for _ in range(200):
         box.extents = n._hold_extents(box, extent_measurement(half=0.075), DT)
-    assert max(box.extents) == pytest.approx(0.202)   # DYNAMIC, so floored now
-    settled = extent_track(is_static=True, was_opponent=False, extents=[0.075] * 4)
-    for _ in range(200):
-        settled.extents = n._hold_extents(settled, extent_measurement(half=0.075), DT)
-    assert max(settled.extents) == pytest.approx(0.075)
+    assert max(box.extents) == pytest.approx(0.075)
+
+
+def test_only_the_selected_opponent_gets_the_car_floor():
+    n = extent_node(selected=7)
+    opponent = extent_track(is_static=False, obstacle_id=7, extents=[0.075] * 4)
+    other = extent_track(is_static=False, obstacle_id=39, extents=[0.075] * 4)
+    for _ in range(40):
+        opponent.extents = n._hold_extents(
+            opponent, extent_measurement(half=0.075), DT)
+        other.extents = n._hold_extents(
+            other, extent_measurement(half=0.075), DT)
+    assert min(opponent.extents) == pytest.approx(0.202)
+    assert max(other.extents) == pytest.approx(0.075)
 
 
 def test_a_moving_opponent_is_unchanged():
-    n = extent_node()
+    n = extent_node(selected=7)
     moving = extent_track(is_static=False, was_opponent=True)
     for _ in range(200):
         moving.extents = n._hold_extents(moving, extent_measurement(), DT)

@@ -18,9 +18,15 @@
 # BOTH launches detect identically and there is one detector to tune.
 #
 # What is left here is the same knowledge moved downstream of classification:
-# detect everything as a box, and once the tracker has confirmed a track is
-# MOVING, believe it is a car. That is the tracking block below, and it cannot
-# fire on a static obstacle - see h2h_tracking_node._is_confirmed_moving.
+# detect everything as a box, and once the SELECTOR has locked onto one of them
+# as the opponent, believe that one is a car. That is the tracking block below
+# - see h2h_tracking_node._believed_to_be_a_car.
+#
+# The selection, not the classification. DYNAMIC is nearly free on this car
+# (39 of 41 tracks read it for their whole life), so keying the car footprint
+# on the class put it under every box on the course and reported each of them
+# 0.404 m wide against a real 0.15 to 0.20. On a course 1.30 m across that is
+# the difference between a corridor and no corridor.
 
 tracking:
   ros__parameters:

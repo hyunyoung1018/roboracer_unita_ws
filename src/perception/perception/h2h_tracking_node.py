@@ -210,21 +210,6 @@ class HeadToHeadTrackingNode(TrackingNode):
             setattr(target, field, getattr(source, field))
         return target
 
-    def _is_confirmed_moving(self, track):
-        """True once the tracker itself has decided this track is not static.
-
-        Deliberately conservative in both directions. A brand new track has
-        ``is_static`` False simply because that is the message default, so the
-        history length is required as well - the same evidence
-        ``_update_track`` demands before it sets the flag. A box therefore never
-        reaches the moving-target ceiling, not even for its first few frames.
-
-        That is precisely the DYNAMIC of the three-state view, so it is defined
-        once, in _track_class, and the extent ceiling and the opponent gates
-        cannot drift apart.
-        """
-        return self._track_class(track) == DYNAMIC
-
     def _obstacles_cb(self, msg):
         """Track as the parent does, then publish the two split views.
 
@@ -492,6 +477,11 @@ class HeadToHeadTrackingNode(TrackingNode):
                 if int(track.obstacle.id) == selected_id:
                     track.was_opponent = True
                     break
+        # Read by _hold_extents on the NEXT tick - the parent has already
+        # updated the extents by the time the split runs, so the floor follows
+        # the selection by one frame. At 20 Hz that is 50 ms, against an
+        # acquisition that took a second.
+        self._opponent_track_id = selected_id
 
         self.static_pub.publish(static_msg)
         self.dynamic_pub.publish(dynamic_msg)
@@ -533,6 +523,37 @@ class HeadToHeadTrackingNode(TrackingNode):
             'obstacles': records,
         })))
 
+    def _believed_to_be_a_car(self, track):
+        """Should this track carry a car's footprint rather than its own?
+
+        THE SELECTED OPPONENT, and nothing else. There is one other car on the
+        track; everything else is a box, a cone or a piece of wall, and the
+        measurement is honest about those.
+
+        It used to be every DYNAMIC track, and that was far too many. Reading
+        DYNAMIC is nearly free - 39 of 41 tracks did it for their whole life on
+        2026-08-19 - so the car floor went under every box on the course and
+        each was reported 0.404 m wide against a real 0.15 to 0.20 m. Straight
+        off the run of 2026-08-22, five obstacles at five different gaps, every
+        one of them "non-static", every one of them carrying obs.size 0.404 or
+        0.42:
+
+            no room either side of the 1 obstacle(s) from s=12.47 to s=12.47:
+            left 0.69 m (taken), right -0.37 m (taken), need 0.19
+
+        On a course 1.30 m across at its narrowest, believing a 0.20 m box is
+        0.404 m is the difference between a corridor and no corridor. The car
+        stopped, and nothing recovered.
+
+        Selection is the strong claim and the honest one: 0.25 m of net
+        displacement over a second, which is a thing that moves. `was_opponent`
+        keeps it once earned, because a car that stops is still a car.
+        """
+        selected = getattr(self, '_opponent_track_id', None)
+        if selected is not None and int(track.obstacle.id) == int(selected):
+            return True
+        return bool(getattr(track, 'was_opponent', False))
+
     def _hold_extents(self, track, measurement, dt):
         """Hold extents with a car's ceiling and leak rate once moving.
 
@@ -554,8 +575,7 @@ class HeadToHeadTrackingNode(TrackingNode):
         # downstream subtracts that width from the room either side, so the
         # path it drew cleared a car that was 8 cm wider than the one it was
         # drawn for.
-        if not (self._is_confirmed_moving(track)
-                or getattr(track, 'was_opponent', False)):
+        if not self._believed_to_be_a_car(track):
             return super()._hold_extents(track, measurement, dt)
 
         held = track.extents
