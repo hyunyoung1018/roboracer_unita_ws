@@ -107,7 +107,6 @@ tracking:
     # the test time_trials drives on.
 
     single_dynamic_opponent: true
-    logical_opponent_id: 1000000
 
     # The OPPONENT's measured width, not ours. Used only to ask whether its
     # footprint fits between the track bounds before it can be selected.

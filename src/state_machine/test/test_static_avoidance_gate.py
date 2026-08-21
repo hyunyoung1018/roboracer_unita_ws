@@ -22,9 +22,15 @@ from state_machine.h2h_state_machine import H2HStateMachine
 TRACK = 20.0
 
 
-def obstacle(s_center, vs=0.0, d_center=0.0, is_static=False):
-    return SimpleNamespace(s_center=s_center, d_center=d_center, vs=vs,
-                           is_static=is_static)
+def obstacle(s_center, vs=0.0, d_center=0.0, is_static=False,
+             obstacle_id=None):
+    # Derived from the position for the same reason as in
+    # test_trailing_candidates: the two streams agree on ids now.
+    if obstacle_id is None:
+        obstacle_id = int(round(s_center * 1000)) * 10000 + int(
+            round(d_center * 1000))
+    return SimpleNamespace(id=obstacle_id, s_center=s_center,
+                           d_center=d_center, vs=vs, is_static=is_static)
 
 
 def machine(obstacles, opponents=(), cur_vs=1.0, cur_s=0.0, stamp=0.0):
@@ -130,7 +136,14 @@ def record(rec_id, gap, blocked, free_dist=None):
             "free_dist": free_dist}
 
 
-def excused(records, opponents=(), cur_s=0.0):
+def excused(records, opponent_ids=(), cur_s=0.0):
+    """`opponent_ids` names the opponent by ID, which is what the code reads.
+
+    Both streams carry the tracker id now, so the opponent is identified by
+    membership rather than by re-deriving it from the gap each record was
+    measured at.
+    """
+    opponents = [obstacle(0.0, obstacle_id=int(i)) for i in opponent_ids]
     m = machine([], opponents, cur_s=cur_s)
     cache = SimpleNamespace(free_dbg={"is_init": True, "obs": records})
     return H2HStateMachine._blocked_only_by_the_opponent(m, cache)
@@ -144,30 +157,30 @@ def test_an_opponent_between_the_car_and_the_box_no_longer_refuses():
     it is why static avoidance never armed while trailing.
     """
     assert excused([record(1, 3.0, False), record(2, 1.0, True)],
-                   opponents=[obstacle(1.0)])
+                   opponent_ids=[2])
 
 
 def test_a_distant_opponent_still_stops_vetoing():
     assert excused([record(1, 3.0, False), record(2, 6.0, True)],
-                   opponents=[obstacle(6.0)])
+                   opponent_ids=[2])
 
 
 def test_an_opponent_just_past_the_box_no_longer_refuses():
     assert excused([record(1, 3.0, False), record(2, 4.0, True)],
-                   opponents=[obstacle(4.0)])
+                   opponent_ids=[2])
 
 
 def test_a_blocking_box_always_refuses():
     # A box does not move, so no gap controller gets the car past it. This is
     # the case the excuse must never reach, at any distance.
     assert not excused([record(1, 3.0, True), record(2, 6.0, True)],
-                       opponents=[obstacle(6.0)])
+                       opponent_ids=[2])
 
 
 def test_a_box_and_the_opponent_together_still_refuse():
     # Mixture: the opponent alone would be excused, the box drags it back.
     assert not excused([record(1, 3.0, True), record(2, 1.0, True)],
-                       opponents=[obstacle(1.0)])
+                       opponent_ids=[2])
 
 
 def test_no_opponent_means_no_excuse():
@@ -175,7 +188,7 @@ def test_no_opponent_means_no_excuse():
 
 
 def test_nothing_blocked_is_not_this_functions_business():
-    assert not excused([record(1, 3.0, False)], opponents=[obstacle(6.0)])
+    assert not excused([record(1, 3.0, False)], opponent_ids=[2])
 
 
 def test_an_uninitialised_cache_is_never_excused():
@@ -186,15 +199,15 @@ def test_an_uninitialised_cache_is_never_excused():
 
 def test_a_stale_opponent_stream_excuses_nobody():
     # No live opponent to name, so the refusal stands.
-    m = machine([], [obstacle(1.0)], stamp=-10.0)
+    m = machine([], [obstacle(1.0, obstacle_id=1)], stamp=-10.0)
     cache = SimpleNamespace(
         free_dbg={"is_init": True, "obs": [record(1, 1.0, True)]})
     assert not H2HStateMachine._blocked_only_by_the_opponent(m, cache)
 
 
 # ------------------------------------- and the same opponent out of the floor
-def worst(records, opponents=(), is_static_cache=True):
-    m = machine([], opponents)
+def worst(records, opponent_ids=(), is_static_cache=True):
+    m = machine([], [obstacle(0.0, obstacle_id=int(i)) for i in opponent_ids])
     cache = SimpleNamespace(free_dbg={"is_init": True, "obs": records})
     m.cur_static_avoidance_wpnts = cache if is_static_cache else object()
     return H2HStateMachine._worst_free(m, cache)
@@ -205,13 +218,13 @@ def test_the_opponent_is_left_out_of_the_static_paths_worst_clearance():
     # opponent refuses through static_overtake_min_clearance_m.
     records = [record(1, 3.0, True, free_dist=0.10),
                record(2, 1.0, True, free_dist=-0.30)]
-    assert worst(records, opponents=[obstacle(1.0)]) == 0.10
+    assert worst(records, opponent_ids=[2]) == 0.10
 
 
 def test_the_box_still_sets_the_worst_clearance():
     records = [record(1, 3.0, True, free_dist=-0.05),
                record(2, 1.0, True, free_dist=-0.30)]
-    assert worst(records, opponents=[obstacle(1.0)]) == -0.05
+    assert worst(records, opponent_ids=[2]) == -0.05
 
 
 def test_another_cache_keeps_the_shared_answer():
@@ -219,7 +232,7 @@ def test_another_cache_keeps_the_shared_answer():
     # exactly what makes the car trail, and _worth_driving compares against it.
     records = [record(1, 3.0, True, free_dist=0.10),
                record(2, 1.0, True, free_dist=-0.30)]
-    assert worst(records, opponents=[obstacle(1.0)],
+    assert worst(records, opponent_ids=[2],
                  is_static_cache=False) == -0.30
 
 

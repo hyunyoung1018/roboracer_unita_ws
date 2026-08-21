@@ -407,94 +407,28 @@ class H2HStateMachine(StateMachine):
         self._opponent_obstacles = list(msg.obstacles)
         self._opponent_stamp = self.now_sec()
 
-    def _opponent_positions(self):
-        """Frenet centres of the selected opponent, or empty."""
+    def _opponent_ids(self):
+        """Tracker ids of the selected opponent, or an empty set.
+
+        One id space. /tracking/dynamic_obstacles carries the opponent under
+        the same tracker id /tracking/obstacles gives it, so identifying it is
+        a set membership test rather than a coordinate comparison.
+        """
         if not self._opponent_obstacles or self._opponent_stamp is None:
-            return []
+            return set()
         if self.now_sec() - self._opponent_stamp > self.opponent_stream_timeout_sec:
-            return []
-        return [(float(obs.s_center), float(obs.d_center))
-                for obs in self._opponent_obstacles]
+            return set()
+        return {int(obs.id) for obs in self._opponent_obstacles}
 
-    def _is_opponent(self, obstacle, positions):
-        """Match by position, because the two streams disagree about the id.
+    def _is_opponent(self, obstacle, opponent_ids):
+        """Is this obstacle the one the selector locked onto?
 
-        /tracking/dynamic_obstacles republishes the opponent under
-        logical_opponent_id so the predictor sees a stable name across tracker
-        id churn; /tracking/obstacles, which this node reads, carries the raw
-        tracker id. Both copies are made from the same track in the same
-        tracker callback and neither rewrites the centre, so the match is
-        exact - the millimetre tolerance is for the float round-trip, not for
-        any real ambiguity.
+        Both streams carry the tracker's own id, so this is the id. It used to
+        compare Frenet centres to a millimetre, because the dynamic stream
+        renamed the opponent and the two streams disagreed about what to call
+        the same car.
         """
-        return any(
-            abs(float(obstacle.s_center) - s) < 1e-3
-            and abs(float(obstacle.d_center) - d) < 1e-3
-            for s, d in positions)
-
-    def obstacle_prediction_cb(self, data):
-        """Translate the prediction's id back to the raw tracker id.
-
-        The shared free check asks whether a prediction belongs to an obstacle
-        by comparing numbers:
-
-            if len(obstacle_predictions) != 0 \
-                    and self.obstacles_prediction_id == obs.id:
-
-        and in head to head those two numbers come from different naming
-        schemes, so they never match. One car, renamed once on the way through:
-
-            tracking_node          calls it 83
-            h2h_tracking_node      republishes it on
-                                   /tracking/dynamic_obstacles as
-                                   logical_opponent_id (1000000), so the
-                                   predictor keeps one name across tracker id
-                                   churn
-            opp_prediction         reads THAT topic, so its PredictionArray is
-                                   labelled 1000000
-            state_machine          reads /tracking/obstacles, so the obstacle
-                                   in front of it is still 83
-
-        1000000 == 83 is false on every tick, so the prediction is discarded
-        and the dyn/nopred branch runs instead - the opponent frozen at its
-        current position. Measured on the car, and it says so outright:
-
-            obs 83 via dyn/nopred (id_mismatch or empty) free=-0.095 at 2.59m
-
-        That is the branch the whole space-time arrival window exists to
-        replace, so with this unfixed, turning prediction on buys nothing: the
-        avoidance path is refused because the opponent happens to be standing
-        on it right now, exactly as it is with no predictor running at all.
-
-        Fixed here rather than by publishing the raw id, because the raw id is
-        overwritten before /tracking/dynamic_obstacles is published and the
-        predictor never sees it. Dropping the logical id instead would give the
-        predictor back the id churn it was introduced to hide.
-
-        The translation is the same one _is_opponent already does, for the same
-        reason: both copies are made from one track in one tracker callback and
-        neither rewrites the centre, so position identifies it exactly.
-        """
-        super().obstacle_prediction_cb(data)
-        # The shared callback only stores anything when the message carried
-        # predictions; on an empty one it leaves the PREVIOUS array in place,
-        # and re-translating against today's positions would relabel a
-        # prediction this message said nothing about.
-        if not len(data.predictions):
-            return
-        raw_id = self._raw_opponent_id()
-        if raw_id is not None:
-            self.obstacles_prediction_id = raw_id
-
-    def _raw_opponent_id(self):
-        """The tracker id the predicted opponent carries on /tracking/obstacles."""
-        positions = self._opponent_positions()
-        if not positions:
-            return None
-        for obstacle in self.obstacles_perception or []:
-            if self._is_opponent(obstacle, positions):
-                return int(obstacle.id)
-        return None
+        return int(obstacle.id) in opponent_ids
 
     def _near_the_line(self, obstacle):
         """Is this obstacle close enough to the raceline to matter at all?
@@ -517,10 +451,10 @@ class H2HStateMachine(StateMachine):
         catches that afterwards, so it was the milder of the two leaks, but it
         is the same leak.
         """
-        positions = self._opponent_positions()
+        opponent_ids = self._opponent_ids()
         return [obs for obs in self.cur_obstacles_in_interest
                 if self._near_the_line(obs)
-                and not self._is_opponent(obs, positions)]
+                and not self._is_opponent(obs, opponent_ids)]
 
     def _closing_on_nearest_avoidable(self, threshold_m) -> bool:
         """Is the car closing on the nearest obstacle the static path is for?
@@ -807,10 +741,10 @@ class H2HStateMachine(StateMachine):
         opponent that swings wide to overtake would otherwise stop being
         trailed at the moment it draws alongside.
         """
-        positions = self._opponent_positions()
+        opponent_ids = self._opponent_ids()
         gap, target = nearest_ahead(
             [obs for obs in self.cur_obstacles_in_interest
-             if self._near_the_line(obs) or self._is_opponent(obs, positions)],
+             if self._near_the_line(obs) or self._is_opponent(obs, opponent_ids)],
             self.cur_s,
             self.track_length,
             self.interest_horizon_m,
@@ -855,7 +789,7 @@ class H2HStateMachine(StateMachine):
     def _opponent_ahead(self):
         """The selected opponent if it is in front and worth holding a gap to.
 
-        Reads the same live list _opponent_positions does, so a stale stream
+        Reads the same live list _opponent_ids does, so a stale stream
         answers None and the shared behaviour comes back.
         """
         if not self._opponent_obstacles or self._opponent_stamp is None:
@@ -1116,26 +1050,16 @@ class H2HStateMachine(StateMachine):
     def _opponent_record_ids(self, records):
         """Ids in a free_dbg record set that are the selected opponent.
 
-        The records carry the raw tracker id and the gap they were measured at,
-        so the opponent is found the same way as everywhere else in this class
-        - by position - and then reported by the id the record uses.
+        The records carry the tracker id, and so does the dynamic stream, so
+        this is an intersection. It used to re-derive the answer from the gap
+        each record was measured at, to a centimetre, because the streams
+        disagreed about the id.
         """
-        positions = self._opponent_positions()
-        if not positions or not self.max_s:
+        opponent_ids = self._opponent_ids()
+        if not opponent_ids:
             return set()
-        ids = set()
-        for rec in records:
-            gap = rec.get("gap")
-            if gap is None or rec.get("id") is None:
-                continue
-            for s_center, _ in positions:
-                opponent_gap = (s_center - self.cur_s) % self.max_s
-                # The record rounds the gap to two decimals; nothing else in
-                # the list will be within a centimetre of the opponent.
-                if abs(opponent_gap - gap) < 0.02:
-                    ids.add(rec["id"])
-                    break
-        return ids
+        return {rec["id"] for rec in records
+                if rec.get("id") is not None and int(rec["id"]) in opponent_ids}
 
     def _check_free_frenet(self, wpnts_data):
         """Use physical body width and debounce only the global-path result."""

@@ -460,9 +460,7 @@ class OpponentSelector:
             visible,
             key=lambda obs: initial_candidate_key(obs, ego_s, track_length))
         self.active_id = int(selected.id)
-        self._log(
-            f"acquired dynamic opponent tracker {self.active_id} as "
-            f"logical opponent {int(self._param('logical_opponent_id'))}")
+        self._log(f"acquired dynamic opponent tracker {self.active_id}")
         return selected
 
     # ------------------------------------------------------------- speed

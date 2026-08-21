@@ -91,7 +91,6 @@ class HeadToHeadTrackingNode(TrackingNode):
     # min_unknown_samples), which no longer have anything to configure.
     SELECTION_DEFAULTS = {
         'single_dynamic_opponent': True,
-        'logical_opponent_id': 1000000,
         'opponent_width_m': 0.24,
         'opponent_boundary_margin_m': 0.03,
         'opponent_forward_min_m': 0.2,
@@ -414,10 +413,9 @@ class HeadToHeadTrackingNode(TrackingNode):
         enters the other one.
 
         The dynamic side is NOT every moving track. It is the one opponent the
-        selector has locked onto, republished under logical_opponent_id so that
-        opp_prediction and the lane-change planner see a stable ID across the
-        tracker losing and recreating its own. Everything downstream of this
-        node is written for exactly one opponent.
+        selector has locked onto, carrying its own tracker id. Everything
+        downstream of this node is written for exactly one opponent, and being
+        on this topic is what says which one - one id space, one meaning.
 
         ``publish_static`` is honoured for the same reason the parent honours
         it: with it false the static half is deliberately invisible, and a
@@ -469,7 +467,14 @@ class HeadToHeadTrackingNode(TrackingNode):
             # already in the array the parent published on /tracking/obstacles.
             opponent = deepcopy(selected)
             self.selector.stabilize_speed(opponent, now)
-            opponent.id = int(self.get_parameter('logical_opponent_id').value)
+            # The tracker id is kept. Being on THIS TOPIC is already the
+            # designation - the split puts nothing else here - so renaming it
+            # said the same thing a second time, in a name only half the stack
+            # could read. state_machine reads /tracking/obstacles, where the
+            # same car keeps its tracker id, so every id comparison that
+            # crossed the two streams failed. It cost a position-matcher on
+            # each side and a translation on the prediction, and the car drove
+            # into an opponent it had a prediction for.
             dynamic_msg.obstacles.append(opponent)
 
         self.static_pub.publish(static_msg)
@@ -489,15 +494,13 @@ class HeadToHeadTrackingNode(TrackingNode):
         if self.debug_pub.get_subscription_count() == 0:
             return
         selected_id = None if selected is None else int(selected.id)
-        logical_id = int(self.get_parameter('logical_opponent_id').value)
         records = []
         for obstacle in obstacles:
             tracker_id = int(obstacle.id)
             corridor_ok, forward_ok = self.selector.gates.get(
                 tracker_id, (False, False))
             records.append({
-                'id': logical_id if tracker_id == selected_id else tracker_id,
-                'tracker_id': tracker_id,
+                'id': tracker_id,
                 'stable_class': classes[tracker_id],
                 'is_static': bool(obstacle.is_static),
                 'is_visible': bool(obstacle.is_visible),

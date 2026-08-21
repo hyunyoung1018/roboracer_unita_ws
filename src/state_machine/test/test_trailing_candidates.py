@@ -17,9 +17,15 @@ from state_machine.h2h_state_machine import H2HStateMachine
 TRACK = 20.0
 
 
-def obstacle(s_center, d_center, vs=0.0):
-    return SimpleNamespace(s_center=s_center, d_center=d_center, vs=vs,
-                           is_static=True)
+def obstacle(s_center, d_center, vs=0.0, obstacle_id=None):
+    # An id derived from the position, so a test that lists the same obstacle
+    # twice - once in the world, once as the opponent - still describes one
+    # object. The streams agree on ids now; they used to be matched by centre.
+    if obstacle_id is None:
+        obstacle_id = int(round(s_center * 1000)) * 10000 + int(
+            round(d_center * 1000))
+    return SimpleNamespace(id=obstacle_id, s_center=s_center,
+                           d_center=d_center, vs=vs, is_static=True)
 
 
 def machine(obstacles, opponents=(), threshold=0.6, cur_s=0.0, cur_vs=1.0):
