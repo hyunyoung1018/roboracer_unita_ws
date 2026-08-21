@@ -24,6 +24,47 @@
 
 tracking:
   ros__parameters:
+    # [m/s] OVERRIDES perception.yaml's 0.15, for head to head only.
+    #
+    # Below this a track is a static-obstacle candidate. It is not the shared
+    # value because the two launches ask different things of is_static: in time
+    # trials it only picks which branch of _check_free_frenet runs and the
+    # planner keeps seeing the obstacle either way, while here it decides
+    # whether a track can become the opponent - and a box that becomes the
+    # opponent is pulled out of /tracking/static_obstacles, folded into the
+    # corridor as a wall, and trailed instead of driven around.
+    #
+    # WHY 0.15 IS TOO LOW HERE, and it is arithmetic rather than taste. The
+    # classification speed is the distance between two medians over the time
+    # between them, and that window GROWS with the track:
+    #
+    #   6 frames  (new)   half=3   0.15 s baseline   1 sigma = 0.20 m/s
+    #   10 frames         half=5   0.25 s            1 sigma = 0.09
+    #   20 frames (full)  half=10  0.50 s            1 sigma = 0.034
+    #
+    # taking 3 cm of per-frame position noise, which is what the L-shape fit
+    # measures. A track younger than about a second therefore carries MORE
+    # noise than the threshold it is judged against, and _reclassify_on_medians
+    # defaults to DYNAMIC until static_min_samples is reached - so a new track
+    # starts dynamic and its first estimates cannot argue it out of that.
+    #
+    # Measured over five runs: 90% of judgements read DYNAMIC, and of 92 tracks
+    # in one run exactly ONE stayed static for its whole life. 72 were never
+    # anything but dynamic, which is the young-track window, not hysteresis.
+    #
+    # WHY 0.3 IS SAFE. The thing this must not swallow is a slowly moving
+    # opponent, and the slowest one worth trailing is about 1 m/s - the same
+    # figure fallback_min_opponent_speed_mps and the acquisition displacement
+    # are sized around. 0.3 sits at 1.5 sigma of a NEW track's noise and at
+    # nine sigma of a mature one's, while leaving 0.7 m/s of clearance to a
+    # 1 m/s car. Raising it to 0.5 halves the young-track false rate again and
+    # still clears that car by 0.5 m/s; going past about 0.7 starts to argue
+    # with the opponent itself.
+    #
+    # Live, and worth sweeping on the car before this value is trusted:
+    #   ros2 param set /tracking static_speed_threshold 0.5
+    static_speed_threshold: 0.15
+
 # A FLOOR on a CONFIRMED-MOVING track, and the reason this file still
 # exists. Static obstacles never reach it.
 #
