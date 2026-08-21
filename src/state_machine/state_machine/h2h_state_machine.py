@@ -431,6 +431,70 @@ class H2HStateMachine(StateMachine):
             and abs(float(obstacle.d_center) - d) < 1e-3
             for s, d in positions)
 
+    def obstacle_prediction_cb(self, data):
+        """Translate the prediction's id back to the raw tracker id.
+
+        The shared free check asks whether a prediction belongs to an obstacle
+        by comparing numbers:
+
+            if len(obstacle_predictions) != 0 \
+                    and self.obstacles_prediction_id == obs.id:
+
+        and in head to head those two numbers come from different naming
+        schemes, so they never match. One car, renamed once on the way through:
+
+            tracking_node          calls it 83
+            h2h_tracking_node      republishes it on
+                                   /tracking/dynamic_obstacles as
+                                   logical_opponent_id (1000000), so the
+                                   predictor keeps one name across tracker id
+                                   churn
+            opp_prediction         reads THAT topic, so its PredictionArray is
+                                   labelled 1000000
+            state_machine          reads /tracking/obstacles, so the obstacle
+                                   in front of it is still 83
+
+        1000000 == 83 is false on every tick, so the prediction is discarded
+        and the dyn/nopred branch runs instead - the opponent frozen at its
+        current position. Measured on the car, and it says so outright:
+
+            obs 83 via dyn/nopred (id_mismatch or empty) free=-0.095 at 2.59m
+
+        That is the branch the whole space-time arrival window exists to
+        replace, so with this unfixed, turning prediction on buys nothing: the
+        avoidance path is refused because the opponent happens to be standing
+        on it right now, exactly as it is with no predictor running at all.
+
+        Fixed here rather than by publishing the raw id, because the raw id is
+        overwritten before /tracking/dynamic_obstacles is published and the
+        predictor never sees it. Dropping the logical id instead would give the
+        predictor back the id churn it was introduced to hide.
+
+        The translation is the same one _is_opponent already does, for the same
+        reason: both copies are made from one track in one tracker callback and
+        neither rewrites the centre, so position identifies it exactly.
+        """
+        super().obstacle_prediction_cb(data)
+        # The shared callback only stores anything when the message carried
+        # predictions; on an empty one it leaves the PREVIOUS array in place,
+        # and re-translating against today's positions would relabel a
+        # prediction this message said nothing about.
+        if not len(data.predictions):
+            return
+        raw_id = self._raw_opponent_id()
+        if raw_id is not None:
+            self.obstacles_prediction_id = raw_id
+
+    def _raw_opponent_id(self):
+        """The tracker id the predicted opponent carries on /tracking/obstacles."""
+        positions = self._opponent_positions()
+        if not positions:
+            return None
+        for obstacle in self.obstacles_perception or []:
+            if self._is_opponent(obstacle, positions):
+                return int(obstacle.id)
+        return None
+
     def _near_the_line(self, obstacle):
         """Is this obstacle close enough to the raceline to matter at all?
 
