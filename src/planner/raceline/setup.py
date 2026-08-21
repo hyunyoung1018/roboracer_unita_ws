@@ -38,6 +38,7 @@ setup(
         'console_scripts': [
             'raceline_generator = raceline.raceline_generator:main',
             'raceline_publisher = raceline.raceline_publisher:main',
+            'raceline_tuner = raceline.raceline_tuner:main',
         ],
     },
 )

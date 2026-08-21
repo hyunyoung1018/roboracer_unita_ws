@@ -24,6 +24,10 @@
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-matplotlib</exec_depend>
   <exec_depend>python3-skimage</exec_depend>
+  <!-- raceline_tuner only. The interactive markers it edits the line
+       with, and the one tkinter prompt its numeric menu items use. -->
+  <exec_depend>interactive_markers</exec_depend>
+  <exec_depend>python3-tk</exec_depend>
 
   <!-- trajectory_planning_helpers and quadprog are not on rosdep; they come from
        the workspace-level requirements.txt (pip install -r requirements.txt). -->
