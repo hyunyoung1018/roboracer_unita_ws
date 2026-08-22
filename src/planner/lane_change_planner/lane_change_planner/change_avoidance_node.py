@@ -21,6 +21,7 @@ from nav_msgs.msg import Odometry
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, Float32, Float32MultiArray, Header, String
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -157,6 +158,15 @@ class ChangeAvoidanceNode(Node):
         self.create_subscription(WpntArray, '/global_waypoints_scaled', self._scaled_cb, 10)
         self.create_subscription(WpntArray, '/global_waypoints_updated', self._updated_cb, 10)
         self.create_subscription(WpntArray, '/centerline_waypoints', self._center_cb, 10)
+        # "left" / "right" / "auto" for the car's current s, from the map's
+        # ot_sectors.yaml by way of the state machine. Transient-local, so
+        # starting after it has already published still gets the answer.
+        self.preferred_side = 'auto'
+        self.create_subscription(
+            String, '/ot_preferred_side', self._preferred_side_cb,
+            QoSProfile(depth=1,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       reliability=ReliabilityPolicy.RELIABLE))
 
         self.map_filter = GridFilter(
             self,
@@ -349,10 +359,7 @@ class ChangeAvoidanceNode(Node):
                 'right_failure_id': worst_right[1],
             }
             return None, None
-        raw_side = max(
-            available_for_all,
-            key=lambda side: min(room for _, room in available_for_all[side]),
-        )
+        raw_side = self._policy_side(available_for_all)
         committed = self._apply_side_hysteresis(raw_side)
         if committed != raw_side:
             # A pending switch used to mean no path at all for
@@ -376,6 +383,53 @@ class ChangeAvoidanceNode(Node):
         target = max(v[0] for v in available_for_all[chosen]) if chosen == 'left' \
             else min(v[0] for v in available_for_all[chosen])
         return chosen, target
+
+    def _policy_side(self, available_for_all):
+        """Which of the SAFE sides to take.
+
+        The room comparison is the fallback, not the rule. It picks whichever
+        side has the most room at its tightest point, which on a corner is the
+        outside every time - the inside is shorter and is where an opponent
+        running wide leaves a gap, and neither of those is anything this
+        function can see.
+
+        Worse, it re-decides every tick off a number that moves. The opponent's
+        measured edge wanders about 10 cm frame to frame on this car, and when
+        the two sides are within that of each other the answer flips, which is
+        an overtake started and abandoned several times a second.
+        side_hysteresis_m damps that; it does not decide it.
+
+        So the map gets to say. ot_sectors.yaml carries preferred_side per
+        overtaking sector and the state machine publishes the one for the car's
+        current s - it already walks that table every tick for _check_ot_sector.
+        "auto", and every sector that does not set it, is exactly the old
+        behaviour.
+
+        SAFETY IS NOT POLICY: this only ever chooses among sides that already
+        passed _available_sides for every obstacle. A preference for a side
+        that is not safe is ignored, and the car goes the other way rather than
+        not at all.
+        """
+        by_room = max(
+            available_for_all,
+            key=lambda side: min(room for _, room in available_for_all[side]),
+        )
+        preferred = self.preferred_side
+        if preferred in available_for_all and preferred != by_room:
+            self.get_logger().info(
+                f"taking the {preferred} side by sector policy; {by_room} has "
+                f"more room here", throttle_duration_sec=2.0)
+            return preferred
+        if preferred not in ('auto', None) and preferred not in available_for_all:
+            self.get_logger().info(
+                f"sector policy asks for {preferred} but no side of every "
+                f"obstacle clears there - taking {by_room}",
+                throttle_duration_sec=2.0)
+        return by_room
+
+    def _preferred_side_cb(self, msg):
+        side = str(msg.data).strip().lower()
+        self.preferred_side = side if side in ('left', 'right') else 'auto'
 
     def _apply_side_hysteresis(self, raw_side):
         if self.committed_side is None:

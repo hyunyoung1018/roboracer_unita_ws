@@ -20,7 +20,7 @@ import configparser
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 
 import transforms3d
 from ament_index_python.packages import get_package_share_directory
@@ -195,7 +195,6 @@ class StateMachine(Node):
         self.n_ot_sectors = 0
         self.overtake_wpnts = None
         self.overtake_zones = []
-        self.ot_begin_margin = 0.5
         # read the map sector yamls, then build only_ftg_zones / overtake_zones
         self._load_sector_yamls()
         self._load_sector_params()
@@ -408,6 +407,12 @@ class StateMachine(Node):
         self.state_mrk = self.create_publisher(Marker, "/state_marker", 10)
         self.emergency_pub = self.create_publisher(Marker, "/emergency_marker", 5)
         self.ot_section_check_pub = self.create_publisher(Bool, "/ot_section_check", 1)
+        # "left" / "right" / "auto" for the car's current s. Transient-local so a
+        # planner that starts late still gets the current answer.
+        self.ot_preferred_side_pub = self.create_publisher(
+            String, "/ot_preferred_side",
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                       reliability=ReliabilityPolicy.RELIABLE))
         # ROS1 published this from dynamic_statemachine_server when the save_start_traj
         # rqt button was pressed; re-homed here as a momentary param (see loop()).
         self.save_start_traj_pub = self.create_publisher(Bool, "/save_start_traj", 1)
@@ -549,7 +554,6 @@ class StateMachine(Node):
             # name used by every map currently shipped in this workspace.
             block = d.get("ot_interpolator") or d.get("ot_sector_tuner") or {}
             self.ot_sectors_params = block.get("ros__parameters", {}) or {}
-            self.ot_begin_margin = float(self.ot_sectors_params.get("ot_sector_begin", self.ot_begin_margin))
         else:
             self.get_logger().warn(f"[{self.name}] {op} not found; no overtake zones")
 
@@ -565,11 +569,23 @@ class StateMachine(Node):
                 self.only_ftg_zones.append([sec.get("start", 0), sec.get("end", 0) + 1])
 
         self.overtake_zones = []
+        # [[start, end, side], ...] over the SAME index range as overtake_zones.
+        # side is "left", "right" or "auto"; auto means the planner decides, which
+        # is what every map does until one says otherwise.
+        self.overtake_sides = []
         self.n_ot_sectors = int(self.ot_sectors_params.get("n_sectors", 0))
         for i in range(self.n_ot_sectors):
             sec = self.ot_sectors_params.get(f"Overtaking_sector{i}", {}) or {}
             if sec.get("ot_flag", False):
-                self.overtake_zones.append([sec.get("start", 0), sec.get("end", 0) + 1])
+                bounds = [sec.get("start", 0), sec.get("end", 0) + 1]
+                self.overtake_zones.append(bounds)
+                side = str(sec.get("preferred_side", "auto")).strip().lower()
+                if side not in ("left", "right", "auto"):
+                    self.get_logger().warn(
+                        f"[{self.name}] Overtaking_sector{i}: preferred_side "
+                        f"'{side}' is not left/right/auto - using auto")
+                    side = "auto"
+                self.overtake_sides.append(bounds + [side])
 
     def _setup_sector_live_update(self):
         # ROS2 replacement of ROS1 /dyn_sector_speed & /dyn_sector_overtake subscriptions
@@ -607,8 +623,6 @@ class StateMachine(Node):
                 if p.name.startswith("Overtaking_sector") and p.name.endswith(".ot_flag"):
                     key = p.name.split(".")[0]
                     self.ot_sectors_params.setdefault(key, {})["ot_flag"] = bool(self._param_msg_value(p))
-                elif p.name == "ot_sector_begin":
-                    self.ot_begin_margin = float(self._param_msg_value(p))
                     self.recompute_ot_spline = True
             self._load_sector_params()
 
@@ -865,9 +879,41 @@ class StateMachine(Node):
         for sector in self.overtake_zones:
             if sector[0] <= self.cur_s / self.waypoints_dist <= sector[1]:
                 self.ot_section_check_pub.publish(Bool(data=True))
+                self._publish_preferred_side()
                 return True
         self.ot_section_check_pub.publish(Bool(data=False))
+        self._publish_preferred_side()
         return False
+
+    def _preferred_side_here(self) -> str:
+        """Which way this map wants an overtake taken at the car's s.
+
+        "auto" - the planner's own room comparison - unless the sector says
+        otherwise. Outside every overtaking sector it is also "auto": the
+        sector table has nothing to say there, and an overtake is not armed
+        anyway.
+        """
+        if self.waypoints_dist <= 0.0:
+            return "auto"
+        index = self.cur_s / self.waypoints_dist
+        for start, end, side in getattr(self, "overtake_sides", []):
+            if start <= index <= end:
+                return side
+        return "auto"
+
+    def _publish_preferred_side(self) -> None:
+        """Tell the planners, rather than making them read the sector table.
+
+        They do not know where the sector boundaries are and have no reason to:
+        this node already walks that table every tick for _check_ot_sector, so
+        the answer is free here and one string on a latched topic downstream.
+        """
+        side = self._preferred_side_here()
+        if side != getattr(self, "_last_preferred_side", None):
+            self._last_preferred_side = side
+            self.get_logger().info(
+                f"[{self.name}] overtaking side policy here: {side}")
+        self.ot_preferred_side_pub.publish(String(data=side))
 
     def refresh_planner_params(self, planner_name: str) -> None:
         """Re-read one planner's parameter block after a live `ros2 param set`.

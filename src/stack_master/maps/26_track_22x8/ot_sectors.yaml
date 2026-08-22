@@ -3,8 +3,19 @@ ot_interpolator:
     n_sectors: 1
     yeet_factor: 1.25
     spline_len: 30
-    ot_sector_begin: 0.5
     Overtaking_sector0:
       start: 0
       end: 422
       ot_flag: false
+    # Which way to take an overtake in this sector: left | right | auto.
+    #
+    # auto is the planner's own room comparison, which picks whichever side has
+    # more room at its tightest point - on a corner that is the outside, every
+    # time. It also re-decides every tick off the opponent's measured edge,
+    # which wanders about 10 cm frame to frame, so when the two sides are close
+    # the answer flips and an overtake is started and abandoned repeatedly.
+    #
+    # Naming the side here makes it a policy instead. Safety is unchanged: the
+    # planner still refuses any side that does not clear every obstacle, and
+    # falls back to the roomier one when the named side is not available.
+      preferred_side: auto
