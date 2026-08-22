@@ -140,9 +140,10 @@ class HeadToHeadTrackingNode(TrackingNode):
         # acquired at 0.256 to 0.315 m, a smooth approach drift rather than
         # jitter, because s_center is the fitted corner plus half the FITTED
         # SIZE and that size grows as the car closes. 0.40 refuses all four
-        # with 8.5 cm to spare. See h2h_perception.yaml for why widening the
-        # window does not help here.
-        'opponent_acquire_displacement_m': 0.40,
+        # Raised from 0.40 after a box still cleared it at 0.411 m. See
+        # h2h_perception.yaml for the measurements, what the higher minimum
+        # opponent speed costs, and why widening the window does not help.
+        'opponent_acquire_displacement_m': 0.75,
         # [m/s] Upper sanity bound on a believable opponent speed, and it is
         # new. The router had only the lower one, so a single bad frame
         # reporting 8.55 m/s for a stationary box was accepted as valid and

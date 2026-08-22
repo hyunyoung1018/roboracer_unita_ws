@@ -193,11 +193,36 @@ tracking:
     # SET THIS FALSE TO REVERT, live, no rebuild:
     #   ros2 param set /tracking opponent_acquire_use_displacement false
     opponent_acquire_use_displacement: true
-    # [m] over [s]. MEASURED, not chosen: on 2026-08-22 four boxes were
-    # acquired as the opponent at 0.256, 0.275, 0.279 and 0.315 m against the
-    # old 0.250 threshold - a 5.9 cm spread, all of them a smooth drift over a
-    # full window rather than a step. 0.40 refuses all four with 8.5 cm to
-    # spare and still accepts anything doing 0.40 m/s.
+    # [m] over [s]. MEASURED, not chosen, and raised twice now because the
+    # noise tail keeps clearing the line by a few centimetres:
+    #
+    #   0.250  four boxes acquired at 0.256, 0.275, 0.279, 0.315
+    #   0.400  a box acquired at 0.411
+    #   0.750  <- here
+    #
+    # Each raise bought less than it looked like it would, which is the
+    # signature of a heavy tail rather than a threshold set one notch too low.
+    # 0.75 is 2.3x the worst drift ever logged with the car and the boxes both
+    # stopped (0.32 m in one second), which is the first time this has had real
+    # headroom rather than a couple of centimetres of it.
+    #
+    # WHAT IT COSTS. The estimator takes the median of the outer fifth at each
+    # end, so a steady speed over the window reads 0.85 of its true extent -
+    # the minimum acquirable speed is threshold / (0.85 * window), not
+    # threshold / window as an earlier note here said. At 0.75 over 1.0 s that
+    # is 0.88 m/s. The ego runs 2.5 m/s on this course and an opponent worth
+    # acquiring runs the same, so the margin is wide.
+    #
+    # AND A MISS IS CHEAP, WHICH IS WHY THE TRADE IS ONE-SIDED. An opponent
+    # slower than 0.88 m/s is simply not acquired: it stays a plain obstacle,
+    # the spline plans a static avoidance around it and the controller trails
+    # it, which is what the car would do anyway. A FALSE acquisition is not
+    # cheap - the box gets a prediction that sweeps it across the track, gets
+    # inflated to car size, and becomes the trailing target. Logged 2026-08-22:
+    # a box parked at d=+0.61 that the raceline cleared by 0.26 m was acquired,
+    # its prediction read "worst clearance -0.314 m" on every path, the car
+    # trailed it to a standstill 1.83 m short, and with closing=False and
+    # have_path=False there was no way out - three seconds later, FTG.
     #
     # WHERE THE DRIFT COMES FROM. s_center is the nearest fitted corner plus
     # HALF THE FITTED SIZE, and the fitted size grows as more of the face
@@ -211,9 +236,7 @@ tracking:
     # a step and false of this. The drift is proportional to how far the CAR
     # moved, so doubling the window doubles the drift as well as the real
     # motion and the two never separate. Raising the threshold at a fixed
-    # window is what works, and it costs a higher minimum opponent speed:
-    # threshold / window, so 0.40 over 1.0 s will not acquire anything slower
-    # than 0.40 m/s.
+    # window is what works - see the cost above.
     # [tracks] Subtract what the WHOLE SCENE appears to have done before
     # judging one track. A pose correction moves the point cloud in the map
     # frame, so every obstacle's s moves with it and none of them went
@@ -229,7 +252,7 @@ tracking:
     # never be acquired. 0 disables it.
     opponent_acquire_common_min_tracks: 3
     opponent_acquire_window_sec: 1.0
-    opponent_acquire_displacement_m: 0.40
+    opponent_acquire_displacement_m: 0.75
     dynamic_speed_valid_max_mps: 6.0
 
     # /tracking/classification_debug, built only while something subscribes.
