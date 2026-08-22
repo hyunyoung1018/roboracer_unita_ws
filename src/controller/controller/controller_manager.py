@@ -690,7 +690,11 @@ class ControllerManager(Node):
         speed, steer = self.ftg_controller.process_lidar(
             self.scan.ranges, self.scan.angle_min, self.scan.angle_increment,
             pose=pose, grid=self.ftg_grid)
-        self.get_logger().warning(f"[{self.name}] FTGONLY!!!")
+        # Every tick, unthrottled, was ten lines a second for as long as the
+        # fallback ran - and FTGONLY is exactly when the log matters most.
+        self.get_logger().warning(
+            f"[{self.name}] FTGONLY: gap-following, speed {speed:.2f} m/s",
+            throttle_duration_sec=2.0)
         return speed, steer
 
     def create_ack_msg(self, speed, acceleration, jerk, steering_angle):

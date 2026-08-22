@@ -266,9 +266,7 @@ void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPt
     brake_msg.data = brake_current_;
     brake_pub_->publish(brake_msg);
     if (!braking_) {
-      RCLCPP_WARN(
-        get_logger(), "Current braking engaged: target=%.2f m/s actual=%.2f m/s",
-        target_speed, current_speed_);
+      brake_cycles_++;
     }
     braking_ = true;
   } else {
@@ -277,13 +275,28 @@ void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPt
     Float64 erpm_msg;
     erpm_msg.data = speed_to_erpm_gain_ * target_speed + speed_to_erpm_offset_;
     erpm_pub_->publish(erpm_msg);
-    if (braking_) {
-      RCLCPP_INFO(
-        get_logger(), "Current braking released: target=%.2f m/s actual=%.2f m/s",
-        target_speed, current_speed_);
-    }
     braking_ = false;
     brake_current_ = 0.0;
+  }
+
+  // One line every five seconds instead of two per transition, and it says
+  // the thing worth knowing: how OFTEN the brake is cycling. Publishing a
+  // speed command takes the VESC out of current-brake mode, so every cycle is
+  // a mode change at the motor controller, and a high rate here is the
+  // surging that a driver feels rather than anything the per-transition lines
+  // showed. Silent when the brake never engaged in the interval.
+  const rclcpp::Time now_stamp = now();
+  if (brake_report_at_.nanoseconds() == 0) {
+    brake_report_at_ = now_stamp;
+  } else if ((now_stamp - brake_report_at_).seconds() >= 5.0) {
+    const double interval = (now_stamp - brake_report_at_).seconds();
+    if (brake_cycles_ > 0) {
+      RCLCPP_INFO(
+        get_logger(), "current braking: %u engagements in %.1f s (%.1f/s)",
+        brake_cycles_, interval, brake_cycles_ / interval);
+    }
+    brake_cycles_ = 0;
+    brake_report_at_ = now_stamp;
   }
 
   // Steering remains live while longitudinal control is in either mode.

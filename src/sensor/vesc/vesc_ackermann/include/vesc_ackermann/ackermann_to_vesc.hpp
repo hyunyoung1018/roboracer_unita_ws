@@ -67,6 +67,13 @@ private:
   double brake_current_{0.0};
   bool odom_received_{false};
   bool braking_{false};
+  // Engage/release used to log a line each. They are transitions, but the
+  // transitions happen at 25-50 Hz whenever the commanded speed is moving
+  // around, so the pair buried every other node's output. Counted and reported
+  // periodically instead - the RATE is the useful part anyway, since brake
+  // chatter is what mode-thrashes the VESC.
+  unsigned int brake_cycles_{0};
+  rclcpp::Time brake_report_at_{0, 0, RCL_ROS_TIME};
   bool command_time_initialized_{false};
   bool odom_time_initialized_{false};
   rclcpp::Time last_command_time_;

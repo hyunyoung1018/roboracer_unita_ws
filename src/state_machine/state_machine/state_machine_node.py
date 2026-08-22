@@ -1024,10 +1024,18 @@ class StateMachine(Node):
             if (self.cur_state == StateType.TRAILING or self.cur_state == StateType.ATTACK) and \
                     self.cur_vs < self.ftg_speed_mps:
                 self.ftg_counter += 1
-                self.get_logger().warn(
-                    f"[{self.name}] FTG counter: {self.ftg_counter}/{threshold}",
-                    throttle_duration_sec=0.5,
-                )
+                # Only the crossing, not the count. The count ticked twice a
+                # second for the whole three seconds and then reset, so the
+                # common case - trailing briefly below ftg_speed_mps and
+                # recovering - printed six lines to say nothing happened.
+                if self.ftg_counter == 1:
+                    self.get_logger().info(
+                        f"[{self.name}] stopped behind something; FTG in "
+                        f"{self.ftg_timer_sec:.1f} s unless this clears")
+                elif self.ftg_counter == int(threshold):
+                    self.get_logger().warn(
+                        f"[{self.name}] stuck for {self.ftg_timer_sec:.1f} s - "
+                        f"falling back to FTG")
             else:
                 self.ftg_counter = 0
             return self.ftg_counter > threshold
@@ -1207,13 +1215,18 @@ class StateMachine(Node):
                             scaling_factor = np.clip(gap / free_scaling_reference_distance_m, 0.0, 1.0)
                             if worst_fd is None or free_dist < worst_fd:
                                 worst_fd = free_dist
+                            # Was a raw float dump of every prediction pose,
+                            # twice a second, at full precision, whether or not
+                            # anything was wrong. The refusal it belongs to is
+                            # already reported once per path by the
+                            # "blocked over the full prediction" line below,
+                            # with the worst clearance and the pose count. Kept
+                            # at debug for when this branch itself is suspect.
                             if is_ot_wpnts:
-                                self.get_logger().warn(
-                                    f"free_dist: {free_dist}, lateral_width_m: {lateral_width_m}, "
-                                    f"scaling_factor: {scaling_factor}, obs.size: {obs.size}, "
-                                    f"wpnt_d:{wpnt_d}, obs_pred.pred_d: {obs_pred.pred_d} ",
-                                    throttle_duration_sec=0.5,
-                                )
+                                self.get_logger().debug(
+                                    f"pred pose: free {free_dist:+.3f} m, "
+                                    f"needs {lateral_width_m * scaling_factor:.3f}, "
+                                    f"path d={wpnt_d:+.3f}, opp d={obs_pred.pred_d:+.3f}")
                             if free_dist < lateral_width_m * scaling_factor:
                                 is_free = False
                                 rec["blocked"] = True
