@@ -130,6 +130,12 @@ class HeadToHeadTrackingNode(TrackingNode):
         # rebuild. That is the A/B and the rollback.
         'opponent_acquire_use_displacement': True,
         'opponent_acquire_window_sec': 1.0,
+        # How many tracks must be in view before the scene-wide drift is
+        # subtracted. A pose correction translates every obstacle together, so
+        # the median of their displacements estimates it; with fewer than this
+        # there is no majority to take that median from and the raw
+        # displacement stands. 0 disables the correction entirely.
+        'opponent_acquire_common_min_tracks': 3,
         # [m] Over that window. MEASURED on 2026-08-22: four boxes were
         # acquired at 0.256 to 0.315 m, a smooth approach drift rather than
         # jitter, because s_center is the fitted corner plus half the FITTED

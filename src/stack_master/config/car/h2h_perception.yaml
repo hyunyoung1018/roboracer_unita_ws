@@ -214,6 +214,20 @@ tracking:
     # window is what works, and it costs a higher minimum opponent speed:
     # threshold / window, so 0.40 over 1.0 s will not acquire anything slower
     # than 0.40 m/s.
+    # [tracks] Subtract what the WHOLE SCENE appears to have done before
+    # judging one track. A pose correction moves the point cloud in the map
+    # frame, so every obstacle's s moves with it and none of them went
+    # anywhere. Measured 2026-08-22 with the car stopped and the boxes stopped:
+    # one obstacle's gap wandered 7.74 to 8.06 m and its near edge +0.03 to
+    # +0.25, while its measured WIDTH stayed inside 6 cm - translated, not
+    # grown or turned, by up to 0.19 m in one second. Half the threshold, spent
+    # before anything moves.
+    #
+    # A pose shift is COMMON to every track; a car moves alone. So the median
+    # across tracks estimates the shift. Three is the floor: with one, the
+    # median is that track and everything cancels, and a real opponent would
+    # never be acquired. 0 disables it.
+    opponent_acquire_common_min_tracks: 3
     opponent_acquire_window_sec: 1.0
     opponent_acquire_displacement_m: 0.40
     dynamic_speed_valid_max_mps: 6.0

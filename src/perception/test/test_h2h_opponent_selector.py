@@ -42,6 +42,7 @@ PARAMS = {
     'opponent_acquire_use_displacement': True,
     'opponent_acquire_window_sec': 1.0,
     'opponent_acquire_displacement_m': 0.25,
+    'opponent_acquire_common_min_tracks': 3,
 }
 
 WAYPOINTS = [
@@ -374,3 +375,85 @@ def test_the_history_is_forgotten_when_the_track_goes():
     feed(sel, 1, [3.0 + 0.5 * (i / 20.0) for i in range(30)])
     sel.select([], {}, 2.0, WAYPOINTS, TRACK, 0.0)
     assert 1 not in sel.motion_history
+
+
+# --- a pose correction is not motion ---------------------------------------
+#
+# Measured 2026-08-22, car stopped and boxes stopped: one obstacle's reported
+# gap wandered 7.74 to 8.06 m and its near edge +0.03 to +0.25, while its
+# measured WIDTH stayed inside 6 cm. Translated, not grown - by up to 0.19 m in
+# one second, which is half the acquisition threshold spent before anything
+# moves. The point cloud is transformed to the map frame before clustering, so
+# a pose shift moves every obstacle together.
+#
+# What separates it from motion is that it is COMMON. Subtract the median
+# across tracks and a shift cancels while a car does not.
+
+# Robust endpoints take the MEDIAN of the outer fifth at each end rather than
+# the first and last sample, so a pure ramp reads at 0.85 of its true extent.
+# That is deliberate - it is what removes a single bad frame - and it applies
+# equally to both sides of the subtraction, so a differential is exact.
+RAMP = 0.85
+
+
+def history(sel, obstacle_id, start_s, moved, now=1.0, window=1.0, rate=20.0):
+    count = int(window * rate) + 1
+    sel.motion_history[obstacle_id] = [
+        (now - window + i / rate,
+         (start_s + moved * (i / (count - 1))) % TRACK)
+        for i in range(count)]
+
+
+def test_a_shift_that_moves_everything_moves_nobody():
+    """Three boxes, all translated 0.6 m by a pose correction."""
+    sel = selector()
+    for i, s in enumerate((3.0, 6.0, 9.0)):
+        history(sel, i + 1, s, moved=0.6)
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_the_one_that_moved_alone_still_reads_as_moving():
+    sel = selector()
+    history(sel, 1, 3.0, moved=0.6)      # the opponent
+    history(sel, 2, 6.0, moved=0.0)      # boxes, holding still
+    history(sel, 3, 9.0, moved=0.0)
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.6 * RAMP, abs=1e-6)
+
+
+def test_a_shift_plus_real_motion_leaves_the_motion():
+    """Everything drifts 0.2; the opponent also covers 0.6 of its own."""
+    sel = selector()
+    history(sel, 1, 3.0, moved=0.8)
+    history(sel, 2, 6.0, moved=0.2)
+    history(sel, 3, 9.0, moved=0.2)
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.6 * RAMP, abs=1e-6)
+
+
+def test_too_few_tracks_leaves_the_raw_measurement():
+    """With one track the median is that track and everything would cancel."""
+    sel = selector()
+    history(sel, 1, 3.0, moved=0.6)
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.6 * RAMP, abs=1e-6)
+
+
+def test_two_tracks_is_still_too_few():
+    sel = selector()
+    history(sel, 1, 3.0, moved=0.6)
+    history(sel, 2, 6.0, moved=0.6)
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.6 * RAMP, abs=1e-6)
+
+
+def test_the_quorum_is_tunable_and_zero_disables_it():
+    sel = selector(opponent_acquire_common_min_tracks=0)
+    for i, s in enumerate((3.0, 6.0, 9.0)):
+        history(sel, i + 1, s, moved=0.6)
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.6 * RAMP, abs=1e-6)
+
+
+def test_the_measured_stationary_wander_no_longer_acquires():
+    """0.19 m of scene-wide translation, the worst measured in one second."""
+    sel = selector()
+    for i, s in enumerate((3.0, 6.0, 9.0, 12.0)):
+        history(sel, i + 1, s, moved=0.19)
+    moved = sel._acquire_displacement(1, TRACK)
+    assert moved < PARAMS['opponent_acquire_displacement_m']

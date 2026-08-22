@@ -304,6 +304,58 @@ class OpponentSelector:
             if obstacle_id not in present:
                 del self.motion_history[obstacle_id]
 
+    def _common_drift(self, track_length, exclude_id=None):
+        """How far EVERY track appears to have gone this window, or None.
+
+        A pose correction moves the whole point cloud in the map frame, so
+        every obstacle's s moves with it and none of them actually went
+        anywhere. Measured on 2026-08-22 with the car stopped and the boxes
+        stopped: one obstacle's reported gap wandered 7.74 to 8.06 m and its
+        near edge +0.03 to +0.25, while its measured WIDTH stayed inside 6 cm.
+        The box did not grow or turn - it was translated, repeatedly, by up to
+        0.19 m in a single second. That is 48% of the acquisition threshold
+        spent before anything moves.
+
+        The one thing that separates it from motion is that it is COMMON. A
+        pose shift moves all of them together; a car moves alone. So the median
+        of the per-track displacements estimates the shift, and subtracting it
+        leaves each track's own motion.
+
+        Needs three tracks. With one, the median IS that track and every
+        displacement cancels to zero - a real opponent would never be acquired.
+        With two there is no majority to take a median of. Below that this
+        returns None and the raw displacement stands, which is the behaviour
+        this had before.
+        """
+        minimum = int(self._param("opponent_acquire_common_min_tracks"))
+        if minimum <= 0:
+            return None
+        moves = []
+        for obstacle_id in self.motion_history:
+            if exclude_id is not None and int(obstacle_id) == int(exclude_id):
+                continue
+            signed = self._signed_displacement(obstacle_id, track_length)
+            if signed is not None:
+                moves.append(signed)
+        # exclude_id was left out, so the caller's own track is not counted in
+        # the quorum either.
+        if len(moves) < minimum - 1:
+            return None
+        return _median(moves)
+
+    def _signed_displacement(self, obstacle_id, track_length):
+        """The window's displacement WITH ITS SIGN, or None. See _acquire_displacement."""
+        samples = self.motion_history.get(int(obstacle_id))
+        if not samples or len(samples) < 4:
+            return None
+        window = float(self._param("opponent_acquire_window_sec"))
+        if samples[-1][0] - samples[0][0] < 0.8 * window:
+            return None
+        anchor = samples[-1][1]
+        offsets = [circular_delta(s, anchor, track_length) for _, s in samples]
+        edge = max(1, len(offsets) // 5)
+        return _median(offsets[-edge:]) - _median(offsets[:edge])
+
     def _acquire_displacement(self, obstacle_id, track_length):
         """How far this track has actually GONE over the window, or None.
 
@@ -365,12 +417,15 @@ class OpponentSelector:
         # A track seen twice in a second has not been observed for a second.
         if span < 0.8 * window:
             return None
-        anchor = samples[-1][1]
-        offsets = [circular_delta(s, anchor, track_length) for _, s in samples]
-        edge = max(1, len(offsets) // 5)
-        early = _median(offsets[:edge])
-        late = _median(offsets[-edge:])
-        return abs(late - early)
+        signed = self._signed_displacement(obstacle_id, track_length)
+        if signed is None:
+            return None
+        # Everything the whole scene appears to have done is not this track's
+        # doing. See _common_drift.
+        common = self._common_drift(track_length, exclude_id=obstacle_id)
+        if common is not None:
+            signed -= common
+        return abs(signed)
 
     def _moving_enough_to_acquire(self, obstacle, track_length=None):
         """Has this track actually been rolling, for long enough to believe?
