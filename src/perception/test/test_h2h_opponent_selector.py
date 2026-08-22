@@ -457,3 +457,71 @@ def test_the_measured_stationary_wander_no_longer_acquires():
         history(sel, i + 1, s, moved=0.19)
     moved = sel._acquire_displacement(1, TRACK)
     assert moved < PARAMS['opponent_acquire_displacement_m']
+
+
+# --- the pose correction, measured against the car -------------------------
+#
+# The scene-median form needs three tracks and this course runs one: the
+# acquisition log said "scene drift removed: none - only 1 track(s), needs 3"
+# on the run that produced it. /car_state/odom is the fused pose in the map
+# frame and /vesc/odom is dead reckoning in the odom frame; over a window the
+# difference between how far each says the car went is what localisation put
+# in, which is the same shift every obstacle picked up.
+
+def ego(sel, moved_map, moved_odom, now=1.0, window=1.0, rate=20.0):
+    count = int(window * rate) + 1
+    for i in range(count):
+        f = i / (count - 1)
+        sel.note_ego(now - window + i / rate, moved_map * f, moved_odom * f)
+
+
+def test_a_correction_that_moved_the_world_is_not_the_track_moving():
+    sel = selector()
+    history(sel, 1, 3.0, moved=0.5)
+    ego(sel, moved_map=3.5, moved_odom=3.0)      # 0.5 m of correction
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_motion_beyond_the_correction_survives():
+    sel = selector()
+    history(sel, 1, 3.0, moved=1.0)
+    ego(sel, moved_map=3.2, moved_odom=3.0)      # 0.2 m of correction
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(
+        1.0 * RAMP - 0.2, abs=1e-6)
+
+
+def test_agreeing_odometry_takes_nothing_off():
+    sel = selector()
+    history(sel, 1, 3.0, moved=0.6)
+    ego(sel, moved_map=3.0, moved_odom=3.0)      # no correction at all
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.6 * RAMP, abs=1e-6)
+
+
+def test_it_works_with_one_track_which_is_the_whole_point():
+    sel = selector()
+    history(sel, 1, 3.0, moved=0.5)
+    ego(sel, moved_map=3.5, moved_odom=3.0)
+    assert len(sel.motion_history) == 1
+    assert sel._common_drift(TRACK, exclude_id=1) is None    # quorum short
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_no_ego_odometry_leaves_the_measurement_alone():
+    sel = selector()
+    history(sel, 1, 3.0, moved=0.6)
+    assert sel._pose_correction() is None
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.6 * RAMP, abs=1e-6)
+
+
+def test_a_partial_window_of_ego_samples_is_not_used():
+    sel = selector()
+    history(sel, 1, 3.0, moved=0.6)
+    ego(sel, moved_map=3.5, moved_odom=3.0, window=0.3)
+    assert sel._pose_correction() is None
+
+
+def test_the_correction_never_drives_the_measurement_negative():
+    sel = selector()
+    history(sel, 1, 3.0, moved=0.1)
+    ego(sel, moved_map=4.0, moved_odom=3.0)      # 1.0 m, larger than the move
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.0, abs=1e-9)

@@ -204,6 +204,26 @@ class HeadToHeadTrackingNode(TrackingNode):
         # same topic.
         self.create_subscription(
             Odometry, '/car_state/odom_frenet', self._odom_frenet_cb, 10)
+        # The pose correction, measured directly.
+        #
+        # A stationary obstacle's map-frame s moves by exactly what the
+        # localisation moved, so subtracting that leaves what the obstacle
+        # actually did. The scene-median estimate of it needs three tracks and
+        # this course runs one - "scene drift removed: none - only 1 track(s)"
+        # is what the acquisition log said - so the reference has to come from
+        # the car instead.
+        #
+        # /car_state/odom is the FUSED pose in the map frame; /vesc/odom is
+        # dead reckoning in the odom frame. Over a window the difference
+        # between how far each says the car went IS the correction the
+        # particle filter applied, which is the same shift every obstacle
+        # picked up.
+        self.ego_map_s = None
+        self.ego_odom_s = None
+        self.create_subscription(
+            Odometry, '/car_state/odom', self._ego_map_cb, 10)
+        self.create_subscription(
+            Odometry, '/vesc/odom', self._ego_odom_cb, 10)
 
     def _copy_obstacle(self, source):
         """Carry the Cartesian pose and the variances through the tracker.
@@ -240,6 +260,18 @@ class HeadToHeadTrackingNode(TrackingNode):
 
     def _odom_frenet_cb(self, msg):
         self.ego_s = float(msg.pose.pose.position.x)
+
+    @staticmethod
+    def _travelled(msg):
+        """Distance from the frame origin - Cartesian, so no wrap to handle."""
+        position = msg.pose.pose.position
+        return math.hypot(float(position.x), float(position.y))
+
+    def _ego_map_cb(self, msg):
+        self.ego_map_s = self._travelled(msg)
+
+    def _ego_odom_cb(self, msg):
+        self.ego_odom_s = self._travelled(msg)
 
     def _update_track(self, track, measurement, stamp):
         """Track as the parent does, then re-decide static on filtered history.
@@ -426,6 +458,7 @@ class HeadToHeadTrackingNode(TrackingNode):
             obstacles.append(obstacle)
             classes[int(obstacle.id)] = self._track_class(track)
 
+        self.selector.note_ego(now, self.ego_map_s, self.ego_odom_s)
         selected = self.selector.select(
             obstacles, classes, now, self.waypoints, self.track_length,
             self.ego_s)
