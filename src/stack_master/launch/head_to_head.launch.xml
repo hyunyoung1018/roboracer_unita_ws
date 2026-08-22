@@ -33,13 +33,13 @@
 
        To get the original learned behaviour back:
          gp_learning:=true authorize_on_fallback:=false -->
-  <arg name="prediction" default="false"
+  <arg name="prediction" default="true"
        description="Run opp_prediction (needed for any dynamic overtaking)."/>
   <arg name="gp_learning" default="false"
        description="Also learn the opponent's line with the GP pair."/>
-  <arg name="authorize_on_fallback" default="false"
+  <arg name="authorize_on_fallback" default="true"
        description="Let a constant-velocity prediction authorize an overtake."/>
-  <arg name="dynamic_avoidance" default="false"
+  <arg name="dynamic_avoidance" default="true"
        description="Run the UNICORN-derived lane-change planner."/>
   <arg name="relocalize" default="true"
        description="Re-seed the particle filter at the finish line every N laps."/>

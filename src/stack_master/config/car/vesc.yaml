@@ -124,7 +124,7 @@
     # before the VESC's overvoltage cutoff drops the brake mid-stop. Set
     # Battery Current Max Regen explicitly in VESC Tool rather than leaving it
     # at whatever the profile shipped with.
-    brake_current_max: 20.0
+    brake_current_max: 10.0
     # At the old 10 A cap start/gain below never mattered: 8 + 15 * err reached
     # 10 A at 0.13 m/s of error, under the 0.15 engage threshold, so every stop
     # was a flat 10 A. With the cap at 30 A the curve is live again and
@@ -132,8 +132,8 @@
     # every stop ramps up from 0 A; at ~50 Hz commands (dt~0.02 s) the ramp
     # rate dominates stopping time - 100 A/s reached 30 A in 0.3 s, 300 A/s in
     # 0.1 s.
-    brake_current_start: 4.0        # first-contact target current [A]
-    brake_current_gain: 7.0        # A per m/s of speed error; start+gain*err
+    brake_current_start: 7.0        # first-contact target current [A]
+    brake_current_gain: 10.0        # A per m/s of speed error; start+gain*err
     brake_current_ramp_rate: 300.0  # A/s
     # Hysteresis on speed error (engage above 0.15, keep until below 0.05)
     # prevents mode chatter between brake and speed commands.

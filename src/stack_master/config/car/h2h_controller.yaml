@@ -10,7 +10,7 @@ controller_manager:
     # moving opponent; time-trials keeps controller.yaml's static-stop values.
     trailing_gap: 2.0
     trailing_vel_gain: 0.10
-    trailing_p_gain: 0.5
+    trailing_p_gain: 1.15
     trailing_i_gain: 0.0
     trailing_d_gain: 0.25
     trailing_accel_limit: 1.5
