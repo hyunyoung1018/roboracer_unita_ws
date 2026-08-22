@@ -158,18 +158,29 @@ class OvertakingSectorSlicer(Node):
     def sectors_to_yaml(self):
         #Create yaml with default sectors values
         n_sectors = len(self.sector_pnts) - 1
+        # ot_sector_begin is deliberately absent. It was in this default from
+        # ForzaETH onward and nothing ever read it - not the ROS1 state machine
+        # it came from, and not this one - so writing it into every new map only
+        # produced a knob that does nothing.
+        #
+        # spline_len is kept for the record but only reaches the car when
+        # ot_planner is not spliner/sqp/lane_change; ours is lane_change, so
+        # /global_waypoints/overtaking is drawn and not driven.
         dict_file = {
                 'n_sectors': n_sectors,
                 'yeet_factor': 1.25,
                 'spline_len': 30,
-                'ot_sector_begin': 0.5
             }
         for i in range(0, n_sectors):
             #Add sectors with scaling field
             dict_file['Overtaking_sector' + str(i)] = {'start':self.sector_pnts[i] if i == 0 else self.sector_pnts[i] + 1,
                                             'end':self.sector_pnts[i+1]
                                             }
-            dict_file['Overtaking_sector' + str(i)].update({'ot_flag': False})
+            # auto is the planner's own room comparison - the behaviour a map
+            # had before preferred_side existed. Set left or right on a sector
+            # where the room comparison keeps choosing the long way round.
+            dict_file['Overtaking_sector' + str(i)].update(
+                {'ot_flag': False, 'preferred_side': 'auto'})
         ros_yaml_preamble = {'ot_interpolator': {'ros__parameters': dict_file}}
         
         #Save yaml to the respective maps folder

@@ -130,11 +130,13 @@ class HeadToHeadTrackingNode(TrackingNode):
         # rebuild. That is the A/B and the rollback.
         'opponent_acquire_use_displacement': True,
         'opponent_acquire_window_sec': 1.0,
-        # [m] Over that window. A stationary box stays inside its own jitter,
-        # measured at up to 15 cm; 0.25 is 1.7x that, and an opponent doing
-        # 0.3 m/s covers 30 cm in the same second. Raise it to demand more
-        # proof of motion, lower it to acquire slower opponents sooner.
-        'opponent_acquire_displacement_m': 0.25,
+        # [m] Over that window. MEASURED on 2026-08-22: four boxes were
+        # acquired at 0.256 to 0.315 m, a smooth approach drift rather than
+        # jitter, because s_center is the fitted corner plus half the FITTED
+        # SIZE and that size grows as the car closes. 0.40 refuses all four
+        # with 8.5 cm to spare. See h2h_perception.yaml for why widening the
+        # window does not help here.
+        'opponent_acquire_displacement_m': 0.40,
         # [m/s] Upper sanity bound on a believable opponent speed, and it is
         # new. The router had only the lower one, so a single bad frame
         # reporting 8.55 m/s for a stationary box was accepted as valid and

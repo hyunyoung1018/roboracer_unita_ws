@@ -193,16 +193,29 @@ tracking:
     # SET THIS FALSE TO REVERT, live, no rebuild:
     #   ros2 param set /tracking opponent_acquire_use_displacement false
     opponent_acquire_use_displacement: true
-    # These two move together. A single-frame outlier is removed outright by
-    # the robust endpoints, but a step that persists for the rest of the window
-    # reads as motion at its full size, and the threshold is the only thing
-    # refusing it - 0.25 m covers the worst jump measured on this car (0.145 m)
-    # with 1.7x to spare. Lengthening the window scales what real motion covers
-    # while a step stays the same size, so 2.0 / 0.50 still acquires a 0.3 m/s
-    # opponent and refuses any step under half a metre, at the cost of taking
-    # a second longer to acquire.
+    # [m] over [s]. MEASURED, not chosen: on 2026-08-22 four boxes were
+    # acquired as the opponent at 0.256, 0.275, 0.279 and 0.315 m against the
+    # old 0.250 threshold - a 5.9 cm spread, all of them a smooth drift over a
+    # full window rather than a step. 0.40 refuses all four with 8.5 cm to
+    # spare and still accepts anything doing 0.40 m/s.
+    #
+    # WHERE THE DRIFT COMES FROM. s_center is the nearest fitted corner plus
+    # HALF THE FITTED SIZE, and the fitted size grows as more of the face
+    # becomes visible, so a stationary box's reported centre is pushed away
+    # from the car as the car approaches. It is systematic and it points one
+    # way, which is exactly what the displacement test assumed detector error
+    # would not be.
+    #
+    # SO DO NOT WIDEN THE WINDOW TO FIX IT. An earlier note here said window
+    # and threshold could rise together to buy step rejection; that is true of
+    # a step and false of this. The drift is proportional to how far the CAR
+    # moved, so doubling the window doubles the drift as well as the real
+    # motion and the two never separate. Raising the threshold at a fixed
+    # window is what works, and it costs a higher minimum opponent speed:
+    # threshold / window, so 0.40 over 1.0 s will not acquire anything slower
+    # than 0.40 m/s.
     opponent_acquire_window_sec: 1.0
-    opponent_acquire_displacement_m: 0.25
+    opponent_acquire_displacement_m: 0.40
     dynamic_speed_valid_max_mps: 6.0
 
     # /tracking/classification_debug, built only while something subscribes.
