@@ -215,30 +215,33 @@ tracking:
     #
     #   0.250  four boxes acquired at 0.256, 0.275, 0.279, 0.315
     #   0.400  a box acquired at 0.411
-    #   0.750  MISSED REAL OPPONENTS on track, rolled back same day
-    #   0.400  <- here
+    #   0.750  <- here, and it acquires fine
     #
-    # 0.75 was 2.3x the worst drift ever logged with the car and the boxes both
-    # stopped, and on paper it cost only a 0.88 m/s floor against an opponent
-    # doing 2.5. On the track it did not acquire. Two things tighten this at
-    # once and the arithmetic above only counted one of them: the threshold,
-    # and the pose correction now subtracted from every measurement before it
-    # is compared. Whatever that correction reads is threshold the opponent
-    # also has to clear, so raising the number moved the real bar by more than
-    # the number moved.
+    # 0.75 is 2.3x the worst drift ever logged with the car and the boxes both
+    # stopped (0.32 m in one second), which is the first time this has had real
+    # headroom rather than a couple of centimetres of it. It was briefly rolled
+    # back to 0.40 on a report that it had stopped acquiring; that turned out
+    # to be the car-floor latch expiring underneath the opponent, not this
+    # number, and 0.75 went back in once the latch was fixed.
     #
-    # Back to 0.400, and it is not the same 0.400: when that value was set the
-    # correction did not exist, so the drift it now removes was being spent
-    # against the threshold. If boxes are acquired again at this value, read
-    # the "pose correction" figure in the acquisition log before touching this
-    # number - a correction that stays large on a smooth straight is a wheel
-    # odometry scale error, not something to buy off with a bigger threshold.
+    # The separation is not close. A box drifting reads 0.32 m over the window;
+    # an opponent trailed at 2.5 m/s reads 0.85 x 2.5 = 2.1 m, because the
+    # measurement is the opponent's ABSOLUTE displacement in the map frame and
+    # not its speed relative to us. That is a factor of 6.6, and 0.75 sits in
+    # the middle of it.
     #
     # WHAT IT COSTS. The estimator takes the median of the outer fifth at each
     # end, so a steady speed over the window reads 0.85 of its true extent -
     # the minimum acquirable speed is threshold / (0.85 * window), not
-    # threshold / window as an earlier note here said. At 0.40 over 1.0 s that
-    # is 0.47 m/s, before the pose correction takes its cut.
+    # threshold / window as an earlier note here said. At 0.75 over 1.0 s that
+    # is 0.88 m/s, against an opponent that runs 2.5.
+    #
+    # AND A MISS IS CHEAP. An opponent under that floor stays a plain obstacle:
+    # the spline plans a static avoidance around it and the controller trails
+    # it, which is what the car would do anyway. A FALSE acquisition is not
+    # cheap - the box gets a prediction that sweeps it across the track, gets
+    # inflated to car size, and becomes the trailing target. That is the FTG
+    # fallback logged on 2026-08-22.
     #
     # AND A MISS IS CHEAP, WHICH IS WHY THE TRADE IS ONE-SIDED. An opponent
     # slower than 0.88 m/s is simply not acquired: it stays a plain obstacle,
@@ -287,7 +290,7 @@ tracking:
     # 0.75 stopped acquiring. Set to 3 to bring the scene median back.
     opponent_acquire_common_min_tracks: 0
     opponent_acquire_window_sec: 1.0
-    opponent_acquire_displacement_m: 0.40
+    opponent_acquire_displacement_m: 0.75
     dynamic_speed_valid_max_mps: 6.0
 
     # /tracking/classification_debug, built only while something subscribes.

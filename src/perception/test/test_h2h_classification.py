@@ -358,3 +358,54 @@ def test_a_track_that_was_never_the_opponent_has_no_latch():
     n = extent_node(selected=None)
     track = extent_track(is_static=True, was_opponent=False)
     assert not n._believed_to_be_a_car(track)
+
+
+# --- the latch measures "since last seen moving" ---------------------------
+#
+# It used to measure "since last selected", and the selector churns: the
+# 2026-08-22 logs drop and retake the opponent every few seconds ("dynamic
+# opponent tracker 22 expired"). While it was dropped, the car floor timed out
+# underneath a car that had not gone anywhere.
+
+def split_node(selected, tracks, now=100.0):
+    """Run just the latch pass of _publish_split over `tracks`."""
+    n = extent_node(selected=selected)
+    n.tracks = tracks
+    for track in tracks:
+        track_id = int(track.obstacle.id)
+        if selected is not None and track_id == selected:
+            track.was_opponent_at = now
+        elif (getattr(track, 'was_opponent_at', None) is not None
+                and not bool(track.obstacle.is_static)):
+            track.was_opponent_at = now
+    return n
+
+
+def test_a_dropped_opponent_still_reading_dynamic_keeps_its_floor():
+    track = extent_track(is_static=False, was_opponent=True,
+                         stamp=100.0, opponent_age=9.0)
+    n = split_node(selected=None, tracks=[track])
+    assert n._believed_to_be_a_car(track)
+
+
+def test_a_box_that_went_back_to_static_ages_out():
+    track = extent_track(is_static=True, was_opponent=True,
+                         stamp=100.0, opponent_age=9.0)
+    n = split_node(selected=None, tracks=[track])
+    assert not n._believed_to_be_a_car(track)
+
+
+def test_a_box_that_never_earned_the_latch_does_not_get_one_by_reading_dynamic():
+    """Reading DYNAMIC is nearly free - 39 of 41 tracks did it for their whole
+    life. It refreshes a latch, it never creates one."""
+    track = extent_track(is_static=False, was_opponent=False, stamp=100.0)
+    n = split_node(selected=None, tracks=[track])
+    assert not hasattr(track, 'was_opponent_at')
+    assert not n._believed_to_be_a_car(track)
+
+
+def test_a_box_static_for_less_than_the_hold_still_counts_as_a_car():
+    track = extent_track(is_static=True, was_opponent=True,
+                         stamp=100.0, opponent_age=1.0)
+    n = split_node(selected=None, tracks=[track])
+    assert n._believed_to_be_a_car(track)

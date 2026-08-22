@@ -140,10 +140,9 @@ class HeadToHeadTrackingNode(TrackingNode):
         # acquired at 0.256 to 0.315 m, a smooth approach drift rather than
         # jitter, because s_center is the fitted corner plus half the FITTED
         # SIZE and that size grows as the car closes. 0.40 refuses all four
-        # Tried at 0.75 and rolled back the same day - it stopped acquiring
-        # real opponents. See h2h_perception.yaml for the measurements and
-        # for why the pose correction tightens this alongside the number.
-        'opponent_acquire_displacement_m': 0.40,
+        # 0.75, which acquires fine. See h2h_perception.yaml for how far this
+        # sits from both a drifting box and a trailed opponent.
+        'opponent_acquire_displacement_m': 0.75,
         # [m/s] Upper sanity bound on a believable opponent speed, and it is
         # new. The router had only the lower one, so a single bad frame
         # reporting 8.55 m/s for a stationary box was accepted as valid and
@@ -477,7 +476,9 @@ class HeadToHeadTrackingNode(TrackingNode):
         # A car that stops is still a car. Note the time on the TRACK, so the
         # extent floor below survives the moment it is reclassified STATIC -
         # and expires, so a single bad acquisition does not mark a box as a car
-        # for the rest of the run.
+        # for the rest of the run. The note is refreshed while the track keeps
+        # reading DYNAMIC, so the clock measures "since last seen moving"
+        # rather than "since last selected".
         #
         # Latched on being the SELECTED OPPONENT, not on reading DYNAMIC.
         # Reading DYNAMIC is nearly free - 39 of 41 tracks did it for their
@@ -486,11 +487,29 @@ class HeadToHeadTrackingNode(TrackingNode):
         # 0.40 m, which is how passable gaps get thrown away. Acquisition is
         # the strong claim: 0.25 m of net displacement over a second, which a
         # box does not reach.
-        if selected_id is not None:
-            for track in self.tracks:
-                if int(track.obstacle.id) == selected_id:
-                    track.was_opponent_at = now
-                    break
+        for track in self.tracks:
+            track_id = int(track.obstacle.id)
+            if selected_id is not None and track_id == selected_id:
+                track.was_opponent_at = now
+            elif (getattr(track, 'was_opponent_at', None) is not None
+                    and not bool(track.obstacle.is_static)):
+                # KEEP REFRESHING WHILE IT STILL READS DYNAMIC.
+                #
+                # Earning the floor takes the strong claim - being the selected
+                # opponent. Keeping it takes only the weak one, because a track
+                # that has already earned it is not a box. And the weak claim is
+                # what bridges selection churn: the selector drops and re-takes
+                # the opponent constantly ("dynamic opponent tracker 22
+                # expired" every few seconds in the 2026-08-22 logs), and while
+                # it is dropped the car floor was timing out underneath a car
+                # that had not gone anywhere.
+                #
+                # So the clock only starts when the track stops reading DYNAMIC
+                # as well as stops being selected - "last seen moving", which is
+                # what the expiry was asked for in the first place. A box that
+                # was mis-acquired for one frame still ages out, because a box
+                # goes back to reading STATIC.
+                track.was_opponent_at = now
         # Read by _hold_extents on the NEXT tick - the parent has already
         # updated the extents by the time the split runs, so the floor follows
         # the selection by one frame. At 20 Hz that is 50 ms, against an
