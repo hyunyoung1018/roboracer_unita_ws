@@ -52,3 +52,61 @@ def test_no_sector_table_is_auto():
 def test_a_degenerate_spacing_does_not_divide_by_zero():
     assert StateMachine._preferred_side_here(
         machine([[0, 100, "left"]], cur_s=5.0, wpnt_dist=0.0)) == "auto"
+
+
+# --- yeet_factor: a speed advantage, where it is safe to have one ----------
+#
+# Passing a moving car needs to be faster than it; a ceiling at exactly the
+# raceline speed forbids that. But the raceline ceiling exists because ggv.csv
+# is a flat 12.0 placeholder, and without it the path was planned near twice
+# the speed of the line it departs from - the car accelerated into a bend with
+# no grip budget and hit the wall.
+#
+# Reconciled by WHERE it applies: full lift where the path bends no more than
+# the raceline (the straight the pass is made on), tapering to none at the
+# path's own sharpest bend (the corner exit that crashed).
+
+import numpy as np
+
+
+def lifted(raceline_v, kappa, raceline_kappa, yeet):
+    """The lift as update_velocity computes it."""
+    extra = np.maximum(0.0, np.abs(kappa) - raceline_kappa)
+    worst = extra.max()
+    straightness = (1.0 - extra / worst) if worst > 1e-6 else np.ones_like(extra)
+    return raceline_v * (1.0 + (yeet - 1.0) * straightness)
+
+
+def test_a_path_no_sharper_than_the_line_gets_the_whole_lift():
+    v = np.array([3.0, 3.0, 3.0])
+    out = lifted(v, kappa=np.array([0.2, 0.2, 0.2]),
+                 raceline_kappa=np.array([0.2, 0.2, 0.2]), yeet=1.25)
+    assert np.allclose(out, 3.75)
+
+
+def test_the_sharpest_bend_gets_none_of_it():
+    v = np.array([3.0, 3.0, 3.0])
+    out = lifted(v, kappa=np.array([0.2, 0.6, 0.2]),
+                 raceline_kappa=np.array([0.2, 0.2, 0.2]), yeet=1.25)
+    assert out[1] == 3.0                      # the swerve keeps the ceiling
+    assert np.allclose(out[[0, 2]], 3.75)     # the straight does not
+
+
+def test_the_taper_is_monotonic():
+    v = np.ones(5) * 3.0
+    out = lifted(v, kappa=np.array([0.2, 0.3, 0.4, 0.5, 0.6]),
+                 raceline_kappa=np.full(5, 0.2), yeet=1.25)
+    assert list(out) == sorted(out, reverse=True)
+
+
+def test_yeet_one_is_the_raceline_ceiling_exactly():
+    v = np.array([3.0, 3.0])
+    out = lifted(v, kappa=np.array([0.2, 0.9]),
+                 raceline_kappa=np.array([0.2, 0.2]), yeet=1.0)
+    assert np.allclose(out, 3.0)
+
+
+def test_the_clamp_bounds_what_a_map_can_ask_for():
+    for asked, expected in ((0.5, 1.0), (1.0, 1.0), (1.25, 1.25),
+                            (2.0, 1.5), (10.0, 1.5)):
+        assert float(np.clip(asked, 1.0, 1.5)) == expected

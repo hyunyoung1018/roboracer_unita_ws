@@ -195,6 +195,7 @@ class StateMachine(Node):
         self.n_ot_sectors = 0
         self.overtake_wpnts = None
         self.overtake_zones = []
+        self.ot_yeet_factor = 1.0
         # read the map sector yamls, then build only_ftg_zones / overtake_zones
         self._load_sector_yamls()
         self._load_sector_params()
@@ -554,6 +555,12 @@ class StateMachine(Node):
             # name used by every map currently shipped in this workspace.
             block = d.get("ot_interpolator") or d.get("ot_sector_tuner") or {}
             self.ot_sectors_params = block.get("ros__parameters", {}) or {}
+            # How much faster than the raceline the lane-change path may be
+            # planned, where it is no sharper than the raceline. 1.0 keeps the
+            # raceline as a hard ceiling, which is what it was before this was
+            # read. Clamped: this spends grip that ggv.csv does not measure.
+            self.ot_yeet_factor = float(np.clip(
+                float(self.ot_sectors_params.get("yeet_factor", 1.0)), 1.0, 1.5))
         else:
             self.get_logger().warn(f"[{self.name}] {op} not found; no overtake zones")
 
@@ -624,6 +631,22 @@ class StateMachine(Node):
                     key = p.name.split(".")[0]
                     self.ot_sectors_params.setdefault(key, {})["ot_flag"] = bool(self._param_msg_value(p))
                     self.recompute_ot_spline = True
+                elif (p.name.startswith("Overtaking_sector")
+                        and p.name.endswith(".preferred_side")):
+                    # Live, because which way to go is the kind of thing that
+                    # is decided by watching the car try it.
+                    key = p.name.split(".")[0]
+                    self.ot_sectors_params.setdefault(key, {})["preferred_side"] = \
+                        str(p.value.string_value)
+                elif p.name == "yeet_factor":
+                    value = self._param_msg_value(p)
+                    if value is not None:
+                        self.ot_yeet_factor = float(np.clip(float(value), 1.0, 1.5))
+                        self.get_logger().warn(
+                            f"[{self.name}] yeet_factor now "
+                            f"{self.ot_yeet_factor:.2f}: the lane-change path "
+                            f"may be planned that much over the raceline where "
+                            f"it is no sharper than the raceline")
             self._load_sector_params()
 
     def get_planner_param(self, planner_name, key):
@@ -749,8 +772,12 @@ class StateMachine(Node):
 
     def avoidance_cb(self, data: OTWpntArray):
         if len(data.wpnts) != 0:
+            # The lane-change path only. Static avoidance is getting round a
+            # box, which needs no speed advantage over anything, so it keeps
+            # the raceline as a hard ceiling.
             self.update_velocity(data, self.cur_avoidance_wpnts.vel_planner_safety_factor,
-                                 self.cur_avoidance_wpnts.max_speed_mps)
+                                 self.cur_avoidance_wpnts.max_speed_mps,
+                                 yeet_factor=self.ot_yeet_factor)
         self.avoidance_wpnts = data
 
     def static_avoidance_cb(self, data: OTWpntArray):
@@ -1536,7 +1563,8 @@ class StateMachine(Node):
     ################
     # HELPER FUNCS #
     ################
-    def update_velocity(self, wpnts_msg, safety_factor=1.0, max_speed=None):
+    def update_velocity(self, wpnts_msg, safety_factor=1.0, max_speed=None,
+                        yeet_factor=1.0):
         if self.ggv is None or self.gb_wpnts is None:
             return  # velocity replanning unavailable (no veh dyn info / no gb wpnts yet)
         wpnts = wpnts_msg.wpnts
@@ -1617,9 +1645,40 @@ class StateMachine(Node):
             idx = (np.asarray([wp.s_m for wp in wpnts]) / self.wpnt_dist)
             idx = np.clip(idx, 0, None).astype(int) % n_gb
             raceline_v = np.asarray([self.gb_wpnts.wpnts[i].vx_mps for i in idx])
-            vx_profile = np.minimum(vx_profile, raceline_v)
             raceline_kappa = np.abs(np.asarray(
                 [self.gb_wpnts.wpnts[i].kappa_radpm for i in idx]))
+
+            # yeet_factor lifts that ceiling, and ONLY where the path is no
+            # sharper than the line beneath it.
+            #
+            # Passing a moving car needs a speed advantage; a ceiling at
+            # exactly the raceline speed forbids one, which is why the map has
+            # carried a yeet_factor since ForzaETH. But the paragraph above is
+            # the reason this cap exists at all: on a corner exit the path was
+            # planned near twice the speed of the line it departs from, the car
+            # accelerated into a bend with no grip budget left, ran wide and hit
+            # the wall. ggv.csv is still the flat 12.0 placeholder it was then,
+            # so nothing downstream would catch that.
+            #
+            # The two are reconciled by WHERE it applies. Lifting is allowed
+            # exactly where the path bends no more than the raceline - the
+            # straight the pass is made on - and tapers to nothing at the
+            # sharpest bend the path makes, which is the corner exit the crash
+            # happened on. Same shape as the max_speed blend below, with the
+            # weight the other way up, so the two cannot disagree about which
+            # part of the path is the tight one.
+            lift = float(yeet_factor)
+            if lift > 1.0:
+                extra = np.abs(kappa)
+                if raceline_kappa is not None:
+                    extra = np.maximum(0.0, extra - raceline_kappa)
+                worst = extra.max()
+                # 1 where the path is no sharper than the line, 0 at its own
+                # worst bend.
+                straightness = (1.0 - extra / worst) if worst > 1e-6 \
+                    else np.ones_like(extra)
+                raceline_v = raceline_v * (1.0 + (lift - 1.0) * straightness)
+            vx_profile = np.minimum(vx_profile, raceline_v)
 
         # The ceiling follows where the path BENDS, not where it sits.
         #
