@@ -141,8 +141,9 @@ class OpponentSelector:
         # the displacement test that replaced the streak. See
         # _acquire_displacement for why displacement and not speed.
         self.motion_history = {}
-        # [(time, map_travelled, odom_travelled)] over the same window. Their
-        # difference is the pose correction - see _pose_correction.
+        # [(time, map_xy, odom_xy)] over the same window. The difference
+        # between the two displacements is the pose correction - see
+        # _pose_correction.
         self.ego_history = []
         self.last_speed = None
         self.last_speed_at = None
@@ -307,24 +308,23 @@ class OpponentSelector:
             if obstacle_id not in present:
                 del self.motion_history[obstacle_id]
 
-    def note_ego(self, now, map_travelled, odom_travelled):
-        """Record how far the car says it has gone, both ways.
+    def note_ego(self, now, map_xy, odom_xy):
+        """Record where the car is, in both frames, once per tick.
 
-        Called once per tick by the tracker before select(). Either being None
-        - a topic not up yet - drops the sample, and _pose_correction then has
-        nothing to report, which is the uncorrected behaviour.
+        Called by the tracker before select(). Either being None - a topic not
+        up yet - drops the sample, and _pose_correction then reports nothing,
+        which is the uncorrected behaviour.
         """
-        if map_travelled is None or odom_travelled is None:
+        if map_xy is None or odom_xy is None:
             return
         window = float(self._param("opponent_acquire_window_sec"))
-        self.ego_history.append(
-            (float(now), float(map_travelled), float(odom_travelled)))
+        self.ego_history.append((float(now), tuple(map_xy), tuple(odom_xy)))
         cutoff = float(now) - window
         while len(self.ego_history) > 2 and self.ego_history[0][0] < cutoff:
             self.ego_history.pop(0)
 
     def _pose_correction(self):
-        """How much localisation moved the world under us this window, or None.
+        """How far localisation moved the world under us this window, or None.
 
         A stationary obstacle's map-frame s moves by exactly the correction the
         particle filter applied, because every lidar point is transformed
@@ -336,18 +336,28 @@ class OpponentSelector:
         The scene-median form of this needs three tracks to take a median
         from, and this course runs one: the acquisition log said "scene drift
         removed: none - only 1 track(s), needs 3" on the run that produced it.
-        So the correction is measured against the car instead, which works
-        whatever is in view.
+        So the reference comes from the car instead, which works whatever is
+        in view.
 
         /car_state/odom is the fused pose in the map frame; /vesc/odom is dead
-        reckoning in the odom frame. Both say how far the car has travelled,
-        and over a window the DIFFERENCE between those two distances is what
-        localisation put in - the same shift the obstacle picked up.
+        reckoning in the odom frame. The two frames have DIFFERENT ORIGINS, so
+        the positions are not comparable - but the displacements over a window
+        are, because map -> odom is a rigid transform. Both displacements
+        describe the same real motion of the same car, so whatever is left
+        over when one is subtracted from the other is what the particle filter
+        injected. That is the shift every obstacle picked up.
 
-        Unsigned, because the distances are radial from each frame's origin
-        and their difference has no along-track sign. It bounds how much of an
-        obstacle's apparent displacement localisation can account for, which is
-        what the caller needs.
+        Which is also why a car driving normally reports near zero here, at
+        any speed: the ego motion is in both displacements and cancels. Only
+        the correction survives. What does NOT cancel is a scale error between
+        wheel odometry and the map - that shows up as a term proportional to
+        distance travelled, so a persistently large reading while driving
+        straight and smooth means speed_to_erpm_gain is off, not that
+        localisation is jumping.
+
+        Magnitude, because a translation has no along-track sign to hand back.
+        It bounds how much of an obstacle's apparent displacement
+        localisation can account for, which is what the caller needs.
         """
         if len(self.ego_history) < 4:
             return None
@@ -355,7 +365,11 @@ class OpponentSelector:
         if self.ego_history[-1][0] - self.ego_history[0][0] < 0.8 * window:
             return None
         first, last = self.ego_history[0], self.ego_history[-1]
-        return abs((last[1] - first[1]) - (last[2] - first[2]))
+        map_dx = last[1][0] - first[1][0]
+        map_dy = last[1][1] - first[1][1]
+        odom_dx = last[2][0] - first[2][0]
+        odom_dy = last[2][1] - first[2][1]
+        return math.hypot(map_dx - odom_dx, map_dy - odom_dy)
 
     def _common_drift(self, track_length, exclude_id=None):
         """How far EVERY track appears to have gone this window, or None.

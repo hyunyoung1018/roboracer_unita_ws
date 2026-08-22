@@ -464,43 +464,72 @@ def test_the_measured_stationary_wander_no_longer_acquires():
 # The scene-median form needs three tracks and this course runs one: the
 # acquisition log said "scene drift removed: none - only 1 track(s), needs 3"
 # on the run that produced it. /car_state/odom is the fused pose in the map
-# frame and /vesc/odom is dead reckoning in the odom frame; over a window the
-# difference between how far each says the car went is what localisation put
-# in, which is the same shift every obstacle picked up.
+# frame and /vesc/odom is dead reckoning in the odom frame; the two frames
+# have different origins, so only the DISPLACEMENTS compare - and whatever is
+# left when one is subtracted from the other is what localisation injected.
 
-def ego(sel, moved_map, moved_odom, now=1.0, window=1.0, rate=20.0):
+def ego(sel, drove=0.0, correction=0.0, now=1.0, window=1.0, rate=20.0,
+        heading=(1.0, 0.0)):
+    """Drive the car `drove` m along `heading` while the filter shifts it
+    `correction` m sideways. The odom frame starts somewhere else entirely, to
+    prove the origins never enter the answer."""
+    hx, hy = heading
     count = int(window * rate) + 1
     for i in range(count):
         f = i / (count - 1)
-        sel.note_ego(now - window + i / rate, moved_map * f, moved_odom * f)
+        sel.note_ego(
+            now - window + i / rate,
+            (drove * f * hx + correction * f, drove * f * hy),
+            (17.0 + drove * f * hx, -4.0 + drove * f * hy))
 
 
 def test_a_correction_that_moved_the_world_is_not_the_track_moving():
     sel = selector()
     history(sel, 1, 3.0, moved=0.5)
-    ego(sel, moved_map=3.5, moved_odom=3.0)      # 0.5 m of correction
+    ego(sel, drove=3.0, correction=0.5)
     assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_motion_beyond_the_correction_survives():
     sel = selector()
     history(sel, 1, 3.0, moved=1.0)
-    ego(sel, moved_map=3.2, moved_odom=3.0)      # 0.2 m of correction
+    ego(sel, drove=3.0, correction=0.2)
     assert sel._acquire_displacement(1, TRACK) == pytest.approx(
         1.0 * RAMP - 0.2, abs=1e-6)
 
 
-def test_agreeing_odometry_takes_nothing_off():
+def test_trailing_an_opponent_at_speed_takes_nothing_off():
+    """The worry this was written against: if we sit behind a car at matched
+    speed for the whole window, does the correction eat its displacement?
+
+    No. The ego motion is in BOTH displacements and cancels, so a clean run at
+    any speed reports zero correction - and the opponent's own displacement is
+    measured in map-frame s, which is absolute, not relative to us. It keeps
+    advancing at the opponent's true speed no matter how we are moving."""
     sel = selector()
-    history(sel, 1, 3.0, moved=0.6)
-    ego(sel, moved_map=3.0, moved_odom=3.0)      # no correction at all
-    assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.6 * RAMP, abs=1e-6)
+    history(sel, 1, 3.0, moved=2.5)            # opponent doing 2.5 m/s
+    ego(sel, drove=2.5, correction=0.0)        # us doing 2.5 m/s, clean
+    assert sel._pose_correction() == pytest.approx(0.0, abs=1e-9)
+    assert sel._acquire_displacement(1, TRACK) == pytest.approx(2.5 * RAMP, abs=1e-6)
+
+
+def test_the_frames_start_in_different_places_and_that_does_not_matter():
+    sel = selector()
+    ego(sel, drove=4.0, correction=0.3)
+    assert sel._pose_correction() == pytest.approx(0.3, abs=1e-9)
+
+
+def test_a_turning_car_reports_no_correction_either():
+    """Radial distance from each origin would have invented one here."""
+    sel = selector()
+    ego(sel, drove=3.0, correction=0.0, heading=(0.0, 1.0))
+    assert sel._pose_correction() == pytest.approx(0.0, abs=1e-9)
 
 
 def test_it_works_with_one_track_which_is_the_whole_point():
     sel = selector()
     history(sel, 1, 3.0, moved=0.5)
-    ego(sel, moved_map=3.5, moved_odom=3.0)
+    ego(sel, drove=3.0, correction=0.5)
     assert len(sel.motion_history) == 1
     assert sel._common_drift(TRACK, exclude_id=1) is None    # quorum short
     assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.0, abs=1e-6)
@@ -516,12 +545,12 @@ def test_no_ego_odometry_leaves_the_measurement_alone():
 def test_a_partial_window_of_ego_samples_is_not_used():
     sel = selector()
     history(sel, 1, 3.0, moved=0.6)
-    ego(sel, moved_map=3.5, moved_odom=3.0, window=0.3)
+    ego(sel, drove=1.0, correction=0.5, window=0.3)
     assert sel._pose_correction() is None
 
 
 def test_the_correction_never_drives_the_measurement_negative():
     sel = selector()
     history(sel, 1, 3.0, moved=0.1)
-    ego(sel, moved_map=4.0, moved_odom=3.0)      # 1.0 m, larger than the move
+    ego(sel, drove=3.0, correction=1.0)        # larger than the move
     assert sel._acquire_displacement(1, TRACK) == pytest.approx(0.0, abs=1e-9)

@@ -218,8 +218,8 @@ class HeadToHeadTrackingNode(TrackingNode):
         # between how far each says the car went IS the correction the
         # particle filter applied, which is the same shift every obstacle
         # picked up.
-        self.ego_map_s = None
-        self.ego_odom_s = None
+        self.ego_map_xy = None
+        self.ego_odom_xy = None
         self.create_subscription(
             Odometry, '/car_state/odom', self._ego_map_cb, 10)
         self.create_subscription(
@@ -262,16 +262,21 @@ class HeadToHeadTrackingNode(TrackingNode):
         self.ego_s = float(msg.pose.pose.position.x)
 
     @staticmethod
-    def _travelled(msg):
-        """Distance from the frame origin - Cartesian, so no wrap to handle."""
+    def _planar_position(msg):
+        """The car's (x, y) in whatever frame the message is stamped in.
+
+        Position, not a distance: the two frames have different origins, so
+        only DIFFERENCES within one frame are comparable across the two. The
+        selector takes those differences - see _pose_correction there.
+        """
         position = msg.pose.pose.position
-        return math.hypot(float(position.x), float(position.y))
+        return (float(position.x), float(position.y))
 
     def _ego_map_cb(self, msg):
-        self.ego_map_s = self._travelled(msg)
+        self.ego_map_xy = self._planar_position(msg)
 
     def _ego_odom_cb(self, msg):
-        self.ego_odom_s = self._travelled(msg)
+        self.ego_odom_xy = self._planar_position(msg)
 
     def _update_track(self, track, measurement, stamp):
         """Track as the parent does, then re-decide static on filtered history.
@@ -458,7 +463,7 @@ class HeadToHeadTrackingNode(TrackingNode):
             obstacles.append(obstacle)
             classes[int(obstacle.id)] = self._track_class(track)
 
-        self.selector.note_ego(now, self.ego_map_s, self.ego_odom_s)
+        self.selector.note_ego(now, self.ego_map_xy, self.ego_odom_xy)
         selected = self.selector.select(
             obstacles, classes, now, self.waypoints, self.track_length,
             self.ego_s)
