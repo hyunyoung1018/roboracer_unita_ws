@@ -173,6 +173,9 @@ class HeadToHeadTrackingNode(TrackingNode):
             ('dynamic_extent_min_m', 0.202),
             ('dynamic_extent_max_m', 0.42),
             ('dynamic_extent_decay_mps', 0.5),
+            # [s] How long "this was the opponent" keeps the car floor after
+            # the selector releases the track. See _believed_to_be_a_car.
+            ('opponent_car_size_hold_sec', 3.0),
         ):
             if not self.has_parameter(name):
                 self.declare_parameter(name, default)
@@ -509,8 +512,10 @@ class HeadToHeadTrackingNode(TrackingNode):
             # into an opponent it had a prediction for.
             dynamic_msg.obstacles.append(opponent)
 
-        # A car that stops is still a car. Latch it on the TRACK, so the
-        # extent floor below survives the moment it is reclassified STATIC.
+        # A car that stops is still a car. Note the time on the TRACK, so the
+        # extent floor below survives the moment it is reclassified STATIC -
+        # and expires, so a single bad acquisition does not mark a box as a car
+        # for the rest of the run.
         #
         # Latched on being the SELECTED OPPONENT, not on reading DYNAMIC.
         # Reading DYNAMIC is nearly free - 39 of 41 tracks did it for their
@@ -522,7 +527,7 @@ class HeadToHeadTrackingNode(TrackingNode):
         if selected_id is not None:
             for track in self.tracks:
                 if int(track.obstacle.id) == selected_id:
-                    track.was_opponent = True
+                    track.was_opponent_at = now
                     break
         # Read by _hold_extents on the NEXT tick - the parent has already
         # updated the extents by the time the split runs, so the floor follows
@@ -592,14 +597,22 @@ class HeadToHeadTrackingNode(TrackingNode):
         0.404 m is the difference between a corridor and no corridor. The car
         stopped, and nothing recovered.
 
-        Selection is the strong claim and the honest one: 0.25 m of net
-        displacement over a second, which is a thing that moves. `was_opponent`
-        keeps it once earned, because a car that stops is still a car.
+        Selection is the strong claim and the honest one: net displacement
+        over a second, which is a thing that moves. The claim OUTLIVES the
+        selection, because a car that stops is still a car - but it does not
+        outlive the run. It used to be a permanent flag, and one bad
+        acquisition then marked a box as a car until the node restarted. The
+        clock only starts once the selector lets the track go, so an opponent
+        that is still being tracked never ages out.
         """
         selected = getattr(self, '_opponent_track_id', None)
         if selected is not None and int(track.obstacle.id) == int(selected):
             return True
-        return bool(getattr(track, 'was_opponent', False))
+        since = getattr(track, 'was_opponent_at', None)
+        if since is None:
+            return False
+        hold = float(self.get_parameter('opponent_car_size_hold_sec').value)
+        return (float(track.stamp) - float(since)) <= hold
 
     def _hold_extents(self, track, measurement, dt):
         """Hold extents with a car's ceiling and leak rate once moving.
@@ -646,8 +659,26 @@ class HeadToHeadTrackingNode(TrackingNode):
         floor = float(self.get_parameter('dynamic_extent_min_m').value)
         leak = float(
             self.get_parameter('dynamic_extent_decay_mps').value) * max(0.0, dt)
+        # The ceiling bounds what is REMEMBERED, never what is MEASURED.
+        #
+        # It used to wrap the whole expression, and then it shrank things. A
+        # 0.50 m box that was briefly mis-acquired came out at 0.42 - the
+        # measurement said 0.25 m per side and the ceiling clamped it to 0.21.
+        # Reporting an obstacle SMALLER than it was measured is never right:
+        # every planner downstream subtracts this from the room either side, so
+        # a shrunk box hands out clearance the car does not have. The floor
+        # says "a car is at least this big, whatever the pillar looked like",
+        # which is a claim about the object; the ceiling only ever existed to
+        # stop a bad frame's memory persisting, which is a claim about the
+        # history. Applying a history bound to a live measurement was the bug.
+        #
+        # So the memory decays toward the ceiling and the measurement wins
+        # outright when it is larger. A box measured bigger than an F1TENTH car
+        # either was never a car, or is a car and really is that big - both
+        # readings say drive around the bigger number.
         for i in range(4):
-            held[i] = min(ceiling, max(floor, measured[i], held[i] - leak))
+            remembered = min(ceiling, held[i] - leak)
+            held[i] = max(floor, measured[i], remembered)
         return held
 
 

@@ -91,15 +91,32 @@ tracking:
 # 1.9 m track it was eating the gap the overtake needs.
     dynamic_extent_min_m: 0.202
 
-# Ceiling, applied as max/2 = 0.21, i.e. the floor plus a centimetre. Not
-# pinned exactly: a frame that genuinely measures wider than the disc
-# should not be clamped below what was seen.
+# Ceiling on what is REMEMBERED, applied as max/2 = 0.21, i.e. the floor plus
+# a centimetre. It bounds how long a bad frame's fit persists in the running
+# maximum; it does not bound the live measurement. This note always said "a
+# frame that genuinely measures wider than the disc should not be clamped
+# below what was seen" and the code did clamp it, so a 0.50 m box that had
+# once been mis-acquired was published at 0.42. Fixed 2026-08-22.
     dynamic_extent_max_m: 0.42
 
 # A car's Frenet extents change with its yaw against the track tangent, not
 # with how much of it the lidar has seen, so the running maximum has to
 # bleed off within a tick rather than the six seconds a static box gets.
     dynamic_extent_decay_mps: 0.5
+
+# [s] How long "this track was the opponent" keeps the car floor after the
+# SELECTOR LETS IT GO. The claim has to outlive the selection - a car that
+# stops behind a box is still a car, and releasing the floor the moment it is
+# reclassified STATIC drops the believed width 0.40 -> 0.20 m in two seconds,
+# which every planner downstream turns into clearance the car does not have.
+#
+# But it must not outlive the run. It used to be a permanent flag, so one bad
+# acquisition marked a box as a car until the node restarted. 3.0 s is over
+# half a lap here (lap 2 of the 2026-08-22 run took 5.47 s), long enough to
+# cover a stop-and-go and short enough that a phantom is gone before the car
+# comes round again. The clock only starts once the selector releases the
+# track, so an opponent still being tracked never ages out.
+    opponent_car_size_hold_sec: 3.0
 
     # ---- opponent selection -------------------------------------------
     # Everything the deleted stable_obstacle_router carried EXCEPT its second

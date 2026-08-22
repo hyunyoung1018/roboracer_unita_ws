@@ -209,6 +209,7 @@ EXTENT_PARAMS = dict(
     dynamic_extent_min_m=0.202,
     dynamic_extent_max_m=0.42,
     dynamic_extent_decay_mps=0.5,
+    opponent_car_size_hold_sec=3.0,
     extent_max_m=0.50,
     extent_decay_mps=0.05,
 )
@@ -221,15 +222,16 @@ def extent_node(selected=None, **overrides):
 
 
 def extent_track(is_static, history=10, extents=None, was_opponent=False,
-                 obstacle_id=7):
+                 obstacle_id=7, stamp=0.0, opponent_age=0.0):
     obstacle = SimpleNamespace(id=obstacle_id, is_static=is_static,
                                s_center=3.0, d_center=0.0, vs=0.0, vd=0.0)
     t = SimpleNamespace(
-        track_id=obstacle_id, obstacle=obstacle, stamp=0.0, missed=0,
+        track_id=obstacle_id, obstacle=obstacle, stamp=stamp, missed=0,
         s_history=[3.0] * history, d_history=[0.0] * history,
         extents=list(extents if extents is not None else [0.202] * 4))
     if was_opponent:
-        t.was_opponent = True
+        # `opponent_age` seconds since the selector last held this track.
+        t.was_opponent_at = stamp - opponent_age
     return t
 
 
@@ -293,3 +295,66 @@ def test_a_moving_opponent_is_unchanged():
     for _ in range(200):
         moving.extents = n._hold_extents(moving, extent_measurement(), DT)
     assert min(moving.extents) == pytest.approx(0.202)
+
+
+# --- the ceiling bounds memory, not measurement ----------------------------
+#
+# A 0.50 m box that was briefly mis-acquired came out at 0.42: the measurement
+# said 0.25 m per side and the ceiling clamped it to 0.21. Reporting an
+# obstacle smaller than it was measured hands out clearance the car does not
+# have.
+
+def big_measurement(half):
+    return SimpleNamespace(id=7, s_start=3.0 - half, s_end=3.0 + half,
+                           d_right=-half, d_left=half, s_center=3.0,
+                           d_center=0.0, size=2 * half)
+
+
+def test_a_box_bigger_than_a_car_is_not_shrunk_to_car_size():
+    n = extent_node(selected=7)
+    track = extent_track(is_static=True, was_opponent=True)
+    held = n._hold_extents(track, big_measurement(0.25), 0.05)
+    assert all(h == pytest.approx(0.25) for h in held)
+
+
+def test_the_pillar_is_still_raised_to_the_car_floor():
+    n = extent_node(selected=7)
+    track = extent_track(is_static=True, was_opponent=True)
+    held = n._hold_extents(track, extent_measurement(half=0.10), 0.05)
+    assert all(h == pytest.approx(0.202) for h in held)
+
+
+def test_the_ceiling_still_bounds_what_is_only_remembered():
+    """A one-frame 0.9 m fit is believed while it is measured, then decays -
+    and stops at the ceiling rather than staying at 0.9 forever."""
+    n = extent_node(selected=7)
+    track = extent_track(is_static=True, was_opponent=True,
+                         extents=[0.9] * 4)
+    held = n._hold_extents(track, extent_measurement(half=0.10), 0.05)
+    assert all(h == pytest.approx(0.21) for h in held)
+
+
+# --- the latch expires -----------------------------------------------------
+
+def test_a_stopped_opponent_is_still_a_car_moments_later():
+    n = extent_node(selected=None)
+    track = extent_track(is_static=True, was_opponent=True, opponent_age=1.0)
+    assert n._believed_to_be_a_car(track)
+
+
+def test_a_stale_acquisition_stops_marking_a_box_as_a_car():
+    n = extent_node(selected=None)
+    track = extent_track(is_static=True, was_opponent=True, opponent_age=9.0)
+    assert not n._believed_to_be_a_car(track)
+
+
+def test_the_clock_does_not_run_while_the_track_is_still_the_opponent():
+    n = extent_node(selected=7)
+    track = extent_track(is_static=True, was_opponent=True, opponent_age=9.0)
+    assert n._believed_to_be_a_car(track)
+
+
+def test_a_track_that_was_never_the_opponent_has_no_latch():
+    n = extent_node(selected=None)
+    track = extent_track(is_static=True, was_opponent=False)
+    assert not n._believed_to_be_a_car(track)
