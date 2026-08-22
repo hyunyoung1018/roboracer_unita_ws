@@ -16,6 +16,17 @@ from f110_msgs.msg import ObstacleArray
 from .state_machine_node import StateMachine, time_to_float
 from .states_types import StateType
 
+# [-] Ceiling on yeet_factor. Kept equal to ot_interpolator's YEET_MAX: that
+# node scales the overtaking LINE and this one scales the lane-change PATH, and
+# disagreeing about the limit would mean the two spend different amounts of the
+# same grip budget.
+#
+# A guardrail against a typo, not a policy. What makes a large value safe is
+# where the ot_sectors are drawn - the lift only reaches a path the car drives
+# in OVERTAKE, which needs ot_flag on the sector it is in. WAS 1.5, from when a
+# map had one overtaking sector spanning corners as well as straights.
+OT_YEET_MAX = 2.0
+
 
 def nearest_ahead(obstacles, current_s, track_length, horizon):
     """Return the closest obstacle ahead for the trailing-target fallback."""
@@ -49,6 +60,10 @@ class H2HStateMachine(StateMachine):
     def __init__(self):
         super().__init__()
         self.use_force_trailing = bool(self.params.use_force_trailing)
+        # Read here rather than in the shared _load_sector_yamls: yeet_factor is
+        # head-to-head's key in ot_sectors.yaml and time trials has no path to
+        # spend it on. super().__init__ has already parsed the file.
+        self._read_yeet_factor()
         self.clearance_vehicle_width_m = float(
             self._get_or_declare("clearance_vehicle_width_m", 0.28))
         self.trailing_block_hold_sec = float(
@@ -402,6 +417,53 @@ class H2HStateMachine(StateMachine):
                 "takes the overtake", throttle_duration_sec=2.0)
         self.static_overtaking_mode = bool(prefer_static)
         return True
+
+    def _read_yeet_factor(self):
+        """Pull yeet_factor out of the sector params the parent already loaded."""
+        self.ot_yeet_factor = float(np.clip(
+            float(self.ot_sectors_params.get("yeet_factor", 1.0)),
+            1.0, OT_YEET_MAX))
+
+    def _sector_param_extra(self, p):
+        """Live yeet_factor, off /ot_interpolator's parameter events.
+
+        The parent walks the changed parameters and hands each one here after
+        its own ot_flag and preferred_side branches. Live because the value is
+        decided by watching the car take a pass and judging whether it carried
+        enough speed to complete it.
+        """
+        if p.name != "yeet_factor":
+            return
+        value = self._param_msg_value(p)
+        if value is None:
+            return
+        self.ot_yeet_factor = float(np.clip(float(value), 1.0, OT_YEET_MAX))
+        self.get_logger().warn(
+            f"[{self.name}] yeet_factor now {self.ot_yeet_factor:.2f} "
+            f"(ceiling {OT_YEET_MAX:.1f}): the lane-change path may be planned "
+            f"that much over the raceline where it is no sharper than it")
+
+    def avoidance_cb(self, data):
+        """The lane-change path, planned with a raised speed CEILING.
+
+        yeet_factor does not set a target speed - it raises the ceiling the
+        velocity profile is clipped against, so the planner may use more of the
+        straight if the rest of the profile allows it. Passing a moving car
+        needs a speed advantage over the line it departs from, and a ceiling at
+        exactly the raceline speed forbids one.
+
+        Head-to-head only, in two senses. Time trials never publishes to this
+        topic - it has no change_avoidance_node and remaps spline_node's output
+        to the static one - and static avoidance is deliberately excluded even
+        here: getting round a box needs no advantage over anything, so it keeps
+        the raceline as a hard ceiling.
+        """
+        if len(data.wpnts) != 0:
+            self.update_velocity(
+                data, self.cur_avoidance_wpnts.vel_planner_safety_factor,
+                self.cur_avoidance_wpnts.max_speed_mps,
+                yeet_factor=self.ot_yeet_factor)
+        self.avoidance_wpnts = data
 
     def _dynamic_obstacles_cb(self, msg):
         self._opponent_obstacles = list(msg.obstacles)
