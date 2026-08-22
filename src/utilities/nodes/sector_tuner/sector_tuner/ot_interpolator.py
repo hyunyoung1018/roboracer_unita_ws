@@ -41,8 +41,7 @@ class OvertakingInterpolator(Node):
         self.sectors_params=self.parameters_to_dict()
         self.n_sectors = self.sectors_params['n_sectors']
         self.get_logger().info(str(self.sectors_params))
-        self.yeet_factor = self.sectors_params['yeet_factor']
-        self.spline_len = int(self.sectors_params['spline_len'])
+        self._read_yeet_and_spline_len()
 
         # SUBSCRIBE
         self.glb_wpnts_name = "/global_waypoints_scaled"
@@ -124,6 +123,35 @@ class OvertakingInterpolator(Node):
         timer_period = 0.5  # seconds
         self.wait_for_message_timer = self.create_timer(timer_period, self.loop_cb)
         
+    # [-] Ceiling on yeet_factor, shared with state_machine_node's clip. A
+    # guardrail against a typo, not a policy: the value that belongs here is
+    # decided by which sectors carry ot_flag. The lift only ever reaches the
+    # waypoints where schedule[i] > 0, i.e. inside an overtaking sector and its
+    # sigmoid ramps, so an ot_sector drawn over a straight can take a large one.
+    #
+    # WAS 1.5, when there was one overtaking sector per map covering corners as
+    # well as straights. A path planned near twice the speed of the line it
+    # departs from once accelerated into a bend with no grip budget and hit the
+    # wall, which is what the ceiling was for, and ggv.csv is still a flat 12.0
+    # placeholder rather than a measured friction ellipse.
+    #
+    # WHAT DOES NOT SAVE YOU HERE. state_machine's lift tapers - full where the
+    # path bends no more than the raceline, zero at the path's own sharpest
+    # point. THIS multiply does not: within an ot_sector it is flat, so a corner
+    # inside that sector gets the whole factor. Draw the sectors so they do not
+    # contain one.
+    YEET_MAX = 2.0
+
+    def _read_yeet_and_spline_len(self):
+        """Pull both out of sectors_params. Called at startup AND on every
+        parameter event - they used to be read once in __init__, so a live
+        `ros2 param set /ot_interpolator yeet_factor 2.0` updated the dict,
+        triggered a full reinterpolation, and then recomputed with the value
+        from startup."""
+        self.yeet_factor = float(
+            np.clip(float(self.sectors_params['yeet_factor']), 1.0, self.YEET_MAX))
+        self.spline_len = int(self.sectors_params['spline_len'])
+
     def dyn_param_cb(self, parameter_event):
         if(parameter_event.node == '/sector_tuner'):
             self.need_to_reinterpolate = True
@@ -135,6 +163,13 @@ class OvertakingInterpolator(Node):
             """
             # update params
             self.sectors_params=self.parameters_to_dict()
+            previous = self.yeet_factor
+            self._read_yeet_and_spline_len()
+            if self.yeet_factor != previous:
+                self.get_logger().warn(
+                    f"yeet_factor {previous:.2f} -> {self.yeet_factor:.2f} "
+                    f"(ceiling {self.YEET_MAX:.1f}); overtaking-sector waypoints "
+                    f"will be republished at that multiple of the scaled raceline")
             self.need_to_reinterpolate = True
             self.get_logger().info(str(self.sectors_params))            
         # Else

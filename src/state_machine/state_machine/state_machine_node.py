@@ -47,6 +47,22 @@ from state_machine import states
 from state_machine import state_transitions
 from state_machine.state_machine_params import StateMachineParams
 
+# [-] Ceiling on yeet_factor. Kept equal to ot_interpolator's YEET_MAX - the two
+# apply the lift at different places and disagreeing about the limit would mean
+# the published overtaking waypoints and the speed the state machine will accept
+# for them come from different numbers.
+#
+# A guardrail against a typo, not a policy. What makes a large value safe is
+# where the ot_sectors are drawn: the lift only reaches waypoints inside an
+# overtaking sector, so sectors placed on straights can carry one. WAS 1.5, from
+# when a map had a single overtaking sector spanning corners as well.
+#
+# THIS side of the lift also tapers - see update_velocity: full where the path
+# bends no more than the raceline, zero at the path's own sharpest point.
+# ot_interpolator's multiply does NOT taper, so it is the binding constraint on
+# how a sector may be drawn.
+OT_YEET_MAX = 2.0
+
 try:
     # if we are in the car, vesc msgs are built and we read them
     from vesc_msgs.msg import VescStateStamped
@@ -560,7 +576,8 @@ class StateMachine(Node):
             # raceline as a hard ceiling, which is what it was before this was
             # read. Clamped: this spends grip that ggv.csv does not measure.
             self.ot_yeet_factor = float(np.clip(
-                float(self.ot_sectors_params.get("yeet_factor", 1.0)), 1.0, 1.5))
+                float(self.ot_sectors_params.get("yeet_factor", 1.0)),
+                1.0, OT_YEET_MAX))
         else:
             self.get_logger().warn(f"[{self.name}] {op} not found; no overtake zones")
 
@@ -641,10 +658,12 @@ class StateMachine(Node):
                 elif p.name == "yeet_factor":
                     value = self._param_msg_value(p)
                     if value is not None:
-                        self.ot_yeet_factor = float(np.clip(float(value), 1.0, 1.5))
+                        self.ot_yeet_factor = float(
+                            np.clip(float(value), 1.0, OT_YEET_MAX))
                         self.get_logger().warn(
                             f"[{self.name}] yeet_factor now "
-                            f"{self.ot_yeet_factor:.2f}: the lane-change path "
+                            f"{self.ot_yeet_factor:.2f} (ceiling "
+                            f"{OT_YEET_MAX:.1f}): the lane-change path "
                             f"may be planned that much over the raceline where "
                             f"it is no sharper than the raceline")
             self._load_sector_params()
