@@ -277,7 +277,15 @@ tracking:
     # across tracks estimates the shift. Three is the floor: with one, the
     # median is that track and everything cancels, and a real opponent would
     # never be acquired. 0 disables it.
-    opponent_acquire_common_min_tracks: 3
+    #
+    # OFF. Common-mode rejection is rolled back entirely as of 2026-08-22 -
+    # the ego-referenced form went with it. Neither ever demonstrably removed
+    # a false acquisition here: this course puts ONE track in view, so the
+    # quorum of three was never met and the diagnostic said so every time
+    # ("scene drift removed: none - only 1 track(s), needs 3"). What the pair
+    # DID do was subtract from real opponents as well, which is half of why
+    # 0.75 stopped acquiring. Set to 3 to bring the scene median back.
+    opponent_acquire_common_min_tracks: 0
     opponent_acquire_window_sec: 1.0
     opponent_acquire_displacement_m: 0.40
     dynamic_speed_valid_max_mps: 6.0

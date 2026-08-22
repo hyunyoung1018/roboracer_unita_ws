@@ -141,10 +141,6 @@ class OpponentSelector:
         # the displacement test that replaced the streak. See
         # _acquire_displacement for why displacement and not speed.
         self.motion_history = {}
-        # [(time, map_xy, odom_xy)] over the same window. The difference
-        # between the two displacements is the pose correction - see
-        # _pose_correction.
-        self.ego_history = []
         self.last_speed = None
         self.last_speed_at = None
         self.last_s = None
@@ -308,69 +304,6 @@ class OpponentSelector:
             if obstacle_id not in present:
                 del self.motion_history[obstacle_id]
 
-    def note_ego(self, now, map_xy, odom_xy):
-        """Record where the car is, in both frames, once per tick.
-
-        Called by the tracker before select(). Either being None - a topic not
-        up yet - drops the sample, and _pose_correction then reports nothing,
-        which is the uncorrected behaviour.
-        """
-        if map_xy is None or odom_xy is None:
-            return
-        window = float(self._param("opponent_acquire_window_sec"))
-        self.ego_history.append((float(now), tuple(map_xy), tuple(odom_xy)))
-        cutoff = float(now) - window
-        while len(self.ego_history) > 2 and self.ego_history[0][0] < cutoff:
-            self.ego_history.pop(0)
-
-    def _pose_correction(self):
-        """How far localisation moved the world under us this window, or None.
-
-        A stationary obstacle's map-frame s moves by exactly the correction the
-        particle filter applied, because every lidar point is transformed
-        through map -> odom -> base_link before it is clustered. Measured on
-        2026-08-22 with the car stopped and the box stopped, one obstacle's
-        reported gap wandered 7.74 to 8.06 m while its measured WIDTH stayed
-        inside 6 cm - translated, not grown.
-
-        The scene-median form of this needs three tracks to take a median
-        from, and this course runs one: the acquisition log said "scene drift
-        removed: none - only 1 track(s), needs 3" on the run that produced it.
-        So the reference comes from the car instead, which works whatever is
-        in view.
-
-        /car_state/odom is the fused pose in the map frame; /vesc/odom is dead
-        reckoning in the odom frame. The two frames have DIFFERENT ORIGINS, so
-        the positions are not comparable - but the displacements over a window
-        are, because map -> odom is a rigid transform. Both displacements
-        describe the same real motion of the same car, so whatever is left
-        over when one is subtracted from the other is what the particle filter
-        injected. That is the shift every obstacle picked up.
-
-        Which is also why a car driving normally reports near zero here, at
-        any speed: the ego motion is in both displacements and cancels. Only
-        the correction survives. What does NOT cancel is a scale error between
-        wheel odometry and the map - that shows up as a term proportional to
-        distance travelled, so a persistently large reading while driving
-        straight and smooth means speed_to_erpm_gain is off, not that
-        localisation is jumping.
-
-        Magnitude, because a translation has no along-track sign to hand back.
-        It bounds how much of an obstacle's apparent displacement
-        localisation can account for, which is what the caller needs.
-        """
-        if len(self.ego_history) < 4:
-            return None
-        window = float(self._param("opponent_acquire_window_sec"))
-        if self.ego_history[-1][0] - self.ego_history[0][0] < 0.8 * window:
-            return None
-        first, last = self.ego_history[0], self.ego_history[-1]
-        map_dx = last[1][0] - first[1][0]
-        map_dy = last[1][1] - first[1][1]
-        odom_dx = last[2][0] - first[2][0]
-        odom_dy = last[2][1] - first[2][1]
-        return math.hypot(map_dx - odom_dx, map_dy - odom_dy)
-
     def _common_drift(self, track_length, exclude_id=None):
         """How far EVERY track appears to have gone this window, or None.
 
@@ -492,14 +425,7 @@ class OpponentSelector:
         common = self._common_drift(track_length, exclude_id=obstacle_id)
         if common is not None:
             signed -= common
-        moved = abs(signed)
-        # And whatever localisation moved the world by is not this track's
-        # doing either. Unsigned, so it is taken off the magnitude rather than
-        # the signed value, and never below zero.
-        correction = self._pose_correction()
-        if correction is not None:
-            moved = max(0.0, moved - correction)
-        return moved
+        return abs(signed)
 
     def _moving_enough_to_acquire(self, obstacle, track_length=None):
         """Has this track actually been rolling, for long enough to believe?
@@ -612,13 +538,10 @@ class OpponentSelector:
                      f"{tracks} track(s), needs "
                      f"{int(self._param('opponent_acquire_common_min_tracks'))}"
                      if common is None else f"{common:+.3f} m over {tracks} tracks")
-            correction = self._pose_correction()
-            pose = ("no ego odometry" if correction is None
-                    else f"{correction:.3f} m")
             self._log(
                 f"acquired dynamic opponent tracker {self.active_id}: moved "
                 f"{moved:.3f} m over {span:.2f} s "
-                f"(raw {raw:+.3f}, scene drift: {drift}, pose correction: {pose}; "
+                f"(raw {raw:+.3f}, scene drift removed: {drift}; "
                 f"threshold {float(self._param('opponent_acquire_displacement_m')):.3f}), "
                 f"now {circular_forward_delta(selected.s_center, ego_s, track_length):.2f} m "
                 f"ahead at d={float(selected.d_center):+.2f}, "
