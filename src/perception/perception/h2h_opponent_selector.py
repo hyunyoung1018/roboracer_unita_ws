@@ -460,7 +460,23 @@ class OpponentSelector:
             visible,
             key=lambda obs: initial_candidate_key(obs, ego_s, track_length))
         self.active_id = int(selected.id)
-        self._log(f"acquired dynamic opponent tracker {self.active_id}")
+        # WHAT it measured, not just that it acquired. A box that trips this is
+        # the failure to diagnose, and "how far did it think that thing went"
+        # is the one number that separates the candidates - approach drift,
+        # a corner-switch step, or a track that inherited another one's
+        # history. Reported against the threshold so the margin is visible.
+        moved = self._acquire_displacement(selected.id, track_length)
+        samples = self.motion_history.get(int(selected.id), [])
+        span = (samples[-1][0] - samples[0][0]) if len(samples) > 1 else 0.0
+        self._log(
+            f"acquired dynamic opponent tracker {self.active_id}: moved "
+            f"{moved:.3f} m over {span:.2f} s "
+            f"(threshold {float(self._param('opponent_acquire_displacement_m')):.3f}), "
+            f"now {circular_forward_delta(selected.s_center, ego_s, track_length):.2f} m "
+            f"ahead at d={float(selected.d_center):+.2f}, "
+            f"vs={float(selected.vs):+.2f}"
+            if moved is not None else
+            f"acquired dynamic opponent tracker {self.active_id}")
         return selected
 
     # ------------------------------------------------------------- speed
