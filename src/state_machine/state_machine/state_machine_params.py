@@ -68,6 +68,13 @@ class StateMachineParams:
 
         self._declare("timetrials_only", False)
         self.timetrials_only: bool = node.get_parameter("timetrials_only").value
+        # [path] Overtaking sectors, when they should NOT come from the map.
+        # Empty keeps <map_dir>/ot_sectors.yaml, which is every existing
+        # configuration. time_trials points this at a neutral file so that
+        # head-to-head's ot_flag / preferred_side / yeet_factor in a map cannot
+        # reach a mode with no lane-change planner to use them.
+        self._declare("ot_sectors_file", "")
+        self.ot_sectors_file: str = node.get_parameter("ot_sectors_file").value
 
         self._declare("sim", True)
         self.sim: bool = node.get_parameter("sim").value

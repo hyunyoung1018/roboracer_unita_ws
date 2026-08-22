@@ -562,7 +562,11 @@ class StateMachine(Node):
             self.sectors_params = block.get("ros__parameters", {}) or {}
         else:
             self.get_logger().warn(f"[{self.name}] {sp} not found; no FTG-only zones")
-        op = os.path.join(maps_dir, "ot_sectors.yaml")
+        # The map's overtaking sectors unless something asked for another
+        # file. See state_machine_params.ot_sectors_file - the split exists so
+        # ot_flag / preferred_side / yeet_factor stay head-to-head's.
+        op = getattr(self.params, "ot_sectors_file", "") or os.path.join(
+            maps_dir, "ot_sectors.yaml")
         if os.path.exists(op):
             with open(op, "r") as f:
                 d = yaml.safe_load(f) or {}

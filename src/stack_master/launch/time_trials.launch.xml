@@ -28,12 +28,20 @@
 
   THE REMAP IS THE POINT. spline_node publishes /planner/avoidance/otwpnts, the
   overtaking topic, and the state machine only reaches that through
-  _check_ot_sector - which needs overtaking sectors in the map's
-  ot_sectors.yaml, and a map that has none can never leave TRAILING. It would
-  slow down behind an obstacle and sit there. The static path
-  (_check_static_overtaking_mode) asks for no sector, only that the car is
-  under 3 m/s and closing, and it reads /planner/avoidance/static_otwpnts. In
-  time trials every obstacle is static, so that is what these waypoints are.
+  _check_ot_sector - which needs overtaking sectors, and a run that has none
+  can never leave TRAILING. It would slow down behind an obstacle and sit
+  there. The static path (_check_static_overtaking_mode) asks for no sector,
+  only that the car is under 3 m/s and closing, and it reads
+  /planner/avoidance/static_otwpnts. In time trials every obstacle is static,
+  so that is what these waypoints are.
+
+  WHICH IS WHY THIS MODE CAN HAVE NO SECTORS AT ALL. ot_sectors_time_trials.yaml
+  ships n_sectors 0 and is loaded instead of the map's file, in both places that
+  read one - the ot_interpolator node and the state machine, which opens the
+  yaml off disk itself. Overtaking sectors are head-to-head's: this mode never
+  launches change_avoidance_node, so /planner/avoidance/otwpnts has no publisher
+  here and _check_ot_sector guards a route that does not exist. Avoidance runs
+  entirely through the static path above and is untouched.
 
   Two things to expect when watching it work. The state reads OVERTAKE either
   way - static and dynamic avoidance enter the same state and differ only in
@@ -199,8 +207,12 @@
     <param from="$(var map_dir)/speed_scaling.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
+  <!-- NOT the map's ot_sectors.yaml. Overtaking sectors are head-to-head's:
+       this mode never launches change_avoidance_node, so the lane change they
+       permit has no planner behind it. Static avoidance is unaffected -
+       _check_static_overtaking_mode does not consult the sectors at all. -->
   <node pkg="sector_tuner" exec="ot_interpolator" name="ot_interpolator" output="screen">
-    <param from="$(var map_dir)/ot_sectors.yaml"/>
+    <param from="$(var config_dir)/ot_sectors_time_trials.yaml"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 
@@ -212,6 +224,10 @@
          launch belongs to stack_master, and the dependency would be a cycle. -->
     <param name="config_dir" value="$(var config_dir)"/>
     <param name="map_dir" value="$(var map_dir)"/>
+    <!-- Same split as the ot_interpolator above: the state machine reads the
+         sector yaml off disk itself, so pointing only the node at the neutral
+         file would leave this one on the map's. -->
+    <param name="ot_sectors_file" value="$(var config_dir)/ot_sectors_time_trials.yaml"/>
     <param name="timetrials_only" value="$(var timetrials_only)"/>
     <param name="sim" value="$(var use_sim_time)"/>
     <param name="map" value="$(var map)"/>
