@@ -215,7 +215,8 @@ tracking:
     #
     #   0.250  four boxes acquired at 0.256, 0.275, 0.279, 0.315
     #   0.400  a box acquired at 0.411
-    #   0.750  <- here, and it acquires fine
+    #   0.750  acquires fine
+    #   0.850  <- here, chosen as a SPEED: 1.0 m/s exactly
     #
     # 0.75 is 2.3x the worst drift ever logged with the car and the boxes both
     # stopped (0.32 m in one second), which is the first time this has had real
@@ -233,8 +234,13 @@ tracking:
     # WHAT IT COSTS. The estimator takes the median of the outer fifth at each
     # end, so a steady speed over the window reads 0.85 of its true extent -
     # the minimum acquirable speed is threshold / (0.85 * window), not
-    # threshold / window as an earlier note here said. At 0.75 over 1.0 s that
-    # is 0.88 m/s, against an opponent that runs 2.5.
+    # threshold / window as an earlier note here said. Which is why the value
+    # is 0.85 rather than a round 1.0: the number that matters is the speed,
+    # and 0.85 / (0.85 * 1.0 s) is 1.00 m/s on the nose. Change the window and
+    # this has to move with it to keep meaning the same thing.
+    #
+    # 1.0 m/s against an opponent that runs 2.5, and against a drifting box
+    # that has never been logged past 0.32 m in a window.
     #
     # AND A MISS IS CHEAP. An opponent under that floor stays a plain obstacle:
     # the spline plans a static avoidance around it and the controller trails
@@ -290,7 +296,7 @@ tracking:
     # 0.75 stopped acquiring. Set to 3 to bring the scene median back.
     opponent_acquire_common_min_tracks: 0
     opponent_acquire_window_sec: 1.0
-    opponent_acquire_displacement_m: 0.75
+    opponent_acquire_displacement_m: 0.85
     dynamic_speed_valid_max_mps: 6.0
 
     # /tracking/classification_debug, built only while something subscribes.
