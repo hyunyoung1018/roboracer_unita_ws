@@ -285,18 +285,17 @@ void AckermannToVesc::ackermannCmdCallback(const AckermannDriveStamped::SharedPt
   // a mode change at the motor controller, and a high rate here is the
   // surging that a driver feels rather than anything the per-transition lines
   // showed. Silent when the brake never engaged in the interval.
-  const rclcpp::Time now_stamp = now();
   if (brake_report_at_.nanoseconds() == 0) {
-    brake_report_at_ = now_stamp;
-  } else if ((now_stamp - brake_report_at_).seconds() >= 5.0) {
-    const double interval = (now_stamp - brake_report_at_).seconds();
+    brake_report_at_ = now;
+  } else if ((now - brake_report_at_).seconds() >= 5.0) {
+    const double interval = (now - brake_report_at_).seconds();
     if (brake_cycles_ > 0) {
       RCLCPP_INFO(
         get_logger(), "current braking: %u engagements in %.1f s (%.1f/s)",
         brake_cycles_, interval, brake_cycles_ / interval);
     }
     brake_cycles_ = 0;
-    brake_report_at_ = now_stamp;
+    brake_report_at_ = now;
   }
 
   // Steering remains live while longitudinal control is in either mode.
