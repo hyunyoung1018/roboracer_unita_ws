@@ -523,15 +523,29 @@ class OpponentSelector:
         moved = self._acquire_displacement(selected.id, track_length)
         samples = self.motion_history.get(int(selected.id), [])
         span = (samples[-1][0] - samples[0][0]) if len(samples) > 1 else 0.0
-        self._log(
-            f"acquired dynamic opponent tracker {self.active_id}: moved "
-            f"{moved:.3f} m over {span:.2f} s "
-            f"(threshold {float(self._param('opponent_acquire_displacement_m')):.3f}), "
-            f"now {circular_forward_delta(selected.s_center, ego_s, track_length):.2f} m "
-            f"ahead at d={float(selected.d_center):+.2f}, "
-            f"vs={float(selected.vs):+.2f}"
-            if moved is not None else
-            f"acquired dynamic opponent tracker {self.active_id}")
+        # Whether the common-mode correction fired, and what it removed. Two
+        # runs have now been settled by putting the measurement in the log
+        # rather than reasoning about it, and the quorum is the next thing that
+        # can silently not apply: the scene is often one or two tracks, and
+        # opponent_acquire_common_min_tracks needs three.
+        raw = self._signed_displacement(selected.id, track_length)
+        common = self._common_drift(track_length, exclude_id=selected.id)
+        tracks = len(self.motion_history)
+        if moved is None:
+            self._log(f"acquired dynamic opponent tracker {self.active_id}")
+        else:
+            drift = ("none - only "
+                     f"{tracks} track(s), needs "
+                     f"{int(self._param('opponent_acquire_common_min_tracks'))}"
+                     if common is None else f"{common:+.3f} m over {tracks} tracks")
+            self._log(
+                f"acquired dynamic opponent tracker {self.active_id}: moved "
+                f"{moved:.3f} m over {span:.2f} s "
+                f"(raw {raw:+.3f}, scene drift removed: {drift}; "
+                f"threshold {float(self._param('opponent_acquire_displacement_m')):.3f}), "
+                f"now {circular_forward_delta(selected.s_center, ego_s, track_length):.2f} m "
+                f"ahead at d={float(selected.d_center):+.2f}, "
+                f"vs={float(selected.vs):+.2f}")
         return selected
 
     # ------------------------------------------------------------- speed
