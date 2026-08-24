@@ -124,7 +124,7 @@
     # before the VESC's overvoltage cutoff drops the brake mid-stop. Set
     # Battery Current Max Regen explicitly in VESC Tool rather than leaving it
     # at whatever the profile shipped with.
-    brake_current_max: 10.0
+    brake_current_max: 20.0
     # At the old 10 A cap start/gain below never mattered: 8 + 15 * err reached
     # 10 A at 0.13 m/s of error, under the 0.15 engage threshold, so every stop
     # was a flat 10 A. With the cap at 30 A the curve is live again and

@@ -62,7 +62,7 @@ state_machine:
     # It is still a gate: it exists so the car does not swerve at a speed the
     # swerve cannot be driven at, and if that ever becomes the failure this
     # is where to bring it back down.
-    static_overtake_max_speed_mps: 6.0
+    static_overtake_max_speed_mps: 10.0
     # [m] How much better than the raceline an avoidance path has to be before
     # it is driven despite failing the free check.
     #
