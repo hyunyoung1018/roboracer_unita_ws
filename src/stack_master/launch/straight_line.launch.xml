@@ -1,0 +1,117 @@
+<?xml version="1.0"?>
+<!--
+  DRIVE STRAIGHT. NO MAP.
+
+      ros2 launch stack_master straight_line.launch.xml
+
+  The racing stack minus the racing: hardware, one node publishing a constant
+  speed and steering angle, and the mux. No map argument, no localisation, no
+  particle filter, no perception, no planner, no state machine. Nothing here
+  needs to know where the car is.
+
+  WHAT IT IS FOR. The calibrations that have to happen before a map is worth
+  making, and that are hard to read off a lap:
+
+    - speed_to_erpm_gain. Mark a straight, drive it, compare /vesc/odom's
+      travelled x against a tape measure. See config/car/vesc.yaml, which
+      still carries this as the first TODO.
+    - steering_angle_to_servo_offset. If straight_line is not straight, this
+      is the number.
+    - steering_angle_to_servo_gain. Set steering_rad and measure the circle:
+      tan(delta) = wheelbase / R.
+    - the joystick contract itself, on a car that has never been driven.
+
+  THE JOYSTICK IS THE BRAKE, exactly as in time_trials - the same simple_mux
+  with the same parameters, so what is learned here transfers:
+
+      B  (1)  stop   - drops to neither mode, from any mode
+      LB (4)  human  - your stick drives the car
+      RB (5)  auto   - straight_line drives the car
+
+  Release both and the mux publishes zero from the next tick. It hands control
+  back rather than letting the last command stand, and a source that goes stale
+  is dropped the same way. straight_line publishes unconditionally from the
+  moment it starts; nothing reaches the VESC until RB is held.
+
+  joy_teleop is NOT started - the mux reads /joy itself, and running both would
+  put two publishers on the same output. The joystick DRIVER is started, and
+  without it nothing publishes /joy, the mux never sees a button, and the car
+  cannot be moved at all.
+
+  THE LIDAR IS OFF by default. Nothing here reads /scan, and the driver waits
+  on a network check that fails without the sensor plugged in. lidar:=true if
+  you want it for a recording.
+
+  Speed is ramped from zero at accel_mps2 rather than commanded outright, so a
+  gain measurement does not start with the wheels slipping. Both are live:
+
+      ros2 param set /straight_line speed_mps 1.5
+      ros2 param set /straight_line steering_rad 0.1
+-->
+<launch>
+  <arg name="speed" default="1.0"
+       description="[m/s] Target speed once RB is held"/>
+  <arg name="accel" default="1.0"
+       description="[m/s^2] How fast the command ramps to speed"/>
+  <arg name="steering" default="0.0"
+       description="[rad] Constant steering angle. Nonzero drives a circle."/>
+  <arg name="joy_max_speed" default="2.0"
+       description="[m/s] Ceiling on the HUMAN side of the mux (LB)"/>
+  <arg name="lidar" default="false"
+       description="Start the Hokuyo driver. Nothing here reads /scan."/>
+  <arg name="braking" default="false"
+       description="Pass through to the VESC bridge's current braking"/>
+  <arg name="use_sim_time" default="false"/>
+
+  <!-- ===== hardware ===== -->
+  <!-- localization.launch.xml is deliberately NOT included: it requires a map,
+       and this mode has none. hardware.launch.xml is the layer below it. -->
+  <include file="$(find-pkg-share stack_master)/launch/hardware.launch.xml">
+    <arg name="lidar" value="$(var lidar)"/>
+    <arg name="vesc" value="true"/>
+    <arg name="joy" value="true"/>
+    <!-- simple_mux reads /joy itself; joy_teleop would be a second publisher
+         on the drive topic. The joy DRIVER stays on above. -->
+    <arg name="teleop" value="false"/>
+    <!-- odom->base_link from wheel odometry. There is no map->odom here, so
+         this is the whole TF tree - which is what makes /vesc/odom readable in
+         RViz while measuring speed_to_erpm_gain. -->
+    <arg name="odom_tf" value="true"/>
+    <arg name="braking" value="$(var braking)"/>
+  </include>
+
+  <!-- ===== the only thing driving ===== -->
+  <node pkg="stack_master" exec="straight_line_node.py" name="straight_line"
+        output="screen">
+    <param name="out_topic" value="/vesc/high_level/ackermann_cmd"/>
+    <param name="speed_mps" value="$(var speed)"/>
+    <param name="accel_mps2" value="$(var accel)"/>
+    <param name="steering_rad" value="$(var steering)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- ===== command arbitration ===== -->
+  <!-- The only thing that reaches the VESC, and the same node and numbers
+       time_trials uses. Holding LB gives the stick control, RB gives it to
+       straight_line, B or neither means no command at all. -->
+  <node pkg="stack_master" exec="simple_mux_node.py" name="simple_mux"
+        output="screen">
+    <param name="in_topic"  value="/vesc/high_level/ackermann_cmd"/>
+    <param name="out_topic" value="/vesc/ackermann_cmd"/>
+    <param name="joy_max_speed" value="$(var joy_max_speed)"/>
+    <!-- [rad] the car's measured steering limit. The mux default is 0.4,
+         which asks for more than the car has. -->
+    <param name="joy_max_steer" value="0.2954"/>
+    <!-- The mux carries its own copy of the servo calibration for its steering
+         clip. Point it at the real numbers so the two cannot drift apart;
+         config/car/vesc.yaml is where they are kept. -->
+    <param name="steering_angle_to_servo_gain"   value="-1.1"/>
+    <param name="steering_angle_to_servo_offset" value="0.445"/>
+    <param name="servo_min" value="0.12"/>
+    <param name="servo_max" value="0.77"/>
+    <!-- The lidar-based stop needs /scan, which this mode does not start. -->
+    <param name="use_estop" value="false"/>
+    <param name="sim" value="$(var use_sim_time)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>
