@@ -183,6 +183,7 @@ class OpponentPredictor(Node):
             # Kept equal to the state machine's overtake_min_speed_advantage_mps
             # on purpose. This node vetoes through force_trailing, so a stricter
             # bar here would silently become the binding one.
+            #'fallback_min_speed_advantage_mps': 0.5,
             'fallback_min_speed_advantage_mps': 1.0,
         }
         for name, value in defaults.items():

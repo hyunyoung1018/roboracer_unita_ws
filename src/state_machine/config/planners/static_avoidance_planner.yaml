@@ -20,7 +20,7 @@ max_horizon: 10.0
 #
 # The requirement is scaled by distance (free_scaling_reference_distance_m),
 # so it is strictest far out and relaxes on approach.
-lateral_width_m: 0.05
+lateral_width_m: 0.14
 free_scaling_reference_distance_m: 2.0
 # [s] How old the planner's path may be. It replans at 20 Hz, so 0.1 was two
 # cycles of slack and the jetson lost that regularly - "path is 0.171 s old"

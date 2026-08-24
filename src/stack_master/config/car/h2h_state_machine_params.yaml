@@ -100,6 +100,7 @@ state_machine:
     # first; this is an additional condition, not a replacement. That one
     # catches "already losing ground", which this one cannot see - the
     # raceline does not know the car is crawling round a box.
+    #overtake_min_speed_advantage_mps: 0.7
     overtake_min_speed_advantage_mps: 1.0
 
     # --- dynamic avoidance planner (lane_change) -----------------------------

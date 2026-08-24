@@ -2,7 +2,7 @@ free_scaling_reference_distance_m: 2.0
 hyst_timer_sec: 6.0
 is_closed: false
 killing_timer_sec: 10.0
-lateral_width_m: 0.16
+lateral_width_m: 0.2
 latest_threshold: 0.25
 max_horizon: 10.0
 min_horizon: 0.0
