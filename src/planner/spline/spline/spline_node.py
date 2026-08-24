@@ -113,6 +113,17 @@ class SplineNode(Node):
             'approach_floor_m': 1.2,
             'min_path_clearance_m': 0.20,
             'measure': False,
+            # [loops] Profile _plan() for this many iterations, then log the
+            # hottest functions once and switch off. 0 is off, and off costs
+            # nothing - cProfile is only ever installed while this is counting.
+            #
+            # The question it exists to answer: 20 Hz is where obstacle
+            # reaction wants to be and 10 Hz is where the CPU is comfortable,
+            # so is a C++ port worth its risk, or is the cost in a handful of
+            # lines? Hand-benchmarking one suspect line (the per-sample argmin
+            # at the boundary check) found a 44x win worth 0.34% of a core -
+            # which is exactly why this guesses nothing and measures instead.
+            'profile_loops': 0,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -159,6 +170,9 @@ class SplineNode(Node):
         self.corridor_point_spacing_m = max(
             0.2, float(self.get_parameter('corridor_point_spacing_m').value))
         self.measure = bool(self.get_parameter('measure').value)
+        self.profile_loops = int(self.get_parameter('profile_loops').value)
+        self._profiler = None
+        self._profiled = 0
 
     def _parameter_cb(self, params):
         attributes = {
@@ -179,6 +193,7 @@ class SplineNode(Node):
             'approach_floor_m': 'approach_floor_m',
             'min_path_clearance_m': 'min_path_clearance_m',
             'measure': 'measure',
+            'profile_loops': 'profile_loops',
         }
         for parameter in params:
             if parameter.name in attributes:
@@ -213,7 +228,10 @@ class SplineNode(Node):
         if self.odom is None or self.global_msg is None or self.scaled_msg is None or self.converter is None:
             return
         started = time.perf_counter()
-        result = self._plan()
+        if self.profile_loops > 0:
+            result = self._plan_profiled()
+        else:
+            result = self._plan()
 
         # Hold the last good path across a dropped frame.
         #
@@ -242,6 +260,39 @@ class SplineNode(Node):
         self.marker_pub.publish(self._markers(result))
         if self.measure:
             self.latency_pub.publish(Float32(data=float(time.perf_counter() - started)))
+
+    def _plan_profiled(self):
+        """_plan() under cProfile, reporting once after profile_loops passes.
+
+        Profiling the whole node from outside catches the ROS machinery and the
+        idle timer as well; this brackets exactly the work that has to fit in a
+        50 ms budget at 20 Hz. Cumulative time, because the interesting answer
+        is which PHASE costs - corridor grouping, the spline fit, the boundary
+        walk - not which leaf function.
+        """
+        import cProfile
+        import io
+        import pstats
+        if self._profiler is None:
+            self._profiler = cProfile.Profile()
+            self.get_logger().warn(
+                f"profiling _plan for {self.profile_loops} loops")
+        self._profiler.enable()
+        try:
+            result = self._plan()
+        finally:
+            self._profiler.disable()
+        self._profiled += 1
+        if self._profiled >= self.profile_loops:
+            buf = io.StringIO()
+            stats = pstats.Stats(self._profiler, stream=buf)
+            stats.sort_stats('cumulative').print_stats(18)
+            self.get_logger().warn(
+                f"_plan profile over {self._profiled} loops:\n{buf.getvalue()}")
+            self.profile_loops = 0
+            self._profiler = None
+            self._profiled = 0
+        return result
 
     def _age(self, msg):
         stamp = msg.header.stamp
@@ -1017,9 +1068,30 @@ class SplineNode(Node):
             psi_path = np.zeros(px.size)
             kappa_path = np.zeros(px.size)
 
+        # The nearest reference waypoint to each sample, in one shot.
+        #
+        # Was np.argmin(np.abs(s_values - s_m)) INSIDE the loop - a full scan of
+        # every waypoint for every sample, 100 x 421 comparisons a pass plus the
+        # per-iteration Python. Benchmarked at 169 us against 3.8 us here, 44x,
+        # for bit-identical indices. The same vectorised form was already used
+        # a few dozen lines above, so this was the odd one out rather than a
+        # deliberate choice.
+        #
+        # Direct arithmetic rather than a vectorised argmin because s_values is
+        # sorted and uniformly spaced - it is the global waypoint array, one
+        # sample every wpnt_dist. Falls back to the argmin if that ever stops
+        # being true, which is cheap insurance for a 3 us line.
+        spacing = float(s_values[1] - s_values[0]) if len(s_values) > 1 else 0.0
+        if spacing > 1e-9 and np.allclose(np.diff(s_values), spacing, atol=1e-6):
+            nearest = np.clip(
+                ((sample_s - s_values[0]) / spacing + 0.5).astype(int),
+                0, len(s_values) - 1)
+        else:
+            nearest = np.argmin(
+                np.abs(s_values[None, :] - sample_s[:, None]), axis=1)
+
         for idx, (s_m, d_m) in enumerate(zip(sample_s, sample_d)):
-            waypoint_idx = int(np.argmin(np.abs(s_values - s_m)))
-            base = reference[waypoint_idx]
+            base = reference[int(nearest[idx])]
             available = base.d_left if d_m >= 0.0 else base.d_right
             if abs(d_m) > max(0.0, available - self.boundary_margin):
                 # Where along the spline it fails matters more than that it
