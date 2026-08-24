@@ -18,7 +18,6 @@ find_package(geometry_msgs REQUIRED)
 # nothing can run it.
 install(PROGRAMS
   scripts/simple_mux_node.py
-  scripts/straight_line_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
