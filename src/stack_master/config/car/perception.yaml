@@ -285,6 +285,21 @@ spline_node:
     retreat_clearance_m: 0.5
     retreat_floor_m: 1.0
 
+    # [-] Stretches the return leg after a static obstacle, and only that leg.
+    # 1.0 is exactly the behaviour that has always been there.
+    #
+    # A steep return raises the path's curvature right where the car is already
+    # committed, and the controller cuts speed for curvature - so snapping back
+    # costs speed on the way out. Stretching the same shape over more track
+    # lowers that curvature. The cost is that a longer path has to clear the
+    # boundary over more of its length and pulls more static obstacles into
+    # _statics_in_span, so too long turns a plannable avoidance into "no room
+    # either side". The approach leg is deliberately not scaled: the room to
+    # pull out matters before the obstacle, not after it.
+    #
+    #   ros2 param set /spline_node retreat_scale 1.4
+    retreat_scale: 1.0
+
     # [m] Hard floor on how close the published path may pass an obstacle,
     # measured from the path's CENTRELINE to the obstacle's edge. Nothing
     # overrides it - not even "the raceline would be worse".

@@ -110,6 +110,28 @@ class SplineNode(Node):
             'corridor_point_spacing_m': 1.0,
             'retreat_clearance_m': 0.5,
             'retreat_floor_m': 1.0,
+            # [-] Stretches the RETURN leg, and only that leg. The control
+            # points are [1.2, 2.0, 3.0] m past the last obstacle, already
+            # scaled by speed; this multiplies them again.
+            #
+            # 1.0 is exactly what the return leg has always been - this exists
+            # to be turned, not because the default moved.
+            #
+            # WHY A LONGER TAIL IS NOT JUST GENTLER. The controller reads the
+            # path's curvature and cuts speed for it, so a steep return raises
+            # curvature at the point where the car is already committed and
+            # then slows it there. Stretching the same shape over more track
+            # lowers that curvature, so the car keeps more speed on the way out
+            # instead of snapping back and braking.
+            #
+            # WHAT IT COSTS. A longer path has to clear the track boundary over
+            # more of its length, and _statics_in_span pulls in any static
+            # obstacle inside the leg - so a long tail can turn a plannable
+            # avoidance into "no room either side". retreat_floor_m still puts
+            # a floor under the shortening that follows, and the approach leg
+            # is deliberately untouched: the room to pull out matters before
+            # the obstacle, not after it.
+            'retreat_scale': 1.0,
             'approach_floor_m': 1.2,
             'min_path_clearance_m': 0.20,
             'measure': False,
@@ -152,6 +174,8 @@ class SplineNode(Node):
             self.get_parameter('retreat_clearance_m').value)
         self.retreat_floor_m = float(
             self.get_parameter('retreat_floor_m').value)
+        self.retreat_scale = float(
+            self.get_parameter('retreat_scale').value)
         self.approach_floor_m = float(
             self.get_parameter('approach_floor_m').value)
         self.min_path_clearance_m = float(
@@ -176,6 +200,7 @@ class SplineNode(Node):
             'corridor_point_spacing_m': 'corridor_point_spacing_m',
             'retreat_clearance_m': 'retreat_clearance_m',
             'retreat_floor_m': 'retreat_floor_m',
+            'retreat_scale': 'retreat_scale',
             'approach_floor_m': 'approach_floor_m',
             'min_path_clearance_m': 'min_path_clearance_m',
             'measure': 'measure',
@@ -435,7 +460,10 @@ class SplineNode(Node):
         speed = max(1.0, abs(self.odom.twist.twist.linear.x))
         scale = np.clip(1.0 + speed / max(1.0, max(w.vx_mps for w in reference)), 1.0, 1.5)
         approach = np.asarray([-4.0, -3.0, -1.5]) * scale
-        retreat = np.asarray([1.2, 2.0, 3.0]) * scale
+        # retreat_scale multiplies only this leg; at its default of 1.0 the
+        # array is unchanged. See the parameter for what a longer tail buys
+        # and what it costs.
+        retreat = np.asarray([1.2, 2.0, 3.0]) * scale * max(0.1, self.retreat_scale)
 
         # Everything the path has to get past, not just the first thing in the
         # way.
