@@ -1,0 +1,139 @@
+controller_manager:
+  ros__parameters:
+    # [m] Must match albomb_core.xacro's wheel_base and vesc.yaml's wheelbase -
+    # the L1 controller inverts the same bicycle model vesc_to_odom integrates,
+    # so a mismatch makes the car steer to a curvature it is not reporting.
+    # The controller's built-in default is 0.321; ours is 0.324. All three places
+    # move together or none do.
+    wheelbase: 0.324
+    # [rad] What the steering can actually reach. Derived from the measured
+    # servo limits in vesc.yaml: (0.445 - 0.12) / 1.1. The code default is 0.53,
+    # for a different car; commanding past our limit is not dangerous, vesc_driver clips
+    # it, but the controller would keep reasoning about an angle the wheels
+    # never took.
+    # Rounded DOWN. The exact limit is (0.445 - 0.12)/1.1 = 0.2954545, and
+    # 0.2955 asks for servo 0.11995 against a servo_min of 0.12 - clipped on
+    # every full-lock command. A limit rounded the wrong way is not a limit.
+    steer_max: 0.2954
+    # [m] Lower clip on the L1 lookahead, and in practice the lookahead itself:
+    # the raceline is slow enough that the unclipped value sits under this for
+    # about three quarters of the lap, so the car drives a near-constant
+    # lookahead. That is what makes it steady, and it is why this has to move
+    # with speed_scaling - leaving it at 0.7 while the scaling went 0.3 -> 0.4
+    # unpinned it and the car started weaving.
+    #
+    # Paired with the scaling in the map's speed_scaling.yaml. Each row keeps
+    # the lookahead pinned for ~75-80% of the lap on test_213:
+    #
+    #   scale 0.3 -> 0.7    scale 0.4 -> 1.0    scale 0.5 -> 1.05
+    #   scale 0.6 -> 1.4    scale 0.7 -> 1.6
+    #
+    # This does not hold indefinitely. The curvature term goes as v^2, so the
+    # lookahead's swing over a lap grows anyway: 0.16 m at scale 0.3, 0.37 m at
+    # 0.5, 0.67 m at 0.7. Past about 0.5, weaving is curvature_factor's to fix,
+    # not this one's.
+    #
+    # This value is now the FALLBACK. A map whose speed_scaling.yaml gives every
+    # sector a t_clip_min drives the floor per sector instead, and then tuning
+    # this in rqt does nothing - tune the sector. Maps without the field (all of
+    # them except map_yes) behave exactly as before and use this number.
+    t_clip_min: 1.2 #0.7->1.0->1.2->1.4
+    t_clip_max: 8.0 #8.0
+    m_l1: 0.67 #0.47 -> 0.67 
+    q_l1: 0.0 # -0.2
+    speed_lookahead: 0.25 # 0.25
+    lat_err_coeff: 1.0
+    acc_scaler_for_steer: 1.0
+    dec_scaler_for_steer: 1.0
+    start_scale_speed: 6.5
+    end_scale_speed: 10.0
+    downscale_factor: 0.5 # day2 0.2(test for speed scaling 0.95)
+    speed_lookahead_for_steer: 0.0
+    # Shared/time-trials baseline. Head-to-head overrides these values in
+    # head_to_head_controller.yaml so static trailing behavior is unchanged.
+    trailing_gap: 2.5 
+    trailing_vel_gain: 0.25
+    trailing_p_gain: 1.35
+    trailing_i_gain: 0.0
+    trailing_d_gain: 1.0
+    blind_trailing_speed: 1.5
+    trailing_accel_limit: 1.5
+    trailing_decel_limit: 3.0
+    trailing_emergency_gap: 0.5
+    trailing_rate_limit_enabled: false
+    opponent_speed_hold_sec: 0.75
+    opponent_speed_valid_min_mps: 0.15
+    # [m/s] Upper bound on a believable opponent speed. Without it one bad
+    # frame is stored as valid and held for opponent_speed_hold_sec, and
+    # trailing accelerates towards an opponent it thinks is doing 269 m/s.
+    # Keep equal to the tracker's dynamic_speed_valid_max_mps - the tracker
+    # caps /tracking/dynamic_obstacles, this caps the trailing_targets path.
+    opponent_speed_valid_max_mps: 6.0
+    behavior_timeout_sec: 0.5
+    curvature_factor: 0.145
+    speed_factor_for_lat_err: 1.0
+    speed_factor_for_curvature: 1.0
+    KP: 0.8
+    KI: 0.0
+    KD: 0.05
+    heading_error_thres: 10.0
+    steer_gain_for_speed: 1.0
+    future_constant: 0.05
+    AEB_thres: 0.5 
+    speed_diff_thres: 0.1
+    start_speed: 10.0
+    start_curvature_factor: 1.5
+    # FTG (FTGONLY state) - disparity-extender; all tunables in metres/degrees,
+    # live-tunable via rqt. Beam/FOV independent (no beam-count params).
+    ftg_debug: true
+    ftg_max_lidar_dist: 4.0      # NaN / no-return beams clipped to this [m]
+    ftg_max_speed: 1.5           # top speed; speed schedule scales off this [m/s]
+    ftg_track_width: 2.0         # returns closer than half this are ignored [m]
+    ftg_front_fov_deg: 80.0      # TOTAL front field of view considered [deg] (+-45)
+    ftg_smooth_deg: 1.0          # scan smoothing window width [deg]
+    ftg_disp_thresh: 0.5         # range jump that counts as a discontinuity [m]
+    ftg_bubble_m: 0.3            # safety bubble blown at each disparity [m]
+    ftg_steer_ema: 0.0           # steering low-pass 0..1 (0=off, higher=smoother)
+    ftg_max_steer: 0.4           # steering command clip [rad]
+    # [m] What has to fit through a gap before it is worth steering at. The
+    # search used to compare gaps by their width in BEAMS, which is biased
+    # towards the nearest gap - a 20 deg run is 0.17 m at 0.5 m and 0.69 m at
+    # 2 m. The car is 0.28 m wide; 0.34 leaves 3 cm a side.
+    ftg_min_gap_m: 0.34
+    # Share of the front FOV one disparity's bubble may consume. ftg_bubble_m
+    # is metres, so its ANGLE grows as the obstacle nears - 31 deg at 0.5 m,
+    # 37 at 0.4 - and it is blown into the opening beside it. Uncapped, an
+    # obstacle at 0.4 m spends 92% of an 80 deg view on its own two edges.
+    ftg_bubble_max_frac: 0.25
+
+    # --- FTG's map check --------------------------------------------------
+    # OFF, so nothing below changes how the car behaves until it is switched
+    # on at launch. It cannot be switched on live: the grid is only built at
+    # startup when this is already true.
+    #
+    # What it buys: the gap search reads a wall and a cone as the same thing,
+    # because to a lidar they are. So it can be steered off the course by a
+    # gap in the barriers as readily as around an obstacle. The map knows the
+    # difference - what is in it is track. With this on, staying on the map is
+    # a hard constraint and everything else is a preference, which is the
+    # right way round here: brushing an obstacle costs nothing, leaving the
+    # course costs the run.
+    ftg_use_map: true
+    # [px] Erosion of the map FTG steers by, at 0.05 m/cell. 3 -> 0.05 m.
+    # Deliberately under lane_change_planner's 7: that one keeps a planned
+    # path off the boundary, this one only has to stop an escape leaving the
+    # track, and this course is 0.92 m across at its narrowest.
+    ftg_map_erosion: 3
+    ftg_heading_step_deg: 2.0    # candidate spacing across the front FOV
+    ftg_map_probe_m: 1.5         # how far each candidate is followed [m]
+    ftg_map_probe_step_m: 0.15   # sample spacing along it [m]
+    # [m] A beam shorter than this refuses its heading whatever the map says.
+    # The map is where the car believes the track is; the scan is what is
+    # actually there. This is what a wrong pose runs into instead of through.
+    ftg_min_lidar_clearance_m: 0.35
+    # [1/rad] Penalty for pointing away from straight ahead, against a score
+    # in metres. 0 takes the roomiest heading wherever it points.
+    ftg_forward_bias: 0.35
+    # [m] base_link -> laser, from albomb_sensors.xacro's laser_joint.
+    ftg_laser_offset_x: 0.259
+    save_params: false

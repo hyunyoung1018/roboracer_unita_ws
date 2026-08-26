@@ -1,0 +1,88 @@
+<?xml version="1.0"?>
+<!--
+  base_system.launch.xml - everything a run needs below the driving logic.
+
+  The one place the sim/car split lives. Bring this up, then add a driving mode
+  on top of it (time_trials / head_to_head, neither written yet).
+
+      ros2 launch stack_master base_system.launch.xml sim:=true map:=26_track_22x8
+      ros2 launch stack_master base_system.launch.xml map:=26_track_22x8
+
+  The switch is a boolean `sim`, not `mode:=sim|car`, because ROS 2 launch XML
+  has no string comparison - there is no $(eval), and `if=` wants something that
+  is already true/false. `mode` survives as a derived value for config paths,
+  which is all raceline_generator.launch.xml ever uses it for.
+
+  What differs between the two, and nothing else does:
+
+    sim   the gym bridge provides /scan, /ego_racecar/odom, and publishes
+          map -> ego_racecar/base_link TF directly. No odom frame exists.
+    car   hardware.launch.xml provides /scan and /vesc/*; localisation owns
+          map -> odom -> ego_racecar/base_link.
+
+  That TF difference is the only real sim/real divergence in the stack. It is
+  deliberately confined to this file so every node above it sees the same
+  `map` and `ego_racecar/base_link` either way.
+
+  Localisation on the car is NOT started here yet - the particle filter is
+  ported but unwired. Until it is, `mode:=car` gives you the drivers plus the
+  raceline; there is no map -> odom.
+-->
+<launch>
+  <arg name="sim" default="false" description="true for the simulator, false for the car"/>
+  <arg name="map" description="Map name (folder under stack_master/maps/)"/>
+  <arg name="raceline" default="true"
+       description="Publish the saved raceline from the map folder"/>
+  <arg name="sectors" default="true"
+       description="Publish the speed / overtaking sector parameters"/>
+
+  <let name="maps_dir" value="$(find-pkg-share stack_master)/maps"/>
+  <let name="map_dir"  value="$(var maps_dir)/$(var map)"/>
+
+  <!-- The gym publishes /clock when sim.yaml sets use_sim_time. lap_analyser
+       times laps off get_clock(), so anything started here has to agree with
+       the bridge or lap times are measured against wall time. -->
+  <let name="use_sim_time" value="$(var sim)"/>
+
+  <!-- ===== simulator ===== -->
+  <group if="$(var sim)">
+    <include file="$(find-pkg-share f1tenth_gym_ros)/launch/unita_gym_bridge_launch.py"/>
+  </group>
+
+  <!-- ===== real car ===== -->
+  <group unless="$(var sim)">
+    <include file="$(find-pkg-share stack_master)/launch/hardware.launch.xml"/>
+  </group>
+
+  <!-- ===== the saved raceline ===== -->
+  <!-- Reads global_waypoints.json and republishes it latched, so a node that
+       starts later still gets the waypoints instead of waiting for a tick. -->
+  <group if="$(var raceline)">
+    <node pkg="raceline" exec="raceline_publisher" name="raceline_publisher" output="screen">
+      <param name="map_dir" value="$(var map_dir)"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+  </group>
+
+  <!-- ===== sector parameters ===== -->
+  <!-- These two only serve the yaml the slicers wrote; they are the runtime
+       half of sector_tuner, not the GUI half. Both read their parameters from
+       the map folder, so a map that has never been through
+       raceline_generator.launch.xml has nothing for them to load - hence the
+       switch. -->
+  <group if="$(var sectors)">
+    <node pkg="sector_tuner" exec="sector_tuner" name="sector_tuner" output="screen">
+      <param from="$(var map_dir)/speed_scaling.yaml"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+    <node pkg="sector_tuner" exec="ot_interpolator" name="ot_interpolator" output="screen">
+      <param from="$(var map_dir)/ot_sectors.yaml"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+  </group>
+
+  <!-- ===== lap timing ===== -->
+  <node pkg="lap_analyser" exec="lap_analyser" name="lap_analyser" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>

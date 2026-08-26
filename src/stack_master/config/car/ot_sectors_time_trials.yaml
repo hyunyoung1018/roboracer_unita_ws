@@ -1,0 +1,24 @@
+# Overtaking sectors for TIME TRIALS: none, deliberately.
+#
+# time_trials does not launch change_avoidance_node, so /planner/avoidance/
+# otwpnts has no publisher and _check_overtaking_mode's _check_latest_wpnts
+# can never pass. The lane change it would permit does not exist in this mode.
+# The map files say otherwise - map_positive, map_yes and map_la ship ot_flag
+# true - and that is head-to-head's setting reaching a mode that cannot use it.
+#
+# WHAT THIS DOES NOT TOUCH. Static avoidance, which is the one that matters
+# here: _check_static_overtaking_mode does not consult _check_ot_sector at all,
+# so going round a box works exactly as before. Nor speed_scaling.yaml, which
+# time_trials still reads from the map - only the overtaking sectors are split.
+#
+# n_sectors 0 rather than one disabled sector: get_interpolating_schedule loops
+# over range(n_sectors), so zero leaves the schedule all zeros and the
+# overtaking line is published as the scaled raceline. real_213 already ships
+# this value, so it is a configuration the node is known to accept.
+ot_interpolator:
+  ros__parameters:
+    n_sectors: 0
+    # Read but never applied: the multiply is gated on schedule[i] > 0, which
+    # needs a sector. 1.0 anyway, so a stray read cannot lift anything.
+    yeet_factor: 1.0
+    spline_len: 30

@@ -1,0 +1,135 @@
+<?xml version="1.0"?>
+<!--
+  localization.launch.xml - know where the car is on a saved map.
+
+  Everything above this needs it: the controller follows a raceline in map
+  coordinates, so without map -> ego_racecar/base_link nothing downstream runs.
+
+      ros2 launch stack_master localization.launch.xml map:=<name>
+
+  What comes up:
+
+      map_server        serves maps/<map>/<map>.yaml
+      particle_filter   /scan against that map      -> /pf/pose/odom
+      ekf_localization  that + /vesc/odom           -> /car_state/odom + TF
+      frenet_odom_republisher                       -> /car_state/odom_frenet
+      raceline_publisher                            -> /global_waypoints
+
+  The two-source EKF is the part
+  worth understanding: the particle filter contributes position and heading
+  only, the VESC contributes forward speed and yaw rate only, and neither is
+  asked for what it is bad at. See config/car/ekf_pf.yaml.
+
+  TF ownership, REP-105:
+
+      map  -> odom        ekf_localization
+      odom -> base_link   vesc_to_odom (hardware.launch.xml odom_tf:=true)
+      base_link -> laser  the racecar URDF
+
+  The particle filter's own publish_tf stays false - it contributes a pose
+  measurement, not a transform. Cartographer must not be running: it claims
+  map -> base_link outright and the two arrangements cannot coexist.
+
+  PREREQUISITE: particle_filter needs range_libc, a Cython extension built from
+  source rather than a pip package. See README.
+
+  The filter does not know where the car started, so it needs a viewer either
+  way: place the car with RViz's "2D Pose Estimate", or with Foxglove's publish
+  tool on /initialpose. Publishing a PointStamped on /pf_global_initialize
+  instead makes it re-run a full global search.
+
+  Watch /pf/viz/particles after setting the pose. Spread means the filter is
+  still unsure; a tight cloud tracking the car means it has converged.
+-->
+<launch>
+  <arg name="map" description="Map name (folder under stack_master/maps/)"/>
+  <arg name="teleop" default="true"
+       description="joy_teleop. false when a mux owns the drive topic instead.
+                    The joystick DRIVER stays on either way - the mux reads /joy."/>
+  <arg name="hardware" default="true"
+       description="Bring up the drivers. false if they are already running."/>
+  <!-- Relay to hardware.launch.xml. Default false, and it must have one:
+       time_trials includes this file too, so a required argument here would
+       break that launch. -->
+  <arg name="braking" default="false"
+       description="VESC current braking in the ackermann bridge. See vesc.yaml."/>
+  <arg name="frenet" default="true"
+       description="Also publish /car_state/frenet/*. Needs global_waypoints.json."/>
+  <arg name="use_sim_time" default="false"/>
+  <arg name="rviz" default="false"
+       description="Needs a display. On a headless car use foxglove instead."/>
+  <arg name="foxglove" default="false"
+       description="Serve the topics over websocket so a laptop can connect"/>
+  <arg name="foxglove_port" default="8765"/>
+
+  <let name="maps_dir"   value="$(find-pkg-share stack_master)/maps"/>
+  <let name="map_dir"    value="$(var maps_dir)/$(var map)"/>
+  <let name="config_dir" value="$(find-pkg-share stack_master)/config/car"/>
+
+  <!-- ===== drivers ===== -->
+  <group if="$(var hardware)">
+    <include file="$(find-pkg-share stack_master)/launch/hardware.launch.xml">
+      <!-- Closes the TF chain: the EKF publishes map -> odom, this fills in
+           odom -> ego_racecar/base_link between corrections. -->
+      <arg name="odom_tf" value="true"/>
+      <arg name="teleop" value="$(var teleop)"/>
+      <arg name="braking" value="$(var braking)"/>
+    </include>
+  </group>
+
+  <!-- ===== the map to localise against ===== -->
+  <node pkg="nav2_map_server" exec="map_server" name="map_server" output="screen">
+    <param name="yaml_filename" value="$(var map_dir)/$(var map).yaml"/>
+    <param name="topic"    value="map"/>
+    <param name="frame_id" value="map"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager"
+        name="lifecycle_manager_localization" output="screen">
+    <param name="autostart"  value="true"/>
+    <param name="node_names" value="[map_server]"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- ===== particle filter ===== -->
+  <!-- /clicked_point is remapped away on purpose: the filter treats any
+       PointStamped there as "re-run global initialisation", and /clicked_point
+       is a generic RViz topic that anything might publish to. Scattering every
+       particle mid-run because someone clicked in RViz is not a failure mode
+       worth keeping. Publish to /pf_global_initialize to do it deliberately. -->
+  <node pkg="particle_filter" exec="particle_filter" name="particle_filter" output="screen">
+    <param from="$(var config_dir)/pf.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <remap from="/clicked_point" to="/pf_global_initialize"/>
+  </node>
+
+  <!-- ===== the fused state ===== -->
+  <!-- Node name must stay ekf_localization: that is the key ekf_pf.yaml uses. -->
+  <node pkg="robot_localization" exec="ekf_node" name="ekf_localization" output="screen">
+    <param from="$(var config_dir)/ekf_pf.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <remap from="odometry/filtered" to="/car_state/odom"/>
+  </node>
+
+  <!-- ===== Frenet coordinates along the raceline ===== -->
+  <group if="$(var frenet)">
+    <node pkg="raceline" exec="raceline_publisher" name="raceline_publisher" output="screen">
+      <param name="map_dir" value="$(var map_dir)"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+    <node pkg="frenet_odom_republisher" exec="frenet_odom_republisher_node"
+          name="frenet_odom_republisher" output="screen">
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+  </group>
+
+  <!-- ===== viewing ===== -->
+  <node pkg="rviz2" exec="rviz2" name="rviz2" if="$(var rviz)"
+        args="-d $(find-pkg-share stack_master)/config/localization.rviz"/>
+
+  <node pkg="foxglove_bridge" exec="foxglove_bridge" name="foxglove_bridge"
+        output="screen" if="$(var foxglove)">
+    <param name="port" value="$(var foxglove_port)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>

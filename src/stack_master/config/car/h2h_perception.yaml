@@ -1,0 +1,372 @@
+# Perception and planning overrides for the DYNAMIC obstacle - the opponent.
+#
+# Layered on top of perception.yaml, which stays the base and is all
+# time_trials loads. Everything here exists because the opponent is not a box:
+#
+#   the box       0.50 x 0.50, stationary, placed near the middle of the track
+#   the opponent  a 0.12 x 0.12 detection pillar on a car 0.24 x 0.325,
+#                 moving, and racing - so it uses the walls
+#
+# NO `detect:` SECTION, DELIBERATELY. It had one - min_size_n 3, min_size_m
+# 0.10, filter_kernel_size 6 -> 3 - to carry the pillar out to 9 m, and it
+# worked, at the price its own comment predicted: three stray returns became an
+# obstacle and thinner wall erosion left wall fragments standing. On the car
+# that cost more than it bought. With two or more static obstacles the spline
+# corridor picked the phantoms up as members and the avoidance stopped working,
+# where the identical obstacles under time_trials' detector were cleared every
+# time. head_to_head.launch.xml now loads perception.yaml alone on `detect`, so
+# BOTH launches detect identically and there is one detector to tune.
+#
+# What is left here is the same knowledge moved downstream of classification:
+# detect everything as a box, and once the SELECTOR has locked onto one of them
+# as the opponent, believe that one is a car. That is the tracking block below
+# - see h2h_tracking_node._believed_to_be_a_car.
+#
+# The selection, not the classification. DYNAMIC is nearly free on this car
+# (39 of 41 tracks read it for their whole life), so keying the car footprint
+# on the class put it under every box on the course and reported each of them
+# 0.404 m wide against a real 0.15 to 0.20. On a course 1.30 m across that is
+# the difference between a corridor and no corridor.
+
+tracking:
+  ros__parameters:
+    # [m/s] OVERRIDES perception.yaml's 0.15, for head to head only.
+    #
+    # Below this a track is a static-obstacle candidate. It is not the shared
+    # value because the two launches ask different things of is_static: in time
+    # trials it only picks which branch of _check_free_frenet runs and the
+    # planner keeps seeing the obstacle either way, while here it decides
+    # whether a track can become the opponent - and a box that becomes the
+    # opponent is pulled out of /tracking/static_obstacles, folded into the
+    # corridor as a wall, and trailed instead of driven around.
+    #
+    # WHY 0.15 IS TOO LOW HERE, and it is arithmetic rather than taste. The
+    # classification speed is the distance between two medians over the time
+    # between them, and that window GROWS with the track:
+    #
+    #   6 frames  (new)   half=3   0.15 s baseline   1 sigma = 0.20 m/s
+    #   10 frames         half=5   0.25 s            1 sigma = 0.09
+    #   20 frames (full)  half=10  0.50 s            1 sigma = 0.034
+    #
+    # taking 3 cm of per-frame position noise, which is what the L-shape fit
+    # measures. A track younger than about a second therefore carries MORE
+    # noise than the threshold it is judged against, and _reclassify_on_medians
+    # defaults to DYNAMIC until static_min_samples is reached - so a new track
+    # starts dynamic and its first estimates cannot argue it out of that.
+    #
+    # Measured over five runs: 90% of judgements read DYNAMIC, and of 92 tracks
+    # in one run exactly ONE stayed static for its whole life. 72 were never
+    # anything but dynamic, which is the young-track window, not hysteresis.
+    #
+    # WHY 0.3 IS SAFE. The thing this must not swallow is a slowly moving
+    # opponent, and the slowest one worth trailing is about 1 m/s - the same
+    # figure fallback_min_opponent_speed_mps and the acquisition displacement
+    # are sized around. 0.3 sits at 1.5 sigma of a NEW track's noise and at
+    # nine sigma of a mature one's, while leaving 0.7 m/s of clearance to a
+    # 1 m/s car. Raising it to 0.5 halves the young-track false rate again and
+    # still clears that car by 0.5 m/s; going past about 0.7 starts to argue
+    # with the opponent itself.
+    #
+    # Live, and worth sweeping on the car before this value is trusted:
+    #   ros2 param set /tracking static_speed_threshold 0.5
+    static_speed_threshold: 0.15
+
+# A FLOOR on a CONFIRMED-MOVING track, and the reason this file still
+# exists. Static obstacles never reach it.
+#
+# The opponent is detected off a 0.12 m pillar bolted to a car, so the
+# measurement is honest about the pillar and useless about the car. There
+# is one other car on the track and we know its size - believe the car.
+#
+# 0.202 is the circumscribed radius of a 0.24 x 0.325 car:
+# sqrt(0.24^2 + 0.325^2)/2 = 0.2020. A disc, so no yaw estimate is needed
+# and no orientation under-reads - a car at 45 deg to the track tangent
+# presents more in both Frenet axes than it does head-on, and the disc is
+# the worst case of that rotation. It does mean the believed footprint is
+# 0.40 across rather than the car's 0.24, which is the price of not
+# estimating yaw off a 12 cm pillar.
+#
+# WAS 0.29, the circumscribed radius of 0.28 x 0.50 - our own car's
+# dimensions, not the opponent's. That is 0.58 across, and on a 1.0 to
+# 1.9 m track it was eating the gap the overtake needs.
+    dynamic_extent_min_m: 0.202
+
+# Ceiling on what is REMEMBERED, applied as max/2 = 0.21, i.e. the floor plus
+# a centimetre. It bounds how long a bad frame's fit persists in the running
+# maximum; it does not bound the live measurement. This note always said "a
+# frame that genuinely measures wider than the disc should not be clamped
+# below what was seen" and the code did clamp it, so a 0.50 m box that had
+# once been mis-acquired was published at 0.42. Fixed 2026-08-22.
+    dynamic_extent_max_m: 0.42
+
+# A car's Frenet extents change with its yaw against the track tangent, not
+# with how much of it the lidar has seen, so the running maximum has to
+# bleed off within a tick rather than the six seconds a static box gets.
+    dynamic_extent_decay_mps: 0.5
+
+# [s] How long "this track was the opponent" keeps the car floor after the
+# SELECTOR LETS IT GO. The claim has to outlive the selection - a car that
+# stops behind a box is still a car, and releasing the floor the moment it is
+# reclassified STATIC drops the believed width 0.40 -> 0.20 m in two seconds,
+# which every planner downstream turns into clearance the car does not have.
+#
+# But it must not outlive the run. It used to be a permanent flag, so one bad
+# acquisition marked a box as a car until the node restarted. 3.0 s is over
+# half a lap here (lap 2 of the 2026-08-22 run took 5.47 s), long enough to
+# cover a stop-and-go and short enough that a phantom is gone before the car
+# comes round again. The clock only starts once the selector releases the
+# track, so an opponent still being tracked never ages out.
+    opponent_car_size_hold_sec: 3.0
+
+    # ---- opponent selection -------------------------------------------
+    # Everything the deleted stable_obstacle_router carried EXCEPT its second
+    # classifier. Selecting one opponent and holding it was never the part that
+    # failed on the car; re-deriving static/dynamic from the standard deviation
+    # of the Frenet position was, and that has no parameters here any more
+    # (min_std, max_std, *_confirm_count and min_unknown_samples are gone).
+    #
+    # Classification is the tracker's own, from perception.yaml:
+    # static_speed_threshold sustained over static_min_samples frames, which is
+    # the test time_trials drives on.
+
+    single_dynamic_opponent: true
+
+    # The OPPONENT's measured width, not ours. Used only to ask whether its
+    # footprint fits between the track bounds before it can be selected.
+    opponent_width_m: 0.24
+    opponent_boundary_margin_m: 0.03
+
+    # [m] Acquisition window. The 0.2 m forward minimum is what keeps somebody
+    # standing behind the car from becoming the opponent.
+    opponent_forward_min_m: 0.2
+    opponent_forward_max_m: 8.0
+
+    # [m] Rear allowance for the target ALREADY locked onto. Signed, so
+    # negative is behind the car. Acquisition is unchanged; this only decides
+    # when a locked opponent is released. Without it the opponent's forward gap
+    # falls through opponent_forward_min_m mid-overtake, the dynamic stream
+    # empties, opp_prediction raises force_trailing and the lane-change planner
+    # withdraws its path - while the car is alongside and most needs it.
+    # -1.5 m covers our length plus the opponent's.
+    opponent_active_rear_m: -1.5
+
+    # Re-identification across the tracker losing and recreating an ID. The
+    # ambiguity margin is what refuses a handoff when two candidates are
+    # equally plausible; guessing there produced an ID ping-pong on the car.
+    dynamic_reid_timeout_sec: 1.0
+    dynamic_reid_max_distance_m: 1.2
+    dynamic_reid_max_lateral_m: 0.25
+    dynamic_reid_ambiguity_margin_m: 0.20
+
+    # [s] How long a credible opponent speed survives frames that are not.
+    dynamic_speed_hold_sec: 0.75
+    # [m/s] Sanity bounds on that speed. The MAXIMUM is new: with only a lower
+    # bound, one bad frame reporting 8.55 m/s for a stationary box was accepted
+    # and held for the hold time - and the trailing controller commands
+    # opponent speed minus a correction, so the car accelerated towards it.
+    dynamic_speed_valid_min_mps: 0.15
+
+    # [m/s] and [frames] a track must ROLL before it can be ACQUIRED as the
+    # opponent. Acquisition only - a locked opponent that stops behind a box
+    # stays the opponent.
+    #
+    # Being DYNAMIC is what the classifier says; being the opponent is a much
+    # stronger claim, and it should be, because the two mistakes do not cost
+    # the same. Acquiring a real opponent late costs a late trailing arm.
+    # Acquiring a BOX costs two failures at once: the selected opponent is held
+    # back from /tracking/static_obstacles so the spline planner cannot plan
+    # around it, and h2h_spline_node then folds it in as a wall and narrows the
+    # corridor to nothing. On 2026-08-19, with no opponent on the track at all,
+    # that produced eleven acquisitions, "left 1.30 -> 0.00 m, right 0.35 ->
+    # 0.00 m", and no avoidance path for a box sitting on the raceline.
+    #
+    # 0.8 is deliberately well clear of static_speed_threshold. Putting it AT
+    # that threshold would exclude nothing, because a track only reaches
+    # DYNAMIC by exceeding it. Measured on the same run, a stationary box's
+    # apparent speed is over 0.15 m/s 60% of the time but over 0.8 only 20%,
+    # and it does not hold that for ten frames running the way a rolling car
+    # does. The cost is that an opponent crawling under 0.8 m/s is never
+    # acquired - which is the right answer, because a car moving that slowly is
+    # something to drive around, not something to trail.
+    opponent_acquire_speed_mps: 0.5
+    opponent_acquire_frames: 10
+
+    # Acquire on DISPLACEMENT, not on speed.
+    #
+    # The two above could never both work. A stationary box's apparent speed
+    # was measured at 0.5 to 2.9 m/s - 20 Hz differentiation turns a 2.5 cm
+    # wobble into 0.5 m/s - and a real opponent runs at 0 to 4 m/s, so the two
+    # ranges overlap completely and no floor separates them. Raising the floor
+    # to reject boxes also rejected any opponent slower than the floor, and
+    # that band (static_speed_threshold 0.15 up to the floor) was owned by
+    # nothing: the tracker called it DYNAMIC, the selector would not take it,
+    # and the car trailed a crawling opponent forever.
+    #
+    # Displacement has no such trade. Detector noise is zero-mean so it does
+    # not accumulate however long the window; real motion does. Over 1 s a box
+    # stays inside its own jitter (~15 cm measured) while a 0.3 m/s opponent
+    # has gone 30 cm.
+    #
+    # SET THIS FALSE TO REVERT, live, no rebuild:
+    #   ros2 param set /tracking opponent_acquire_use_displacement false
+    opponent_acquire_use_displacement: true
+    # [m] over [s]. MEASURED, not chosen, and raised twice now because the
+    # noise tail keeps clearing the line by a few centimetres:
+    #
+    #   0.250  four boxes acquired at 0.256, 0.275, 0.279, 0.315
+    #   0.400  a box acquired at 0.411
+    #   0.750  acquires fine
+    #   0.850  <- here, chosen as a SPEED: 1.0 m/s exactly
+    #
+    # 0.75 is 2.3x the worst drift ever logged with the car and the boxes both
+    # stopped (0.32 m in one second), which is the first time this has had real
+    # headroom rather than a couple of centimetres of it. It was briefly rolled
+    # back to 0.40 on a report that it had stopped acquiring; that turned out
+    # to be the car-floor latch expiring underneath the opponent, not this
+    # number, and 0.75 went back in once the latch was fixed.
+    #
+    # The separation is not close. A box drifting reads 0.32 m over the window;
+    # an opponent trailed at 2.5 m/s reads 0.85 x 2.5 = 2.1 m, because the
+    # measurement is the opponent's ABSOLUTE displacement in the map frame and
+    # not its speed relative to us. That is a factor of 6.6, and 0.75 sits in
+    # the middle of it.
+    #
+    # WHAT IT COSTS. The estimator takes the median of the outer fifth at each
+    # end, so a steady speed over the window reads 0.85 of its true extent -
+    # the minimum acquirable speed is threshold / (0.85 * window), not
+    # threshold / window as an earlier note here said. Which is why the value
+    # is 0.85 rather than a round 1.0: the number that matters is the speed,
+    # and 0.85 / (0.85 * 1.0 s) is 1.00 m/s on the nose. Change the window and
+    # this has to move with it to keep meaning the same thing.
+    #
+    # 1.0 m/s against an opponent that runs 2.5, and against a drifting box
+    # that has never been logged past 0.32 m in a window.
+    #
+    # AND A MISS IS CHEAP. An opponent under that floor stays a plain obstacle:
+    # the spline plans a static avoidance around it and the controller trails
+    # it, which is what the car would do anyway. A FALSE acquisition is not
+    # cheap - the box gets a prediction that sweeps it across the track, gets
+    # inflated to car size, and becomes the trailing target. That is the FTG
+    # fallback logged on 2026-08-22.
+    #
+    # AND A MISS IS CHEAP, WHICH IS WHY THE TRADE IS ONE-SIDED. An opponent
+    # slower than 0.88 m/s is simply not acquired: it stays a plain obstacle,
+    # the spline plans a static avoidance around it and the controller trails
+    # it, which is what the car would do anyway. A FALSE acquisition is not
+    # cheap - the box gets a prediction that sweeps it across the track, gets
+    # inflated to car size, and becomes the trailing target. Logged 2026-08-22:
+    # a box parked at d=+0.61 that the raceline cleared by 0.26 m was acquired,
+    # its prediction read "worst clearance -0.314 m" on every path, the car
+    # trailed it to a standstill 1.83 m short, and with closing=False and
+    # have_path=False there was no way out - three seconds later, FTG.
+    #
+    # WHERE THE DRIFT COMES FROM. s_center is the nearest fitted corner plus
+    # HALF THE FITTED SIZE, and the fitted size grows as more of the face
+    # becomes visible, so a stationary box's reported centre is pushed away
+    # from the car as the car approaches. It is systematic and it points one
+    # way, which is exactly what the displacement test assumed detector error
+    # would not be.
+    #
+    # SO DO NOT WIDEN THE WINDOW TO FIX IT. An earlier note here said window
+    # and threshold could rise together to buy step rejection; that is true of
+    # a step and false of this. The drift is proportional to how far the CAR
+    # moved, so doubling the window doubles the drift as well as the real
+    # motion and the two never separate. Raising the threshold at a fixed
+    # window is what works - see the cost above.
+    # [tracks] Subtract what the WHOLE SCENE appears to have done before
+    # judging one track. A pose correction moves the point cloud in the map
+    # frame, so every obstacle's s moves with it and none of them went
+    # anywhere. Measured 2026-08-22 with the car stopped and the boxes stopped:
+    # one obstacle's gap wandered 7.74 to 8.06 m and its near edge +0.03 to
+    # +0.25, while its measured WIDTH stayed inside 6 cm - translated, not
+    # grown or turned, by up to 0.19 m in one second. Half the threshold, spent
+    # before anything moves.
+    #
+    # A pose shift is COMMON to every track; a car moves alone. So the median
+    # across tracks estimates the shift. Three is the floor: with one, the
+    # median is that track and everything cancels, and a real opponent would
+    # never be acquired. 0 disables it.
+    #
+    # OFF. Common-mode rejection is rolled back entirely as of 2026-08-22 -
+    # the ego-referenced form went with it. Neither ever demonstrably removed
+    # a false acquisition here: this course puts ONE track in view, so the
+    # quorum of three was never met and the diagnostic said so every time
+    # ("scene drift removed: none - only 1 track(s), needs 3"). What the pair
+    # DID do was subtract from real opponents as well, which is half of why
+    # 0.75 stopped acquiring. Set to 3 to bring the scene median back.
+    opponent_acquire_common_min_tracks: 0
+    opponent_acquire_window_sec: 1.0
+    opponent_acquire_displacement_m: 0.9
+    dynamic_speed_valid_max_mps: 6.0
+
+    # /tracking/classification_debug, built only while something subscribes.
+    # driving_mode_monitor is its reader.
+    classification_debug: true
+
+    # ---- classification input ------------------------------------------
+    # Decide static/dynamic from median-filtered positions instead of one
+    # frame-to-frame difference.
+    #
+    # The shared tracker estimates velocity from a single difference, and the
+    # L-shape fit moves a few centimetres a frame as the viewing angle
+    # changes: at 20 Hz a 3 cm wobble is 0.6 m/s before smoothing, over
+    # static_speed_threshold, and a box reads DYNAMIC. It already has the cure
+    # - the median over static_position_samples - but applies it only AFTER a
+    # track is static, and only to the published centre. So the filtering that
+    # would let a box be classified was gated behind it already having been.
+    #
+    # false restores the shared verdict exactly, which is the A/B:
+    #   ros2 param set /tracking static_classification_median false
+    static_classification_median: true
+
+    # ---- classification hysteresis --------------------------------------
+    # Consecutive frames a track must disagree with its current class before
+    # the class changes, and a dead band above the speed threshold where
+    # nothing argues either way.
+    #
+    # The shared tracker has no hysteresis at all - it re-decides from one
+    # threshold every frame - and the deleted stable_obstacle_router was where
+    # the confirmation counts used to live. In time trials a flip only picks
+    # which branch of _check_free_frenet runs and the planner keeps seeing the
+    # obstacle regardless. Here the class decides which TOPIC the obstacle goes
+    # on, so a flip removes it from the spline planner's input outright: the
+    # path appears and disappears, have_path chatters, and the avoidance
+    # stutters. Same tracker, much sharper consequence.
+    #
+    # Asymmetric, and the opposite way round from the router's 3-static /
+    # 2-dynamic. Calling a box dynamic costs an avoidance - the obstacle leaves
+    # the planner's input and the car trails it instead. Calling a car static
+    # costs a gap. So leaving STATIC is the guarded direction, and entering it
+    # keeps its old cost of one frame: becoming static is already the hard,
+    # rare transition here and delaying it would slow down what is already too
+    # slow. A real opponent clears the band by a wide margin either way.
+    static_confirm_frames: 1
+    dynamic_confirm_frames: 4
+
+    # [m/s] Added to static_speed_threshold to leave DYNAMIC. Under 0.15 argues
+    # static, over 0.25 argues dynamic, and in between nothing changes - which
+    # is where a stationary obstacle's estimate actually sits.
+    static_speed_hysteresis_mps: 0.10
+
+# spline_node: nothing here on purpose.
+#
+# This used to pin evasion_distance and raceline_clearance_m at 0.24
+# against time trials' 0.30, on the reasoning that head to head has no
+# penalty for brushing a static obstacle and the centimetres are track
+# position. Measured on the car, that reasoning cost more than it bought.
+#
+# raceline_clearance_m is "how close before this planner bothers to move"
+# and evasion_distance is "how far to move" - and they are the SAME NUMBER
+# by design, so an obstacle sitting at the threshold produces an offset of
+# zero. At 0.24 the threshold landed exactly where these obstacles measure:
+# near edges wandering -0.21 to -0.31 frame to frame, giving apexes of
+# +0.03, 0.00, -0.07. Three centimetres of avoidance, then a bail on the
+# abs(apex_d) < 0.02 guard, then "nothing to plan for" - all on the same
+# obstacle, cycling several times a second, with the state machine calling
+# the raceline blocked by a centimetre the whole time.
+#
+# Moving to 0.30 does not remove that structure, it moves the window off
+# where this track's obstacles actually sit. The structure itself is the
+# equality of the two numbers, and that is a separate change.
+#
+# boundary_margin comes back to 0.19 with them.

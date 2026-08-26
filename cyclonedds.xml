@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  DDS configuration for the car.
+
+  NOT the answer to the 0.3 s stalls. Those were measured on a run of
+  head_to_head, where htop showed all six cores at 100% and a load average
+  of 10.97 - the gaussian process predictor alone was taking about two and
+  a half of them while the particle filter got 38%. A machine oversubscribed
+  by 180% stalls, and no dds setting changes that. Read that history in the
+  commit that added this file; the reasoning there was wrong.
+
+  What is left, and why this is still worth having: FastDDS is Humble's
+  default and UNIST measured it busy-spinning a whole core against
+  CycloneDDS idling at ~21% on their node set. time_trials brings up 21
+  nodes. That is real overhead on a jetson whose particle filter is already
+  scan-limited, it is simply not what was making the car stall.
+
+  The interface list is the other half. /scan is published RELIABLE -
+  deliberately, because a best-effort publisher starves a reliable
+  subscriber silently - and reliable means the publisher retransmits until
+  the subscriber acknowledges, so a laptop watching over wifi couples its
+  own packet loss back into the car. Naming the interfaces keeps discovery
+  off the link that has nothing on it.
+
+  Interfaces are therefore listed explicitly rather than autodetected:
+
+    127.0.0.1   the whole stack is one host; this is the path that matters
+    wlan0       the laptop. RENAME IT if `ip -br link` says otherwise.
+
+  enP8p1s0 is deliberately absent. That is the lidar's private 192.168.0.x
+  link with nothing on it but the sensor, and discovery traffic there is
+  pure waste.
+
+  Used as:
+    export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+    export CYCLONEDDS_URI="file://$HOME/roboracer_unita_ws/cyclonedds.xml"
+
+  If the freezes persist with the laptop connected, the next step is to stop
+  sending /scan over the air at all - view it through the foxglove bridge,
+  which is one TCP connection that cannot push back into the publisher's DDS
+  the way a reliable DDS subscriber does.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+    <Domain id="any">
+        <General>
+            <Interfaces>
+                <NetworkInterface address="127.0.0.1" multicast="true"/>
+                <NetworkInterface name="wlan0" multicast="true" presence_required="false"/>
+            </Interfaces>
+            <AllowMulticast>true</AllowMulticast>
+        </General>
+        <Discovery>
+            <ParticipantIndex>none</ParticipantIndex>
+        </Discovery>
+        <Internal>
+            <SocketReceiveBufferSize min="default"/>
+            <SocketSendBufferSize min="default"/>
+        </Internal>
+    </Domain>
+</CycloneDDS>

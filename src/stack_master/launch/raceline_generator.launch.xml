@@ -1,0 +1,85 @@
+<?xml version="1.0"?>
+<!--
+  raceline_generator.launch.xml - build the global raceline from an EXISTING map.
+
+  Does not drive the car and does not run SLAM. Run it after a map has been
+  saved to stack_master/maps/<map>/<map>.{png,yaml}.
+
+  It serves the saved map (so RViz has a background and the start line can be
+  clicked), runs the raceline generator, then slices the speed / overtaking
+  sectors. Written into the map folder:
+    centerline.csv, track_meta.yaml, global_waypoints.json,
+    speed_scaling.yaml, ot_sectors.yaml
+
+      ros2 launch stack_master raceline_generator.launch.xml map:=26_track_20x8
+
+  The first run has no start pose on file, so it waits for a "2D Pose Estimate"
+  in RViz - click on the start line, pointing the way the car will drive. That
+  choice is saved to track_meta.yaml and reused automatically afterwards.
+  Set start_pose_timeout:=0 to skip the wait and accept the map origin.
+-->
+<launch>
+  <arg name="map"                       description="Map name (folder in stack_master/maps/)"/>
+  <arg name="mode"    default="car"     description="Vehicle parameter set: 'car' or 'sim'"/>
+  <arg name="reverse" default="false"   description="Drive the track the other way round"/>
+  <!-- false like every other launch, but this is the one place RViz is an
+       INPUT rather than a view: the first run on a new map waits 30 s for a
+       "2D Pose Estimate" to set where the raceline starts. That is saved to
+       track_meta.yaml and reused, so only a NEW MAP needs rviz:=true. -->
+  <arg name="rviz"    default="true"   description="Launch RViz. Needed the
+                                                     first time a map is used -
+                                                     the start pose is clicked
+                                                     in it."/>
+  <arg name="sectors" default="true"
+       description="Also slice the speed / overtaking sectors after planning"/>
+  <arg name="show_plots" default="false"
+       description="Show the optimizer's matplotlib result plots (blocking)"/>
+  <arg name="start_pose_timeout" default="30.0"
+       description="[s] wait for an RViz 2D Pose Estimate; 0 disables the wait"/>
+
+  <let name="maps_dir" value="$(find-pkg-share stack_master)/maps"/>
+  <let name="config_dir" value="$(find-pkg-share stack_master)/config"/>
+
+  <!-- ===== raceline generator ===== -->
+  <!-- emulate_tty line-buffers stdout so the optimizer's plain print()s (IQP
+       iteration counts, lap time estimates) stream live instead of appearing
+       all at once when the process exits. -->
+  <node pkg="raceline" exec="raceline_generator" name="raceline_generator"
+        output="screen" emulate_tty="true">
+    <param from="$(var config_dir)/common/raceline_params.yaml"/>
+    <param name="map_name"           value="$(var map)"/>
+    <param name="map_dir"            value="$(var maps_dir)/$(var map)"/>
+    <param name="vehicle_config_dir" value="$(var config_dir)/$(var mode)"/>
+    <param name="reverse"            value="$(var reverse)"/>
+    <param name="show_plots"         value="$(var show_plots)"/>
+    <param name="start_pose_timeout" value="$(var start_pose_timeout)"/>
+  </node>
+
+  <!-- ===== map source: RViz background + a frame to click the start line in ===== -->
+  <node pkg="nav2_map_server" exec="map_server" name="map_server" output="screen">
+    <param name="yaml_filename" value="$(var maps_dir)/$(var map)/$(var map).yaml"/>
+  </node>
+  <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager"
+        name="lifecycle_manager" output="screen">
+    <param name="autostart"  value="true"/>
+    <param name="node_names" value="[map_server]"/>
+  </node>
+
+  <!-- ===== sector slicing ===== -->
+  <!-- Both subscribe to /global_waypoints (+ /trackbounds/markers, and for the
+       overtaking one /global_waypoints/shortest_path) published by the generator
+       above, then pop a matplotlib GUI to pick the sector boundaries and write
+       speed_scaling.yaml / ot_sectors.yaml into the map folder.
+       Skip them with sectors:=false when you only want to redo the raceline. -->
+  <group if="$(var sectors)">
+    <node pkg="sector_tuner" exec="sector_slicer" name="sector_slicer" output="screen">
+      <param name="save_dir" value="$(var maps_dir)/$(var map)"/>
+    </node>
+    <node pkg="sector_tuner" exec="ot_sector_slicer" name="ot_sector_slicer" output="screen">
+      <param name="save_dir" value="$(var maps_dir)/$(var map)"/>
+    </node>
+  </group>
+
+  <node pkg="rviz2" exec="rviz2" name="rviz2" if="$(var rviz)"
+        args="-d $(find-pkg-share raceline)/rviz/raceline.rviz"/>
+</launch>

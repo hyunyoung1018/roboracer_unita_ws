@@ -1,0 +1,54 @@
+# Hokuyo UST-10LX, over Ethernet.
+#
+# Values from the manual in datasheets/UST-10LX/:
+#   default IP / port   192.168.0.10 / 10940   (manual section 12)
+#   scan angle          270 deg
+#   angular resolution  0.25 deg  -> 1081 points
+#   scan period         25 ms (2400 rpm) -> 40 Hz
+#   guaranteed range    0.06 - 10 m
+#
+# The Jetson needs an interface on the same subnet before this node can connect:
+#
+#   nmcli con add type ethernet ifname <iface> con-name lidar \
+#         ipv4.method manual ipv4.addresses 192.168.0.1/24
+#   nmcli con up lidar
+#   ping -c3 192.168.0.10
+#
+# If the sensor's IP was changed, the Windows "IP Discovery" tool in
+# datasheets/UST-10LX/ can find and reset it. There is also a hardware reset:
+# power the input circuit and tie IP RESET LINE to COM- for over 2 s (manual
+# section 12), which restores 192.168.0.10.
+
+urg_node:
+  ros__parameters:
+    ip_address: "192.168.0.10"
+    ip_port: 10940
+
+    # Must match albomb_description's laser link. Everything downstream - the
+    # sim, cartographer, the particle filter - assumes this one frame name.
+    laser_frame_id: "ego_racecar/laser"
+
+    # Wider than the sensor's own 270 deg, so the driver reports the full sweep
+    # rather than clipping it. It clamps to the hardware limits itself.
+    angle_min: -3.14
+    angle_max: 3.14
+
+    # Every step, every scan.
+    cluster: 1
+    skip: 0
+
+    # The UST-10LX manual documents no intensity output; asking for it makes the
+    # driver request a mode the sensor may reject. Leave off unless verified.
+    publish_intensity: false
+    publish_multiecho: false
+
+    # Time calibration takes several seconds at startup and estimates a fixed
+    # latency. Off: cartographer is fed odom-based timing, and a wrong estimate
+    # is worse than none.
+    calibrate_time: false
+    default_user_latency: 0.0
+
+    error_limit: 4
+    get_detailed_status: false
+    diagnostics_tolerance: 0.05
+    diagnostics_window_time: 5.0

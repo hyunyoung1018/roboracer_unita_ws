@@ -1,0 +1,87 @@
+# robot_localization EKF - currently UNUSED by any launch file.
+#
+# It was the "early fusion" stage feeding cartographer wheel odometry blended
+# with IMU. Mapping now runs on LiDAR + IMU alone (see mapping_2d.lua for why
+# the sensorless VESC odometry was dropped), so nothing consumes this.
+#
+# Kept because racing-time localisation will likely want it: fusing the particle
+# filter's pose with the IMU is the same shape of problem. Re-check the topic
+# names and frames before wiring it up again.
+#
+# Based on ForzaETH race_stack (state_estimation/config/ekf.yaml), with frames
+# adapted to albomb_description (car_name = ego_racecar).
+#
+# Fuses VESC wheel odometry (yaw, vx) + VESC IMU (yaw, vyaw) into a filtered
+# odometry topic. publish_tf is FALSE: this node never touches TF.
+
+ekf_filter_node:
+  ros__parameters:
+    frequency: 50.0
+    sensor_timeout: 1.0
+    two_d_mode: true
+    transform_time_offset: 0.0
+    transform_timeout: 0.0
+    print_diagnostics: true
+    debug: false
+    permit_corrected_publication: false
+    publish_acceleration: false
+
+    # Cartographer owns the TF tree. This filter only produces a topic.
+    publish_tf: false
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: ego_racecar/base_link
+    world_frame: odom
+
+    # --- VESC wheel odometry -------------------------------------------------
+    # Only yaw and vx are taken. Position is not fused: the VESC is sensorless,
+    # so speed comes from the back-EMF flux observer (ERPM) and yaw is
+    # dead-reckoned from the servo command via a bicycle model. Both drift.
+    odom0: /vesc/odom
+    #             x      y      z
+    #             roll   pitch  yaw
+    #             vx     vy     vz
+    #             vroll  vpitch vyaw
+    #             ax     ay     az
+    odom0_config: [false, false, false,
+                   false, false, true,
+                   true,  false, false,
+                   false, false, false,
+                   false, false, false]
+    odom0_queue_size: 2
+    odom0_nodelay: false
+    odom0_differential: false
+    odom0_relative: false
+
+    # --- VESC IMU ------------------------------------------------------------
+    # Units and frame_id are handled in vesc_driver, which is patched locally -
+    # upstream published g / deg per second with an empty frame_id.
+    imu0: /vesc/sensors/imu/raw
+    imu0_config: [false, false, false,
+                  false, false, true,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_queue_size: 5
+    imu0_nodelay: false
+    imu0_relative: true
+    imu0_remove_gravitational_acceleration: true
+
+    use_control: false
+
+    process_noise_covariance: [0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.03, 0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.06, 0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025, 0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.025, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.04, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.02, 0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,   0.0,   0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.015]

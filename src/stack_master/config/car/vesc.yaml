@@ -1,0 +1,188 @@
+# VESC 6 MkVI - motor driver, servo, wheel odometry and IMU.
+#
+# Seeded from ForzaETH race_stack (stack_master/config/NUC2/vesc.yaml). The
+# four calibration gains below are PER CAR and have NOT been measured on this racecar.
+# Driving on them will get the wrong speed and the wrong steering angle.
+#
+# TODO - measure on this racecar before the first real run:
+#   speed_to_erpm_gain            drive a known distance, compare /vesc/odom
+#                                 travel against the tape measure   [DONE]
+#   steering_angle_to_servo_gain  \  centre the wheels to find the offset, then
+#   steering_angle_to_servo_offset/  drive a steady circle and solve
+#                                    tan(delta) = wheelbase / turn_radius
+#   servo_min / servo_max         [DONE] 0.12 / 0.77, see below
+#
+# FINDING servo_min / servo_max. The obvious approach does not work: the driver
+# clips every servo command to these same limits, so you cannot command past
+# them to discover where the real stop is. Open them first, on a driver started
+# by itself - the hard bounds in the code are 0.0 and 1.0:
+#
+#   ros2 run vesc_driver vesc_driver_node --ros-args -r __ns:=/vesc \
+#     --params-file src/stack_master/config/car/vesc.yaml \
+#     -p servo_min:=0.0 -p servo_max:=1.0
+#
+#   ros2 topic pub -1 /vesc/commands/servo/position std_msgs/msg/Float64 \
+#     "{data: 0.445}"      # centre, then step outward by 0.02
+#
+# Wheels off the ground, one step at a time, and stop the moment they stop
+# following. The last value that still moved them, backed off by one step, is
+# the limit. A servo held against its stop stalls and cooks itself, so never
+# command 0.0 or 1.0 directly - with the limits opened there is nothing left to
+# catch it.
+#
+# Convert what you find: delta = (offset - servo) / gain. The two sides should
+# come out close to equal. If they do not, the offset is wrong before the
+# limits are - it is meant to be the servo value at which the wheels point
+# dead ahead.
+#
+# Everything below sits under /** so all three vesc nodes share it.
+
+# NODE KEYS ARE WILDCARDED ON PURPOSE. hardware.launch.xml puts these nodes in
+# the /vesc namespace, so their fully qualified names are /vesc/vesc_driver_node
+# and /vesc/vesc_to_odom_node. A bare `vesc_to_odom_node:` key does not match a
+# namespaced node - the section is silently ignored and every parameter in it
+# falls back to the code default. That is not a cosmetic failure: wheelbase
+# defaults to 0.0, and vesc_to_odom divides by it, so the odometry came out NaN
+# and poisoned the whole TF tree.
+
+/**:
+  ros__parameters:
+    # erpm = speed_to_erpm_gain * speed[m/s] + speed_to_erpm_offset
+    # speed_to_erpm_gain: 4352.0
+    # speed_to_erpm_offset: 220.0
+    speed_to_erpm_gain: 4425.0
+    speed_to_erpm_offset: 0.0
+
+    # servo[0..1] = steering_angle_to_servo_gain * angle[rad] + offset
+    steering_angle_to_servo_gain: -1.1
+    steering_angle_to_servo_offset: 0.445
+
+    # Prefer a udev-pinned symlink over /dev/ttyACM0: the ACM number changes
+    # with enumeration order, so a reboot can silently point this at something
+    # else. Create /etc/udev/rules.d/99-vesc.rules keyed on the adapter's serial.
+    port: /dev/sensors/vesc
+
+    duty_cycle_min: 0.0
+    duty_cycle_max: 0.0
+    current_min: 0.0
+    current_max: 100.0
+    # /vesc/commands/motor/brake is a POSITIVE motor-phase current in amps
+    # (COMM_SET_CURRENT_BRAKE). The old +/-200000 values were meaningless in
+    # this unit, so brake_limit_ in vesc_driver.cpp clipped nothing. 50 A is an
+    # independent driver-side hard limit matching kHardBrakeCurrentLimit in
+    # ackermann_to_vesc.cpp - keep the two in step even if the bridge is
+    # retuned. This car's VESC reads 60 A Motor Current Max Brake, so the
+    # firmware, not this file, stays the outermost ceiling.
+    brake_min: 0.0
+    brake_max: 50.0
+    # Sanity clamp on the ERPM command, in the only unit that means anything
+    # here: 35400 = 8 m/s at the calibrated speed_to_erpm_gain above. Re-derive
+    # it (4425 * v_max) if that gain is ever recalibrated, or this silently
+    # becomes a different speed.
+    #
+    # Was 69000, copied from race_stack's NUC configs - 15.6 m/s at our gain,
+    # a speed this car cannot reach, so the clamp never fired. ForzaETH's own
+    # Jetson config uses 23250. This is not what protects the
+    # motor; that is Max ERPM and the current limits in the VESC firmware.
+    speed_min: -35400.0
+    speed_max: 35400.0
+    position_min: 0.0
+    position_max: 0.0
+    # MEASURED on this racecar. Mechanical stops are at 0.10 and 0.90, and the
+    # wheels point dead ahead at 0.445 - so the rack is not centred in its own
+    # travel: 0.345 one way against 0.455 the other. Steering has to be
+    # symmetric, so both sides take the smaller number, and both back off 0.02
+    # from the stop. A corner holds the limit for as long as the corner lasts,
+    # and a servo held against its stop is a servo stalling.
+    #
+    # These give delta_max 0.2954 rad (16.9 deg) - (0.445 - 0.12)/1.1, rounded
+    # DOWN, because a steering limit rounded up is over the servo limit and
+    # gets clipped on every full-lock command. racecar_f110.ini's curvlim is
+    # derived from it: tan(delta_max) / wheelbase.
+    servo_min: 0.12
+    servo_max: 0.77
+
+# Current-brake controller in the ackermann bridge. Bridge-only on purpose:
+# under /** these keys would also reach vesc_driver_node and vesc_to_odom_node
+# as unused-parameter noise.
+/**/ackermann_to_vesc_node:
+  ros__parameters:
+    # Initial state only - hardware.launch.xml's `braking` argument overrides
+    # this after the file, and it is live-togglable while driving:
+    #   ros2 param set /vesc/ackermann_to_vesc_node brake_control_enabled true
+    brake_control_enabled: true
+    # 30 A, raised from the provisional 10 A now that this car's VESC has been
+    # read out in VESC Tool: Motor Current Max Brake is 60 A. That firmware
+    # number is the real ceiling on braking force; kHardBrakeCurrentLimit
+    # (50 A, code) and brake_max above sit between it and this value.
+    #
+    # Battery Current Max Regen is the OTHER firmware limit, and it is the one
+    # this pack cares about: regen current is roughly brake current * duty, so
+    # a 30 A brake applied at speed pushes most of that back into the 3S
+    # 8000 mAh LiPo. Its 120C rating is DISCHARGE - charge/regen on a pack like
+    # this is 1-5C, i.e. 8-40 A, and a near-full 3S also has little headroom
+    # before the VESC's overvoltage cutoff drops the brake mid-stop. Set
+    # Battery Current Max Regen explicitly in VESC Tool rather than leaving it
+    # at whatever the profile shipped with.
+    brake_current_max: 20.0
+    # At the old 10 A cap start/gain below never mattered: 8 + 15 * err reached
+    # 10 A at 0.13 m/s of error, under the 0.15 engage threshold, so every stop
+    # was a flat 10 A. With the cap at 30 A the curve is live again and
+    # saturates at ~1.5 m/s of error. brake_current_ resets to 0 on release, so
+    # every stop ramps up from 0 A; at ~50 Hz commands (dt~0.02 s) the ramp
+    # rate dominates stopping time - 100 A/s reached 30 A in 0.3 s, 300 A/s in
+    # 0.1 s.
+    brake_current_start: 7.0        # first-contact target current [A]
+    brake_current_gain: 10.0        # A per m/s of speed error; start+gain*err
+    brake_current_ramp_rate: 300.0  # A/s
+    # Hysteresis on speed error (engage above 0.15, keep until below 0.05)
+    # prevents mode chatter between brake and speed commands.
+    brake_engage_speed_error: 0.15
+    brake_release_speed_error: 0.05
+    # Current brake cannot hold 0 RPM; below this speed fall back to speed mode
+    # so PID holds the stop. Must sit ABOVE the |speed| < 0.05 -> 0 deadband in
+    # vesc_to_odom.cpp, which would otherwise report 0 while still rolling.
+    brake_release_speed: 0.15
+    # Braking decisions depend on measured speed; stale /vesc/odom means no
+    # braking (the bridge warns and runs speed-mode only).
+    brake_odom_timeout: 0.2
+
+/**/vesc_to_odom_node:
+  ros__parameters:
+    odom_frame: odom
+    base_frame: ego_racecar/base_link
+
+    # Default off; hardware.launch.xml's odom_tf argument overrides it.
+    # While MAPPING it stays false - cartographer owns map -> base_link outright,
+    # and a second parent for base_link breaks the TF tree.
+    # While LOCALISING it is switched on - the EKF publishes map -> odom and this
+    # closes the chain to the car between corrections (REP-105).
+    publish_tf: false
+
+    use_servo_cmd_to_calc_angular_velocity: true
+
+    # Where the yaw rate comes from. Empty leaves the bicycle model above in
+    # charge, which integrates the SERVO COMMAND - how fast the car would turn
+    # if the tyres never slipped.
+    #
+    # That error is systematic rather than noise, and this node's output is
+    # the odom -> base_link transform, which is what carries the car between
+    # localisation corrections. So a biased yaw here shows up as base_link
+    # swinging on the map at 50 Hz no matter how good the particle filter is.
+    #
+    # Last of three. The particle filter's motion model (pf.yaml imu_topic)
+    # and the EKF (ekf_pf.yaml imu0) are already on the gyro; this was the
+    # only place still modelling it.
+    imu_topic: /vesc/sensors/imu/raw
+
+    # From the racecar URDF (wheel_base). Still used: the odometry message
+    # reports the steering angle even when the gyro owns the yaw rate.
+    wheelbase: 0.324
+
+/**/vesc_driver_node:
+  ros__parameters:
+    # Stamped on both IMU messages. Must name a link that exists in the racecar's
+    # URDF, because cartographer resolves it against tracking_frame and
+    # robot_localization looks it up in TF. Upstream left it empty, which makes
+    # both drop the samples without an error.
+    imu_frame_id: ego_racecar/imu

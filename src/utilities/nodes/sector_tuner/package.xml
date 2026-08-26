@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>sector_tuner</name>
+  <version>0.0.0</version>
+  <description>
+    Sector speed scaling and overtaking-sector interpolation over the global
+    waypoints. From ForzaETH race_stack.
+  </description>
+  <maintainer email="imsunghy@gmail.com">young</maintainer>
+  <license>MIT</license>
+
+  <!-- This package declared no runtime dependencies at all, not even rclpy,
+       until sector_tuner failed to start for a missing import. rosdep had no
+       way to install any of it; it only ran because everything happened to be
+       present already. -->
+  <depend>rclpy</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>visualization_msgs</depend>
+  <depend>f110_msgs</depend>
+  <depend>frenet_conversion</depend>
+  <depend>parameter_event_handler</depend>
+  <exec_depend>tf_transformations</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend>
+  <exec_depend>python3-tqdm</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

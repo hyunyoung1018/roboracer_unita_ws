@@ -1,0 +1,97 @@
+state_machine:
+  ros__parameters:
+    # structural
+    # [Hz] 80 -> 50. Every tick re-walks each cached path and every obstacle
+    # in python. The controller runs at 50 and is what actually steers, so a
+    # state machine deciding faster than that only decides again before
+    # anything acted on the last decision.
+    rate: 50
+    n_loc_wpnts: 80
+
+    # [Hz] How often the markers are DRAWN. Nothing the car does depends on
+    # this - local_waypoints, behavior_strategy and the state string all go
+    # out at `rate` regardless.
+    #
+    # py-spy on a 325 s run put 78% of the node inside loop(), and 81% of THAT
+    # inside _pub_local_wpnts: 80 waypoints x 50 Hz = 4000 Marker objects a
+    # second, and a Humble Marker is a nested tree with a CompressedImage and
+    # a MeshFile in it, so each one costs ~100 us to build before it is
+    # serialised. Marker.__init__ alone was 134 s of the run.
+    #
+    # The markers are now one SPHERE_LIST instead of 80 spheres, and they are
+    # skipped altogether while nothing is subscribed - so with RViz closed
+    # this costs nothing at all. 0 disables drawing outright.
+    viz_rate_hz: 10.0
+    timetrials_only: false
+    # Nothing declares this today, so it is inert either way - but a car
+    # config that says sim: true is a trap for whoever reads it next.
+    sim: false
+    measure: false
+    ot_planner: "lane_change"
+    track_length: 1.0
+    # geometry / horizons
+    # [m] The car's overall width, as the free-space checks model it.
+    #
+    # 0.4 -> 0.28. 0.28 is measured, and albomb_core.xacro agrees exactly:
+    # wheel_track 0.235 + wheel_length 0.045 = 0.280. The old 0.4 was 12 cm of
+    # hidden padding, which made every clearance number mean something other
+    # than it said. free_dist in _check_free_frenet is now the real gap
+    # between the car's side and the obstacle's edge, so the margins on top
+    # of it are real margins and can
+    # be tuned as such.
+    #
+    # NOTE it cuts both ways. The same check decides whether the RACELINE is
+    # blocked, and a narrower car is blocked less often, so
+    # global_tracking.yaml's lateral_width_m carries the 6 cm back.
+    gb_ego_width_m: 0.28
+    gb_horizon_m: 15.0
+    interest_horizon_m: 20.0
+    overtaking_horizon_m: 6.9
+    emergency_break_horizon: 0.5
+    # [m/s] Above this the car trails a static obstacle instead of arming
+    # avoidance. Was hardcoded at 3.0, which the raceline exceeds for 30% of
+    # the lap once speed_scaling reaches 0.5 - and it exceeds it in the fast
+    # sections, which is where an obstacle appears late. Coming out of a
+    # corner onto one, the car could not arm, so it trailed, braked, and by
+    # the time it was under 3.0 it was too close to swerve. It then sat in
+    # front of the obstacle, because a stopped car and a stationary obstacle
+    # do not change anything about the situation.
+    #
+    # 6.0 clears the raceline's top speed at any scaling we would run
+    # (5.33 m/s at 0.7), so in practice the gate is off for static obstacles.
+    # It is still a gate: it exists so the car does not swerve at a speed the
+    # swerve cannot be driven at, and if that ever becomes the failure this
+    # is where to bring it back down.
+    static_overtake_max_speed_mps: 10.0
+    # [m] How much better than the raceline an avoidance path has to be before
+    # it is driven despite failing the free check.
+    #
+    # Only consulted when the raceline is not free either. Trailing falls back
+    # to the raceline, so refusing a marginal avoidance does not keep the car
+    # safe - it puts it on the line that was declared blocked. Measured: the
+    # avoidance cleared by 0.022 m against a 0.034 m margin, was refused, and
+    # the raceline it fell back to was 0.203 m inside the obstacle.
+    static_overtake_better_by_m: 0.05
+    # [m] Tightest clearance an avoidance path may have and still be driven
+    # when the raceline is also blocked. Nothing overrides it.
+    #
+    # free_dist is the gap between the car's SIDE and the obstacle's edge, so
+    # 0.0 means "the body may touch but not overlap". static_overtake_better_by_m
+    # alone would drive a path 0.117 m INSIDE an obstacle because the raceline
+    # was 0.284 m inside - measured, four times in one run. Both are collisions.
+    # Raise it to keep real margin; do not go below zero.
+    static_overtake_min_clearance_m: 0.0
+    # safety
+    volt_threshold: 11.0
+    # dynamic (replaces dyn_statemachine_tuner.cfg)
+    lateral_width_ot_m: 0.3
+    splini_hyst_timer_sec: 0.7
+    splini_ttl: 2.0
+    pred_splini_ttl: 2.0
+    overtaking_ttl_sec: 1.0
+    overtake_min_closing_mps: 2.5
+    ftg_speed_mps: 0.5
+    ftg_timer_sec: 3.0
+    ftg_active: true
+    force_RACELINE: false
+    use_force_trailing: false

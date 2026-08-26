@@ -1,0 +1,36 @@
+ot_interpolator:
+  ros__parameters:
+    n_sectors: 1
+    # How much faster than the raceline the LANE-CHANGE path may be planned,
+    # where it bends no more than the raceline does. 1.0 keeps the raceline as
+    # a hard ceiling, which is what happened before this was read at all.
+    #
+    # Passing a moving car needs a speed advantage and a ceiling at exactly the
+    # raceline speed forbids one. The ceiling is there because ggv.csv is a
+    # flat 12.0 placeholder rather than a measured friction ellipse: without it
+    # the path was once planned near twice the speed of the line it departs
+    # from, and the car accelerated into a bend with no grip budget and hit the
+    # wall. So the lift applies only on the straight the pass is made on and
+    # tapers to nothing at the path's own sharpest bend - the corner exit that
+    # crashed. Clamped to 1.5 in the node.
+    #
+    # Static avoidance never gets it: going round a box needs no advantage over
+    # anything.
+    yeet_factor: 1.25
+    spline_len: 30
+    Overtaking_sector0:
+      start: 0
+      end: 422
+      ot_flag: false
+    # Which way to take an overtake in this sector: left | right | auto.
+    #
+    # auto is the planner's own room comparison, which picks whichever side has
+    # more room at its tightest point - on a corner that is the outside, every
+    # time. It also re-decides every tick off the opponent's measured edge,
+    # which wanders about 10 cm frame to frame, so when the two sides are close
+    # the answer flips and an overtake is started and abandoned repeatedly.
+    #
+    # Naming the side here makes it a policy instead. Safety is unchanged: the
+    # planner still refuses any side that does not clear every obstacle, and
+    # falls back to the roomier one when the named side is not available.
+      preferred_side: auto

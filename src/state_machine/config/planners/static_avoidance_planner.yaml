@@ -1,0 +1,87 @@
+min_horizon: 0.0
+max_horizon: 10.0
+# [m] Clearance the avoidance path must have beyond half the car's width
+# before the state machine calls it free. Together with gb_ego_width_m (0.4)
+# this sets a floor on evasion_distance of 0.2 + this, and at 0.1 that floor
+# was 0.30 against a planner ceiling of 0.33 - a 3 cm window on this track.
+# 0.05 opened it to 8 cm.
+#
+# 0.05 -> 0.02, to pass closer. That floor is what stops evasion_distance
+# going below 0.25, and 0.25 puts the car 11 cm from the obstacle once its
+# own half width of 0.14 is taken off. At 0.02 the floor is 0.22 and
+# evasion_distance 0.24 leaves 10 cm, with 2 cm of slack left in this check.
+#
+# 0.02 -> 0.05, because gb_ego_width_m is now the car's real 0.28 rather
+# than 0.4. free_dist is therefore the true gap between the car's side and
+# the obstacle's edge, and this is a genuine safety margin rather than a
+# number compensating for 12 cm of padding elsewhere. 5 cm is about what
+# localisation error and the obstacle's measured edge are worth together.
+# The floor it puts on evasion_distance is 0.28/2 + this = 0.19.
+#
+# The requirement is scaled by distance (free_scaling_reference_distance_m),
+# so it is strictest far out and relaxes on approach.
+lateral_width_m: 0.14
+free_scaling_reference_distance_m: 2.0
+# [s] How old the planner's path may be. It replans at 20 Hz, so 0.1 was two
+# cycles of slack and the jetson lost that regularly - "path is 0.171 s old"
+# refused an avoidance that was being planned correctly. Five cycles still
+# rejects a planner that has actually stopped, and 0.25 s is under half a metre
+# of travel at the speed this branch arms at.
+# 0.25 -> 1.0. Measured refusal: "path is 0.301 s old, threshold 0.25" - a
+# path that existed, described an obstacle that had not moved, thrown away
+# fifty milliseconds over. The planner does not run at a steady 20 Hz once
+# obstacles are in view; between good frames it bails on noise, and over one
+# approach the gap between usable paths was 1.5 to 2.3 s. At 0.25 s the car
+# had an avoidance to follow about a tenth of the time and drove the raceline
+# the rest, which is what "the path is drawn and it goes straight" was.
+#
+# Safe because the obstacles on this topic are stationary in BOTH modes, not
+# just in time trials. static_otwpnts is fed by spline_node, and in
+# head-to-head by h2h_spline_node, which is remapped to
+# /tracking/static_obstacles; the opponent reaches that node only through
+# /tracking/dynamic_obstacles and is used to choose a side, never to plan
+# around. A path drawn for a cone a second ago is still a path around that
+# cone. Moving obstacles have their own chain and their own threshold in
+# dynamic_avoidance_planner.yaml.
+#
+# Two things still drop a held path on their own: _check_on_spline needs the
+# car to still be near it, and _check_free_frenet re-tests the cached path
+# against the CURRENT obstacle list every tick - so if an opponent has moved
+# into it since, it is refused on that basis rather than on its age.
+latest_threshold: 1.0
+hyst_timer_sec: 4.0
+killing_timer_sec: 10.0
+on_spline_front_horizon_thres_m: 0.5
+# [m] How close the car must be to the avoidance path for it to count as
+# usable. 0.5 was unreachable in practice: this planner draws the spline from
+# 6 m BEFORE the obstacle, so a path for an obstacle 10 m away starts 4 m
+# ahead of the car, and the measured refusals were at 1.46 m. The path only
+# became usable in the last half second before the car reached its start.
+#
+# 1.5 accepts a path that begins a couple of metres ahead while still rejecting
+# one on the far side of the track - the track half-widths measured here are
+# 0.4 to 0.9 m, so anything genuinely off-line is further than this.
+#
+# The real fix is for the spline to start at the car rather than ahead of it,
+# which is what ETH's spliner does. That is a change to the planner's geometry,
+# not to this threshold.
+on_spline_min_dist_thres_m: 1.5
+is_closed: False
+
+# --- speed on the avoidance path -------------------------------------------
+# The path inherited the raceline's speed: spline_node copies vx_mps from the
+# line underneath it, and the state machine then replans the profile with a
+# safety factor of 1.0. So the car swerved around an obstacle at the speed it
+# uses on the clean line.
+#
+# [-] Scales what the motor may accelerate and brake at. It does NOT bound
+# cornering speed - that comes from ggv against the path's curvature - so it
+# makes the profile gentler rather than slower outright.
+vel_planner_safety_factor: 0.6
+
+# [m/s] Hard ceiling on the avoidance path, which is the knob that actually
+# answers "too fast". The static branch only arms below 3.0 m/s anyway, and
+# this corridor is a metre wide with 16 cm of clearance either side of the
+# obstacle. Raise it once the manoeuvre looks calm:
+#   ros2 param set /state_machine static_avoidance_planner.max_speed_mps 2.0
+max_speed_mps: 2.0

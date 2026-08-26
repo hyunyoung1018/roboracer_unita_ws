@@ -1,0 +1,109 @@
+# Particle filter localisation.
+#
+# It localises the LASER and converts to base_link through the static URDF
+# transform, so the frames below have to name links that albomb_description
+# actually publishes.
+#
+# publish_tf is false on purpose. The EKF downstream owns map -> base_link; if
+# the filter also published map -> laser then laser would have two parents,
+# because the URDF already gives base_link -> laser, and TF would reject the
+# tree. (The upstream config misspells this key as `publis_tf`, so it never takes
+# effect there - ours is spelled correctly and the node defaults it to false.)
+
+particle_filter:
+  ros__parameters:
+    scan_topic: '/scan'
+    # Wheel odometry drives the motion model; the scan corrects it.
+    odometry_topic: '/vesc/odom'
+
+    # Yaw rate for the motion model. Empty falls back to the odometry twist,
+    # which on this car is the servo COMMAND through a bicycle model rather
+    # than a measurement - see imuCB. Set it back to '' to A/B this.
+    imu_topic: '/vesc/sensors/imu/raw'
+
+    publish_tf: false
+    map_frame: 'map'
+    base_frame: 'ego_racecar/base_link'
+    laser_frame: 'ego_racecar/laser'
+
+    # Every 18th beam. The UST-10LX returns 1081, so the filter weighs ~60 per
+    # particle - enough to localise, cheap enough to run 2000 particles.
+    angle_step: 18
+    max_particles: 1000
+    squash_factor: 2.2
+
+    viz: 1
+    # How many particles RViz gets, sampled UNIFORMLY. 0 draws all of them,
+    # which is what you want when the question is "has the cloud spread" -
+    # see visualize(). Costs a Pose per particle per frame, so it is throttled
+    # by viz_rate_hz rather than running at the scan rate.
+    max_viz_particles: 0
+
+    # [Hz] Drawing rate for every /pf/viz topic, the fake scan included. That
+    # one is a whole extra ray-cast pass, and at 0 it ran at 40 Hz.
+    viz_rate_hz: 10.0
+
+    # Ray casting, and the filter's whole cost: 1081/angle_step beams times
+    # max_particles times the scan rate, which is about 5 million casts a
+    # second here.
+    #
+    # 'rm' marches each ray a cell at a time and is the slowest of these.
+    # 'pcddt' precomputes a compressed directional distance transform at
+    # startup and then answers each query in near-constant time. The
+    # precompute scales with the map, and ours are tiny - test_2 is 167x274
+    # cells and a 22x8 m competition track is 160x440, so it costs a moment at
+    # startup and is repaid every scan after.
+    #
+    # 'glt' is faster still and trades memory for it: theta_discretization
+    # times the cell count, about 31 MB at competition size. Affordable, if
+    # pcddt turns out not to be enough.
+    #
+    # 'rmgpu' needs range_libc rebuilt WITH_CUDA=ON. Keep it as the last
+    # resort - it is a rebuild with its own JetPack risks, for a win the CPU
+    # methods above already give on maps this small.
+    #
+    # Check the rate it achieves with: ros2 topic hz /pf/pose/odom
+    range_method: 'pcddt'
+    theta_discretization: 112
+
+    # Matches the UST-10LX's guaranteed range.
+    max_range: 10
+    fine_timing: 0
+    # The periodic "iters per sec / possible" line. See timing_log in
+    # particle_filter.py - flip it live when localisation needs watching.
+    timing_log: 0
+    publish_odom: 1
+
+    z_short: 0.01
+    z_max: 0.07
+    z_rand: 0.12
+    z_hit: 0.75
+    sigma_hit: 8.0
+
+    # x and y equal on purpose: the noise is added in the map frame, so unequal
+    # values would tie position uncertainty to the map axes rather than to the
+    # car, making the filter behave differently depending on how the track was
+    # mapped. Too little noise diverges at speed, so both take the larger value.
+    motion_dispersion_x: 0.05
+    motion_dispersion_y: 0.05
+    motion_dispersion_theta: 0.25
+
+    # Leave this at 2 - calc_range_repeat_angles.
+    #
+    # Variant 4, the CDDT radial optimisation, looks like free speed and is not.
+    # It is 24% faster at ray casting (13.2 -> 10.1 ms per scan for 2000x61 on
+    # this Jetson) and its ranges are as accurate: they differ from variant 2 on
+    # 0.055% of rays, against the 34% that pcddt already differs from exact ray
+    # marching by at theta_discretization 112. But
+    # calc_range_many_radial_optimized has no bounds check on the query x. A
+    # particle one hundredth of a metre past the map's x edge segfaults the
+    # process; variant 2 clamps the same query and returns a range. Every map in
+    # stack_master/maps has drivable space within 1.05 m of that edge, and the
+    # 26_* competition maps within 0.10 m, so the motion model's 0.05 m
+    # per-scan dispersion walks particles over it routinely - a 400-step run on
+    # 26_track_22x8 crashed on 6 of 6 seeds. initialize_particles_pose spreads
+    # particles with sigma 0.5 m, which puts one outside on the first update.
+    #
+    # It becomes usable if the particles are clamped to the map bounds before
+    # the sensor model, which is a code change, not a config change.
+    rangelib_variant: 2

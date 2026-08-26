@@ -1,0 +1,69 @@
+/build/
+/install/
+/log/
+
+
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+*.o
+*.out
+
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+
+.DS_Store
+Thumbs.db
+# Local working context for Claude Code - not published.
+CLAUDE.md
+
+
+# Cartographer's serialised SLAM state, written by finish_mapping. Only
+# needed to resume a mapping session; nothing in the stack reads it, and
+# the map that matters is the png + yaml next to it. Several MB each.
+*.pbstream
+
+# Generated API docs inside the vendored simulator.
+src/f1tenth_gym_ros/f1tenth_gym/docs/html/
+
+# lap_analyser writes one timestamped file here per run, from its
+# constructor. Runtime output, one per launch, never read back.
+/data/
+
+# Left behind by adding Microsoft's apt repo when installing VS Code.
+# Nothing in the workspace uses it.
+packages.microsoft.gpg
+
+# Bags and recordings
+*.db3
+*.mcap
+metadata.yaml
+rosbag2_*/
+
+# Build and packaging leftovers
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+*.rej
+*.orig
+*.bak
+
+# Profiling output
+*.svg.prof
+perf.data*
+

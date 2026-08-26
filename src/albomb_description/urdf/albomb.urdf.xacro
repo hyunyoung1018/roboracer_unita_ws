@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<robot name="albomb" xmlns:xacro="http://ros.org/wiki/xacro">
+  
+  <xacro:include filename="$(find albomb_description)/urdf/albomb_core.xacro" />
+  <xacro:include filename="$(find albomb_description)/urdf/albomb_sensors.xacro" />
+
+</robot>

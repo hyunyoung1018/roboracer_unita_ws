@@ -1,0 +1,31 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>perception</name>
+  <version>0.1.0</version>
+  <description>UNITA LiDAR obstacle detection and tracking, in python and C++.</description>
+  <maintainer email="unita@todo.todo">unita</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>f110_msgs</depend>
+  <depend>frenet_conversion</depend>
+  <depend>grid_filter</depend>
+  <depend>ament_index_cpp</depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <export><build_type>ament_cmake</build_type></export>
+</package>

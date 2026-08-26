@@ -1,0 +1,121 @@
+<?xml version="1.0"?>
+<!--
+  mapping.launch.xml - build a new map with cartographer SLAM.
+
+  Drive the car around the track, then, from a second terminal:
+
+      ros2 service call /finish_mapping std_srvs/srv/Trigger {}
+
+  which writes maps/<map>/<map>.{pbstream,png,yaml} and exits the mapping stage.
+  From there:
+
+      ros2 launch stack_master raceline_generator.launch.xml map:=<map>
+
+  The sensor drivers come up with it: hardware.launch.xml is included, which is
+  also what supplies the robot description and the teleop you drive with. Pass
+  hardware:=false if they are already running from another terminal.
+
+  Data path (see config/common/mapping_2d.lua for the reasoning):
+
+      VESC IMU  /vesc/sensors/imu/raw -> cartographer
+      LiDAR     /scan                 -> cartographer
+      cartographer owns TF: map -> ego_racecar/base_link
+
+  There is no wheel odometry and no EKF here. The VESC is sensorless, so its
+  speed is unreliable exactly at the slow, tight-turning pace mapping is driven
+  at, and its yaw is dead-reckoned from the servo command rather than measured.
+  The IMU is the motion prior instead - which makes the vesc_driver IMU fixes
+  (frame_id, and the g / deg-per-second conversions) a prerequisite, not a
+  nicety: without them cartographer has no usable prior at all.
+
+  There is no `sim` argument. mapping_2d.lua is written for the real car, and
+  the gym bridge already publishes its own odom and TF, which would fight
+  cartographer for map -> base_link.
+-->
+<launch>
+  <arg name="map" description="Name of the map to create (folder under stack_master/maps/)"/>
+  <arg name="rviz" default="false"
+       description="Needs a display. On a headless car use foxglove instead."/>
+  <arg name="foxglove" default="false"
+       description="Serve the topics over websocket so a laptop can watch the map build"/>
+  <arg name="foxglove_port" default="8765"/>
+  <arg name="hardware" default="true"
+       description="Bring up the drivers, teleop and robot description"/>
+  <arg name="resolution" default="0.05"
+       description="[m/cell] occupancy grid resolution. The raceline stage assumes 0.05."/>
+  <arg name="use_sim_time" default="false"/>
+
+  <let name="config_dir" value="$(find-pkg-share stack_master)/config"/>
+  <let name="maps_dir" value="$(find-pkg-share stack_master)/maps"/>
+
+  <!-- ===== drivers, teleop, robot description ===== -->
+  <!-- Cartographer resolves both the laser and the IMU against its
+       tracking_frame (ego_racecar/imu), and publishes onto
+       ego_racecar/base_link. All three links come from the racecar URDF, which
+       hardware.launch.xml publishes along with the drivers. -->
+  <group if="$(var hardware)">
+    <include file="$(find-pkg-share stack_master)/launch/hardware.launch.xml"/>
+  </group>
+
+  <!-- ===== cartographer ===== -->
+  <!-- The minloglevel argument keeps glog's per-scan chatter out of the way;
+       warnings and errors still come through. (It cannot be named in this
+       comment with its leading dashes: a double hyphen is illegal inside an XML
+       comment, and the launch file silently fails to parse.) -->
+  <node pkg="cartographer_ros" exec="cartographer_node" name="cartographer_node"
+        output="screen"
+        args="-configuration_directory $(var config_dir)/common
+              -configuration_basename mapping_2d.lua
+              --minloglevel 2">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <!-- The sensor_msgs/Imu output, not the VESC-native vesc_msgs one on
+         /vesc/sensors/imu. odom is subscribed too, since use_odometry is
+         now true - the wheels are the only thing that knows how far the car
+         actually went, and without them the scan matcher slid along the
+         straights and every map came back short. -->
+    <remap from="imu" to="/vesc/sensors/imu/raw"/>
+    <remap from="odom" to="/vesc/odom"/>
+  </node>
+
+  <node pkg="cartographer_ros" exec="cartographer_occupancy_grid_node"
+        name="cartographer_occupancy_grid_node"
+        args="-resolution $(var resolution)">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- ===== map saving ===== -->
+  <!-- map_saver_server turns the live /map topic into the nav2 png/yaml pair.
+       It is a lifecycle node, hence the lifecycle manager: without it the node
+       stays unconfigured and the save service never appears. -->
+  <node pkg="nav2_map_server" exec="map_saver_server" name="map_saver" output="screen">
+    <param name="save_map_timeout" value="5.0"/>
+    <param name="free_thresh_default" value="0.196"/>
+    <param name="occupied_thresh_default" value="0.65"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager"
+        name="lifecycle_manager_mapping" output="screen">
+    <param name="autostart" value="true"/>
+    <param name="node_names" value="[map_saver]"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <node pkg="mapping" exec="finish_mapping" name="finish_mapping" output="screen">
+    <param name="map_name" value="$(var map)"/>
+    <param name="maps_dir" value="$(var maps_dir)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <node pkg="rviz2" exec="rviz2" name="rviz2" if="$(var rviz)"
+        args="-d $(find-pkg-share mapping)/rviz/mapping.rviz"/>
+
+  <!-- The car has no display, and mapping is the one stage you cannot do blind:
+       coverage and loop closure have to be watched before finish_mapping is
+       called, because /finish_trajectory cannot be undone. Connect from a
+       laptop on the same network to ws://<jetson-ip>:8765. -->
+  <node pkg="foxglove_bridge" exec="foxglove_bridge" name="foxglove_bridge"
+        output="screen" if="$(var foxglove)">
+    <param name="port" value="$(var foxglove_port)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>

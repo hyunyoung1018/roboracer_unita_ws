@@ -1,0 +1,72 @@
+opponent_trajectory:
+  ros__parameters:
+    loop_rate: 25.0
+    # Head-to-head router uses the same forward window. Keeping this below one
+    # compact-track lap prevents objects on a nearby physical track segment from
+    # becoming the learned opponent.
+    max_opponent_distance: 8.0
+    max_measurement_age: 0.5
+    min_sample_distance: 0.10
+    max_sample_gap: 2.5
+    max_sample_gap_sec: 0.5
+    max_lateral_jump: 0.20
+    max_sample_speed: 6.0
+    min_publish_samples: 8
+    max_samples: 400
+    off_trajectory_threshold: 0.55
+    off_trajectory_samples: 5
+
+gaussian_process_opp_traj:
+  ros__parameters:
+    min_training_points: 8
+    # [Hz] Refit rate. Was effectively the publish rate of
+    # /proj_opponent_trajectory (up to 25 Hz) because the fit hung off the
+    # subscription. See _fit_timer for the measurement that forced this.
+    fit_rate_hz: 3.0
+    # 200 -> 80. The fit is two Cholesky factorisations of an NxN matrix, so
+    # this is the cube term: 80 costs about 1/15 of 200. The samples are
+    # binned to training_s_bin_size (0.15 m) before fitting anyway, and one
+    # lap of these 20-22 m tracks is ~140 bins, so 80 still covers well over
+    # half a lap of distinct observations.
+    max_training_points: 80
+    # Collapse multiple measurements at nearly the same Frenet s before GP
+    # fitting, then publish only the part of the lap supported by observations.
+    training_s_bin_size: 0.15
+    max_extrapolation_distance: 1.0
+    d_length_scale: 1.0
+    vs_length_scale: 1.5
+    d_noise: 0.04
+    vs_noise: 0.15
+    gp_jitter: 0.000001
+    min_speed: 0.0
+    max_speed: 12.0
+    opponent_width: 0.28
+    boundary_margin: 0.03
+    # A clipped GP point remains visible for diagnosis but is marked too
+    # uncertain for the predictor to authorize overtaking.
+    boundary_clipped_variance: 1.0
+
+opp_prediction:
+  ros__parameters:
+    loop_rate: 20.0
+    n_time_steps: 20
+    dt: 0.10
+    max_opponent_distance: 8.0
+    obstacle_timeout: 0.5
+    trajectory_timeout: 2.0
+    min_training_laps: 0.5
+    # Hysteresis prevents a noisy d estimate from toggling force_trailing at
+    # every 20 Hz prediction tick. Open conservatively, close only after a
+    # clearly larger deviation persists for several frames.
+    learned_deviation_enter_threshold: 0.35
+    learned_deviation_exit_threshold: 0.55
+    learned_ready_confirm_frames: 3
+    learned_reject_confirm_frames: 5
+    opponent_width: 0.28
+    trajectory_boundary_margin: 0.03
+    # GP publishes only observation-supported waypoints. A learned prediction
+    # may not bridge a missing section or use a boundary-clipped/high-variance
+    # segment to authorize overtaking.
+    max_trajectory_query_gap: 0.15
+    max_trajectory_d_variance: 0.80
+    speed_offset: 0.0

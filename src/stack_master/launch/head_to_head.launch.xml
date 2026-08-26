@@ -1,0 +1,314 @@
+<?xml version="1.0"?>
+<!--
+  Head-to-head mode. This file is deliberately independent from
+  time_trials.launch.xml so the proven time-trials graph remains unchanged.
+
+  Static:  h2h tracking -> static_obstacles  -> h2h spline  -> static_otwpnts
+  Dynamic: h2h tracking -> dynamic_obstacles -> GP prediction -> lane change
+                                             -> otwpnts
+
+  One tracker, one classification. h2h_tracking_node splits its own output on
+  the tracker's speed-based is_static; there is no second opinion downstream.
+-->
+<launch>
+  <arg name="map" description="Map name (folder under stack_master/maps/)"/>
+  <arg name="localization" default="true"
+       description="Bring up localization and hardware; false if already running."/>
+  <!-- Overtaking runs on a constant-velocity prediction, not a learned one.
+       Three booleans rather than one mode string, because ROS 2 launch XML has
+       no string comparison (see base_system.launch.xml):
+
+         prediction    opp_prediction, which turns the tracked opponent into
+                       the PredictionArray the lane-change planner needs.
+         gp_learning   the two nodes that learn the opponent's line -
+                       opponent_trajectory and gaussian_process_opp_traj.
+                       Off: opp_prediction finds no trajectory and falls back
+                       to constant velocity from the tracker's own vs.
+         dynamic_avoidance  the lane-change planner itself.
+
+       Learned prediction is off because its authorization gate is close to
+       unsatisfiable on a 21.9 m track, not because it is expensive - measured
+       here, the GP refit is 1.5% of one core at 3 Hz. See
+       authorize_on_fallback in opp_prediction.py.
+
+       To get the original learned behaviour back:
+         gp_learning:=true authorize_on_fallback:=false -->
+  <arg name="prediction" default="true"
+       description="Run opp_prediction (needed for any dynamic overtaking)."/>
+  <arg name="gp_learning" default="false"
+       description="Also learn the opponent's line with the GP pair."/>
+  <arg name="authorize_on_fallback" default="true"
+       description="Let a constant-velocity prediction authorize an overtake."/>
+  <arg name="dynamic_avoidance" default="true"
+       description="Run the UNICORN-derived lane-change planner."/>
+  <arg name="relocalize" default="true"
+       description="Re-seed the particle filter at the finish line every N laps."/>
+  <arg name="relocalize_every_n_laps" default="3"
+       description="How often. Live: ros2 param set /auto_relocalizer relocalize_every_n_laps N"/>
+  <!-- Off until validated in this mode: the trailing PID already owns
+       longitudinal control (no rate limit - trailing_rate_limit_enabled is
+       false in controller.yaml), and current braking on top of it can stop-go
+       oscillate behind an opponent. At the 0.5 m emergency gap the commanded
+       stop also becomes max-current braking instead of a PID coast-down.
+       Live A/B while driving:
+         ros2 param set /vesc/ackermann_to_vesc_node brake_control_enabled true|false -->
+  <arg name="braking" default="true"
+       description="VESC current braking in the ackermann bridge. See vesc.yaml."/>
+
+  <arg name="joy_max_speed" default="5.0"/>
+  <arg name="use_sim_time" default="false"/>
+  <arg name="rviz" default="false"/>
+  <arg name="foxglove" default="false"/>
+
+  <let name="config_dir" value="$(find-pkg-share stack_master)/config/car"/>
+  <let name="map_dir" value="$(find-pkg-share stack_master)/maps/$(var map)"/>
+
+  <group if="$(var localization)">
+    <include file="$(find-pkg-share stack_master)/launch/localization.launch.xml">
+      <arg name="map" value="$(var map)"/>
+      <arg name="rviz" value="$(var rviz)"/>
+      <arg name="foxglove" value="$(var foxglove)"/>
+      <arg name="use_sim_time" value="$(var use_sim_time)"/>
+      <arg name="teleop" value="false"/>
+      <arg name="braking" value="$(var braking)"/>
+    </include>
+  </group>
+
+  <!-- Raceline speed and overtaking permission. Existing ot_sectors.yaml is
+       authoritative; this mode never forces permission true. -->
+  <node pkg="sector_tuner" exec="sector_tuner" name="sector_tuner" output="screen">
+    <param from="$(var map_dir)/speed_scaling.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="sector_tuner" exec="ot_interpolator" name="ot_interpolator" output="screen">
+    <param from="$(var map_dir)/ot_sectors.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- Existing perception and tracking remain untouched.  This head-to-head-only
+       adapter stabilizes classification after tracking. -->
+  <!-- THE DETECTOR IS TIME-TRIALS'. perception.yaml only, exactly as
+       time_trials.launch.xml loads it.
+       h2h_perception.yaml used to be loaded here as well, to carry a 12 cm
+       pillar out to 9 m: min_size_n 8 -> 3, min_size_m 0.20 -> 0.10,
+       filter_kernel_size 6 -> 3. It did that, and it also did what its own
+       comment warned about - three stray returns became an obstacle, and less
+       wall erosion left wall fragments standing. Measured on the car: with two
+       or more static obstacles the corridor picked up the phantoms as members
+       and the avoidance stopped working, while the same obstacles under
+       time_trials' detector were cleared reliably.
+       So: detect everything the way time trials does, and put the knowledge
+       that the opponent is a car AFTER classification instead of before it -
+       see dynamic_extent_min_m in h2h_perception.yaml, which is applied by
+       h2h_tracking_node only once a track is confirmed moving.
+       THE COST, and it is real: the pillar is under min_size_n 8 beyond about
+       3.4 m, so the opponent is not detected at all until it is that close.
+       Trailing therefore arms late. If that turns out to matter more than the
+       phantoms did, the knob is min_size_n on this node alone - it is live:
+         ros2 param set /detect min_size_n 5 -->
+  <node pkg="perception" exec="detect" name="detect" output="screen">
+    <param from="$(var config_dir)/perception.yaml"/>
+    <param name="map" value="$(var map)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <!-- h2h_tracking_node, not tracking_node: a subclass that publishes the
+       obstacle fields the shared tracker drops (x_m/y_m/theta and the
+       variances), sizes a confirmed-moving target like a car rather than like
+       a static box, and splits its own output into
+       /tracking/static_obstacles and /tracking/dynamic_obstacles.
+       time_trials keeps running the unmodified tracking_node, and
+       h2h_perception.yaml only adds keys.
+
+       THE SPLIT USED TO BE A SEPARATE NODE, stable_obstacle_router, and it is
+       gone. It re-classified every track from the standard deviation of its
+       Frenet position and discarded the tracker's own answer. A stationary box
+       measured from a moving car walks centimetres a frame as the L-shape fit
+       slides with the viewing angle, which cleared its 0.04 m "clearly
+       dynamic" bar - so boxes went to the dynamic stream and were even
+       acquired as the opponent (ten times in one run), leaving the spline
+       planner with nothing to avoid while the controller trailed a box at the
+       0.8 m opponent gap. The car stopped in front of obstacles, or drove into
+       them when the derived speed came out wrong.
+
+       There is one classifier now, and it is the one time_trials drives on:
+       |v| < static_speed_threshold sustained over static_min_samples frames,
+       in the node that already estimates the velocity.
+
+       SELECTION was never the part at fault, so all of it moved here with the
+       split rather than being dropped: the corridor and forward-window gates,
+       the lock on one opponent, re-identification across tracker ID churn, the
+       logical opponent ID and the speed hold. See h2h_opponent_selector.py and
+       the opponent block in h2h_perception.yaml. /tracking/dynamic_obstacles
+       therefore carries the ONE selected opponent, not every moving track. -->
+  <node pkg="perception" exec="h2h_tracking_node" name="tracking" output="screen">
+    <param from="$(var config_dir)/perception.yaml"/>
+    <param from="$(var config_dir)/h2h_perception.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- h2h_spline_node, not spline_node: a subclass that also reads
+       /tracking/dynamic_obstacles, and uses it for ONE thing - which side of a
+       static obstacle to pass. The shared planner picks the side with more room
+       to the track boundary and has never heard of the opponent, so when the
+       opponent overtakes into the wider gap (for the same reason the planner
+       wants it) the path is drawn through it and the state machine refuses.
+       Whether the box got avoided came down to which way the opponent went.
+       The opponent never becomes something to plan around - it only takes room
+       away. time_trials keeps running the unmodified spline_node, and with
+       nothing publishing dynamic obstacles this behaves identically to it.
+       Everything else about this node is unchanged; only its subscriber and
+       publisher are redirected for this mode. -->
+  <node pkg="spline" exec="h2h_spline_node" name="spline_node" output="screen">
+    <param from="$(var config_dir)/perception.yaml"/>
+    <param from="$(var config_dir)/h2h_perception.yaml"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <remap from="/tracking/obstacles" to="/tracking/static_obstacles"/>
+    <remap from="/planner/avoidance/otwpnts" to="/planner/avoidance/static_otwpnts"/>
+  </node>
+
+  <!-- The existing updater is the only publisher of global_waypoints_updated. -->
+  <node pkg="spline_planner" exec="update_waypoints" name="waypoint_updater" output="screen">
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <!-- /planner/recovery/wpnts had no publisher anywhere in this workspace, so
+       the state machine's RECOVERY state could never be entered and a car off
+       the raceline was handed the raceline itself, cutting back to it from
+       wherever it was. See recovery_node's docstring. -->
+  <node pkg="spline_planner" exec="recovery_node" name="recovery_node" output="screen">
+    <param name="path_length_m" value="10.0"/>
+    <param name="return_distance_m" value="3.0"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <group if="$(var gp_learning)">
+    <node pkg="gp_traj_predictor" exec="opponent_trajectory"
+          name="opponent_trajectory" output="screen">
+      <param from="$(find-pkg-share gp_traj_predictor)/config/prediction.yaml"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+      <remap from="/tracking/obstacles" to="/tracking/dynamic_obstacles"/>
+    </node>
+    <node pkg="gp_traj_predictor" exec="gaussian_process_opp_traj"
+          name="gaussian_process_opp_traj" output="screen">
+      <param from="$(find-pkg-share gp_traj_predictor)/config/prediction.yaml"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+  </group>
+
+  <group if="$(var prediction)">
+    <node pkg="gp_traj_predictor" exec="opp_prediction"
+          name="opp_prediction" output="screen">
+      <param from="$(find-pkg-share gp_traj_predictor)/config/prediction.yaml"/>
+      <param name="authorize_on_fallback" value="$(var authorize_on_fallback)"/>
+      <!-- 2 s -> 1 s. Constant velocity is a straight line and this track is
+           not; extrapolating the opponent two seconds through a corner puts it
+           somewhere it will not be. One second is also 3 m at racing speed,
+           which is exactly the lane-change planner's prediction_span_m, so the
+           span the planner validates and the span the state machine re-checks
+           finally cover the same ground - see _planner_validated_span.
+           Overridden here rather than in prediction.yaml so gp_learning:=true
+           still gets the 2 s horizon the learned profile was tuned for. -->
+      <param name="n_time_steps" value="10"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+      <remap from="/tracking/obstacles" to="/tracking/dynamic_obstacles"/>
+    </node>
+  </group>
+
+  <group if="$(var dynamic_avoidance)">
+    <node pkg="lane_change_planner" exec="change_avoidance_node"
+          name="change_avoidance_node" output="screen">
+      <param from="$(find-pkg-share lane_change_planner)/config/lane_change_planner.yaml"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+      <remap from="/tracking/obstacles" to="/tracking/dynamic_obstacles"/>
+    </node>
+  </group>
+
+  <!-- The wrapper preserves the existing state logic and only corrects the
+       head-to-head startup semantics of use_force_trailing. -->
+  <node pkg="state_machine" exec="h2h_state_machine"
+        name="state_machine" output="screen">
+    <param from="$(var config_dir)/state_machine_params.yaml"/>
+    <!-- Overlay, loaded second so its keys win. Shrinks the horizons to this
+         workspace's ~21 m tracks and gives the dynamic avoidance path the
+         speed ceiling and cache lifetime the static one already has, without
+         editing either shared file. -->
+    <param from="$(var config_dir)/h2h_state_machine_params.yaml"/>
+    <param name="config_dir" value="$(var config_dir)"/>
+    <param name="map_dir" value="$(var map_dir)"/>
+    <param name="timetrials_only" value="false"/>
+    <param name="ot_planner" value="lane_change"/>
+    <!-- Kept in step with the argument above so the state machine never offers
+         OVERTAKE on a planner that was not launched. -->
+    <param name="dynamic_avoidance_enabled" value="$(var dynamic_avoidance)"/>
+    <param name="use_force_trailing" value="true"/>
+    <!-- Physical width is used only in collision clearance checks. The
+         legacy 0.40 m gb_ego_width_m remains the raceline-state tolerance. -->
+    <param name="clearance_vehicle_width_m" value="0.28"/>
+    <param name="trailing_block_hold_sec" value="0.75"/>
+    <param name="trailing_target_hold_sec" value="0.75"/>
+    <param name="sim" value="$(var use_sim_time)"/>
+    <param name="map" value="$(var map)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <!-- No remap. /tracking/stable_obstacles was the router's copy of every
+         track it had seen, which is what /tracking/obstacles already is - and
+         is the topic time_trials' state machine reads. One less alias. -->
+  </node>
+
+  <!-- h2h_controller_manager, not controller_manager: a subclass that keeps
+       the trailing gap through an evasion and ramps the OVERTAKE heading
+       gain instead of stepping it. Both are inert without an opponent, and
+       time_trials keeps running the unmodified node. See
+       h2h_controller.py; the two settings live in h2h_controller.yaml. -->
+  <node pkg="controller" exec="h2h_controller_manager" name="controller_manager" output="screen">
+    <param from="$(var config_dir)/controller.yaml"/>
+    <param from="$(var config_dir)/h2h_controller.yaml"/>
+    <param name="save_yaml_path" value="$(var config_dir)/controller.yaml"/>
+    <param name="sim" value="$(var use_sim_time)"/>
+    <param name="single_opponent_mode" value="true"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <remap from="/imu/data" to="/vesc/sensors/imu/raw"/>
+  </node>
+
+  <!-- ===== re-seeding the particle filter ===== -->
+  <!-- Two nodes, neither of which the driving stack depends on: kill them
+       mid-race and the car keeps driving. relocalizer publishes /initialpose
+       at the finish-line waypoint's KNOWN map pose every N laps, which is the
+       same path an RViz "2D Pose Estimate" takes, so nothing else changes.
+       lap_analyser is here because that is what publishes the lap_data it
+       counts - not for the lap times.
+       qual_scheduler is deliberately NOT here. It steps the speed schedule up
+       partway through a qualifying run, which is not a thing during a race.
+
+       WORTH RE-TESTING NOW. This was a workaround for the particle cloud
+       spreading over a run - which is also what a pose reset repaired, taking
+       `possible` from 45 straight back to 160. The cause of that spread was
+       the motion model's yaw rate coming from the servo command, and all three
+       consumers are on the gyro now. If the cloud no longer degrades, the
+       re-seed is pure cost: it scatters particles 0.5 m and 0.4 rad around the
+       line and the estimate is briefly worse, at racing speed, right where
+       the car is committed. A/B it with relocalize:=false. -->
+  <group if="$(var relocalize)">
+    <node pkg="lap_analyser" exec="lap_analyser" name="lap_analyser" output="screen">
+      <param name="lap_start_from_initialpose" value="true"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+    <node pkg="lap_analyser" exec="relocalizer" name="auto_relocalizer" output="screen">
+      <param name="relocalize_every_n_laps" value="$(var relocalize_every_n_laps)"/>
+      <param name="use_sim_time" value="$(var use_sim_time)"/>
+    </node>
+  </group>
+
+  <node pkg="stack_master" exec="simple_mux_node.py" name="simple_mux" output="screen">
+    <param name="in_topic" value="/vesc/high_level/ackermann_cmd"/>
+    <param name="out_topic" value="/vesc/ackermann_cmd"/>
+    <param name="joy_max_speed" value="$(var joy_max_speed)"/>
+    <param name="joy_max_steer" value="0.2954"/>
+    <param name="steering_angle_to_servo_gain" value="-1.1"/>
+    <param name="steering_angle_to_servo_offset" value="0.445"/>
+    <param name="servo_min" value="0.12"/>
+    <param name="servo_max" value="0.77"/>
+    <param name="use_estop" value="false"/>
+    <param name="sim" value="$(var use_sim_time)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>

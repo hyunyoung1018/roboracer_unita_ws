@@ -1,0 +1,43 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>raceline</name>
+  <version>0.0.0</version>
+  <description>
+    Offline global raceline generation for roboracer: turns a saved occupancy map
+    into global_waypoints.json, and republishes it at runtime.
+    Derived from ForzaETH race_stack (planner/global_planner), which builds on TUM
+    FTM global_racetrajectory_optimization (vendored under raceline/).
+  </description>
+  <maintainer email="imsunghy@gmail.com">young</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>f110_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-matplotlib</exec_depend>
+  <exec_depend>python3-skimage</exec_depend>
+  <!-- raceline_tuner only. The interactive markers it edits the line
+       with, and the one tkinter prompt its numeric menu items use. -->
+  <exec_depend>interactive_markers</exec_depend>
+  <exec_depend>python3-tk</exec_depend>
+
+  <!-- trajectory_planning_helpers and quadprog are not on rosdep; they come from
+       the workspace-level requirements.txt (pip install -r requirements.txt). -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

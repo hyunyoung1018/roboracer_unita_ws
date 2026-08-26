@@ -1,0 +1,75 @@
+<?xml version="1.0"?>
+<!--
+  raceline_tuner.launch.xml - edit a saved raceline by hand, in RViz.
+
+  Ported from UNICORN's launch of the same name. Reads the map folder's
+  global_waypoints.json - the same file raceline_generator writes and
+  raceline_publisher serves at race time - puts an interactive marker on every
+  waypoint, and writes it back when you pick Save. The car drives what comes
+  out of this.
+
+  It fills the gap between "the line is wrong at this one corner" and
+  "regenerate the line". raceline_generator.launch.xml is minutes of IQP and
+  hands back a NEW line, so moving one apex used to cost every other corner
+  that had already been tuned.
+
+      ros2 launch stack_master raceline_tuner.launch.xml map:=map_positive
+
+  Right-click any waypoint marker for the menu:
+
+    pose_smooth / vel_smooth      smooth over 10 / 20 / 30 / n waypoints
+    Anchor1, Anchor2              mark the ends of a span
+    Pos_Straighten                straighten the span in xy
+    Vel_Straighten / Vel_Set      ramp / set the speed over the span
+    entire_translation, _rotation move or turn the whole line
+    Control-Z                     undo
+    Update                        republish without writing
+    Save                          write global_waypoints.json
+
+  Save rewrites the map folder's global_waypoints.json in place. It is
+  version-controlled, so `git diff` is the record of what changed and
+  `git checkout` is the way back - take that as the undo of last resort
+  rather than trusting Control-Z with a session's worth of edits.
+
+  The sector yamls are NOT re-sliced here. speed_scaling.yaml and
+  ot_sectors.yaml index waypoints by number, and this tool does not add or
+  remove waypoints, so existing sector boundaries still land where they did.
+  Re-slice with raceline_generator.launch.xml only if you want them moved.
+
+  DO NOT run this next to time_trials / head_to_head / base_system. It
+  publishes /global_waypoints, which those publish too, and two publishers on
+  the topic the car steers by is a corrupted pipeline rather than an error.
+-->
+<launch>
+  <arg name="map" description="Map name (folder in stack_master/maps/)"/>
+  <arg name="rviz" default="true"
+       description="RViz with the interactive markers. Without it there is
+                    nothing to drag - this is the tool's whole interface."/>
+
+  <let name="maps_dir" value="$(find-pkg-share stack_master)/maps"/>
+
+  <!-- ===== the tuner =====
+       map_dir, not map: our read/write_global_waypoints take a directory.
+       `map` is passed too, for the node's own logging. -->
+  <node pkg="raceline" exec="raceline_tuner" name="raceline_tuner"
+        output="screen" emulate_tty="true">
+    <param name="map"     value="$(var map)"/>
+    <param name="map_dir" value="$(var maps_dir)/$(var map)"/>
+  </node>
+
+  <!-- ===== map source: the background to judge the line against ===== -->
+  <node pkg="nav2_map_server" exec="map_server" name="map_server" output="screen">
+    <param name="yaml_filename" value="$(var maps_dir)/$(var map)/$(var map).yaml"/>
+  </node>
+  <node pkg="nav2_lifecycle_manager" exec="lifecycle_manager"
+        name="lifecycle_manager" output="screen">
+    <param name="autostart"  value="true"/>
+    <param name="node_names" value="[map_server]"/>
+  </node>
+
+  <!-- raceline_tuner.rviz, not raceline.rviz: the generator's config has no
+       InteractiveMarkers display, so the markers would not be there to drag
+       and the tool would look broken rather than absent. -->
+  <node pkg="rviz2" exec="rviz2" name="rviz2" if="$(var rviz)"
+        args="-d $(find-pkg-share raceline)/rviz/raceline_tuner.rviz"/>
+</launch>

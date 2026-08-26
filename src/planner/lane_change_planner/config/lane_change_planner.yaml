@@ -1,0 +1,34 @@
+change_avoidance_node:
+  ros__parameters:
+    rate_hz: 20.0
+    lookahead: 15.0
+    vehicle_width: 0.28
+    safety_margin: 0.10
+    lane_offset: 0.35
+    back_to_raceline_before: 3.0
+    back_to_raceline_after: 3.0
+    obs_traj_thresh: 2.0
+    spline_bound_mindist: 0.05
+    pred_timeout: 0.5
+    max_evasion_start_offset: 0.8
+    # [m] How much of the opponent's 2 s predicted future the evasion corridor
+    # must be clear on one side for. The full span is 6 m at 3 m/s and on
+    # test_213 only 2% of the lap admits that; 3 m admits 53%. The planner
+    # replans at 20 Hz so the corridor extends itself. See _truncate_prediction.
+    prediction_span_m: 3.0
+    # [m] Distance over which the path is blended off the car's current d onto
+    # the planned profile, so the first waypoint is where the car actually is.
+    start_blend_m: 1.0
+    path_resolution: 0.10
+    side_switch_frames: 10
+    # 5 -> 7. cv2.MORPH_ELLIPSE of size k erodes by (k-1)/2 pixels, and these
+    # maps are 0.05 m/cell, so 5 gave a 0.10 m margin. The grid test only looks
+    # at the path's CENTRE LINE, so that margin is all that stands between the
+    # car's body and the wall - and the car's half width is 0.14 m. 7 gives
+    # 0.15 m, which covers the body and nothing more. Raising it to 9 (0.20 m)
+    # buys room for localisation error but the narrowest point on test_213 is
+    # 1.05 m wide, so check the planner still finds paths there before doing it.
+    map_erosion_kernel_size: 7
+    clear_after_frames: 5
+    empty_path_publish_hz: 1.0
+    measure: false

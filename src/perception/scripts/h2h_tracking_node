@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Console entry point for the head-to-head tracker.
+
+Same mechanism as `scripts/tracking_node`: ament_python_install_package
+installs the module but generates no scripts, so this file is what
+`ros2 run perception h2h_tracking_node` finds. Only head_to_head.launch.xml
+starts it; time_trials keeps running `tracking_node`."""
+
+from perception.h2h_tracking_node import main
+
+if __name__ == '__main__':
+    main()

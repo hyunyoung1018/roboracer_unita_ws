@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>parameter_event_handler</name>
+  <version>0.0.0</version>
+  <description>
+    rclpy's ParameterEventHandler, backported for Humble, which does not ship
+    it. Taken from ForzaETH's race_stack, which carried it inside their
+    stack_master; ours is ament_cmake and has no python module, and a node
+    depending on stack_master would be a cycle anyway. It lives here so the
+    nodes that watch each other's parameters - sector_tuner, ot_interpolator,
+    state_machine - share one copy. Delete it when the distro provides it.
+  </description>
+  <maintainer email="imsunghy@gmail.com">young</maintainer>
+  <license>Apache License 2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

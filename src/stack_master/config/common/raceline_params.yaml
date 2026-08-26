@@ -1,0 +1,25 @@
+# Parameters for raceline/raceline_generator.
+# Node name must match the one used in raceline_generator.launch.xml.
+
+raceline_generator:
+  ros__parameters:
+    # [m] vehicle width used by the main raceline optimization: real car width
+    # plus the clearance to keep off the walls. Raise it if the line clips
+    # apexes, lower it to go faster on a track you trust.
+    safety_width: 0.9
+
+    # [m] same, for the shortest-path (overtaking) line. Usually equal or
+    # slightly smaller, since the overtaking line is allowed to run tighter.
+    safety_width_sp: 0.9
+
+    # Morphological opening kernel [cells] applied before skeletonizing.
+    # 0 disables it. 5 is what a raw cartographer map needs: on test_1 it takes
+    # the closed-contour count from 5 down to 2, which is the clean signature of
+    # a single track loop. Hand-drawn maps are unaffected by it.
+    # (The free/occupied threshold is NOT a parameter - it comes from each map's
+    # own free_thresh, see map_io.binarize.)
+    filter_kernel_size: 5
+
+    # [s] how long to wait for an RViz "2D Pose Estimate" to set the start line.
+    # 0 skips the wait and uses start_pose / track_meta.yaml / the map origin.
+    start_pose_timeout: 30.0

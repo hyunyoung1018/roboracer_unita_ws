@@ -1,0 +1,197 @@
+# Head-to-head only overlay for state_machine_params.yaml.
+#
+# Loaded AFTER the shared file in head_to_head.launch.xml, so every key here
+# wins and every key NOT here keeps its shared value. time_trials.launch.xml
+# does not load this file, so static avoidance is untouched by anything below.
+#
+# The shared numbers were inherited from a much larger track. This workspace's
+# maps measure 20-22 m of centre line, so a 15-20 m horizon covers most of the
+# lap and every obstacle anywhere reads as "in front of us".
+state_machine:
+  ros__parameters:
+    # [Hz] Main loop. 80 -> 40.
+    #
+    # Head-to-head runs 27 processes on six cores and the measured result was
+    # all six at 100%, with the particle filter reporting
+    # `iters per sec: 39, possible: 65` - starved on 310 of 310 samples. This
+    # loop is one of the larger consumers: every iteration runs the free
+    # checks, and each of those walks the obstacle list against up to 20
+    # predicted poses with an argmin over the whole avoidance path.
+    #
+    # Nothing here needs 80 Hz. The planners publish at 20 Hz, the detector at
+    # 20, the predictor at 20; at 80 the state machine re-decided four times
+    # per input. The controller runs its own loop and is unaffected.
+    #
+    # Every derived counter scales with this automatically - overtaking_ttl,
+    # splini_ttl, the FTG timer and the blended-recovery grace are all
+    # `seconds * rate_hz` - so the timings in seconds are unchanged.
+    rate: 40
+
+    # [m] How far ahead an obstacle counts as interesting. Was 20.0 against a
+    # 21.9 m lap (test_213) - 91% of the track, so the only obstacle NOT in the
+    # list was one within 1.9 m BEHIND the car. That makes
+    # cur_obstacles_in_interest permanently non-empty and every
+    # RacelineTrackingTransition take the obstacle branch.
+    #
+    # 9.0 matches what the car can actually see: max_viewing_distance is 9.0 m.
+    # The opponent is seen well inside that - the detector is time_trials' now,
+    # and the 0.12 m pillar falls under min_size_n 8 beyond about 3.4 m - so
+    # this is a ceiling on the list, not the thing that limits acquisition.
+    interest_horizon_m: 9.0
+
+    # [m] How far ahead of the car the static avoidance path may begin and
+    # still be accepted, with the raceline filling the gap.
+    #
+    # spline samples from max(control_s[0], car_s), so while the car is still
+    # behind the first approach knot the path starts 4*scale metres before the
+    # obstacle, scale = clip(1 + v/v_max, 1, 1.5). The shared on-spline test
+    # wants the car within on_spline_min_dist_thres_m (1.5 m) of it, which
+    # happens around 7.5 m of gap - while trailing has been braking since
+    # 11.8 m at 3 m/s. Those four metres are the window where the planner has
+    # already drawn a path and the state machine will not take it.
+    #
+    # Raise it and the car commits to an avoidance further out; lower it
+    # towards 0 and the old brake-then-swerve comes back. Only ever used while
+    # the car is on the raceline, because the gap is filled with raceline.
+    static_path_lead_in_m: 4.0
+
+    # [m] _check_enemy_in_front, which is what refreshes the OVERTAKE TTL. At
+    # 15.0 on a 21.9 m lap the answer was almost always yes, so the TTL never
+    # expired and OVERTAKE was held by a car on the far side of the track.
+    gb_horizon_m: 8.0
+
+    # [m] How far off the raceline an obstacle may sit and still be something
+    # this car trails or plans around. Beyond it, it is scenery.
+    #
+    # The car drove into a wall following a pillar. Every candidate list in the
+    # head-to-head wrapper was "the nearest thing ahead" with no lateral test
+    # at all, so a table leg 0.8 m off the line - which the raceline clears by
+    # a wide margin and no planner would ever move for - became the trailing
+    # target, and head to head trails at 0.8 m. time_trials never meets this:
+    # its trailing target is only ever something that actually blocks the
+    # raceline, and it holds 2.5 m.
+    #
+    # 0.6 is spline_node's trajectory_threshold, deliberately. The planner
+    # already uses exactly this number to decide which obstacles are worth
+    # looking at, and a target the planner will not plan for is not a target
+    # the state machine should offer either. Move the two together.
+    #
+    # The selected opponent is exempt: the corridor gate that picks it allows
+    # it anywhere its footprint fits the track, which is wider than this.
+    trailing_lateral_threshold_m: 0.6
+
+    # [m/s] Speed advantage a dynamic overtake needs before it may arm, taken
+    # against the SCALED raceline speed at the car's own s rather than against
+    # its current speed.
+    #
+    # It cannot be measured against the current speed, and that is arithmetic
+    # rather than tuning: trailing drives the ego at the opponent's speed, so
+    # once the gap settles the difference is zero and any positive bar would
+    # shut the gate exactly when trailing is working. The raceline says what
+    # this car could do here with nothing in the way.
+    #
+    # Time spent alongside is about (car length + margin) / advantage, so 1 m
+    # over a 2 s prediction horizon puts the floor at 0.5 m/s. 1.0 is double
+    # that, because 2 s is the optimistic figure - the lane-change planner
+    # validates only 3 m of the opponent's future (prediction_span_m), and a
+    # pass that outlasts that ends on a prediction nothing checked.
+    #
+    # The old gate (cur_vs - opponent_vs > -0.5) is unchanged and still runs
+    # first; this is an additional condition, not a replacement. That one
+    # catches "already losing ground", which this one cannot see - the
+    # raceline does not know the car is crawling round a box.
+    #overtake_min_speed_advantage_mps: 0.7
+    overtake_min_speed_advantage_mps: 1.0
+
+    # --- dynamic avoidance planner (lane_change) -----------------------------
+    # These keys live in state_machine/config/planners/dynamic_avoidance_planner.yaml
+    # for both launches; overriding them here keeps that file - and therefore
+    # time_trials - unchanged. cur_avoidance_wpnts is never initialised in
+    # time_trials (nothing publishes /planner/avoidance/otwpnts there), but the
+    # overlay makes that independent of the argument.
+    # time_trials moved the shared pass-or-avoid threshold to 0.30
+    # (global_tracking.yaml lateral_width_m 0.16). Head-to-head's spline is
+    # still pinned at evasion/raceline_clearance 0.24 by
+    # h2h_perception.yaml, and the three numbers must agree or the state
+    # machine asks for avoidances the planner refuses to draw. Keep
+    # head-to-head on the 0.24 pairing it was tuned on.
+    # global_tracking.lateral_width_m is deliberately NOT overridden here.
+    #
+    # It was 0.10 against the shared 0.16, and it cannot move on its own:
+    # spline_node's raceline_clearance_m is tuned to equal gb_ego_width_m/2
+    # plus this number, which is how the planner and the state machine agree
+    # about whether the raceline is blocked. 0.14 + 0.10 = 0.24 paired with
+    # the old h2h clearance; now that h2h uses the shared 0.30, this has to be
+    # the shared 0.16 too. 0.14 + 0.16 = 0.30.
+    #
+    # Measured with the pair mismatched: the raceline was called blocked at
+    # "free +0.089, needs 0.100" while the avoidance the planner offered for
+    # the same obstacle was three centimetres wide.
+
+    dynamic_avoidance_planner:
+      # [s] How long a cached avoidance path keeps being sliced into
+      # local_waypoints after the planner stopped publishing. Was 6.0 / 10.0.
+      # On a 21.9 m lap at 3 m/s, 6 s is 18 m - most of a lap driven on a line
+      # planned for where the opponent used to be. The planner runs at 20 Hz,
+      # so 1 s is 20 missed frames: enough to ride out a detector dropout,
+      # short enough that a withdrawn path stops being followed.
+      hyst_timer_sec: 1.0
+      killing_timer_sec: 2.0
+
+      # [m/s] Ceiling on the avoidance path, the same knob static avoidance
+      # uses. Without it get_planner_param returns None, max_speed stays None
+      # and the ggv profile runs the evasion swerve at raceline speed through a
+      # metre-wide corridor. Static is held at 2.0; dynamic gets a little more
+      # because it also has to close on a moving car, not just pass a box.
+      max_speed_mps: 2.5
+
+      # [-] Scales motor accel/brake limits only - it does not bound cornering
+      # speed, max_speed_mps does. Static uses 0.6.
+      vel_planner_safety_factor: 0.7
+
+      # [m] Clearance the state machine demands beyond half the car's width
+      # before it calls the lane-change path free. 0.08 -> 0.05.
+      #
+      # The planner draws the path at the obstacle's edge + vehicle_width/2 +
+      # safety_margin = 0.14 + 0.10 = 0.24 m. This check demands the obstacle's
+      # half width + gb_ego_width_m/2 + this = 0.14 + 0.08 = 0.22 m. Two
+      # centimetres of agreement, and the two are not even measured at the same
+      # instant: the planner validates against the poses it truncated to, this
+      # samples pred_d wherever the prediction happens to be. Two centimetres of
+      # drift in the opponent's estimated d refuses a correctly planned path.
+      #
+      # 0.05 is what static avoidance already uses, and its comment explains
+      # why that is a real margin rather than padding: gb_ego_width_m is now the
+      # car's true 0.28 m, so free_dist is the actual gap between the car's side
+      # and the obstacle's edge. Dynamic had no reason to be stricter than
+      # static - the planner applies its own 0.10 m safety_margin on top.
+      lateral_width_m: 0.16
+
+    # --- recovery planner ----------------------------------------------------
+    # recovery_node now publishes /planner/recovery/wpnts (it had no publisher
+    # at all before, so RECOVERY was unreachable). Its shared yaml still says
+    # latest_threshold 0.1, which is two cycles of a 20 Hz planner - the same
+    # slack the static planner already had to give up on this jetson, where a
+    # correctly planned path was refused as "0.171 s old".
+    recovery_planner:
+      latest_threshold: 0.25
+
+      # The shared yaml still carries `enabled: false`, and its comment gives
+      # the reason: nothing published /planner/recovery/wpnts, so asking was
+      # pointless. head_to_head launches recovery_node, so that reason no
+      # longer holds here - but the flag was never lifted, and the state
+      # machine has therefore gone on refusing RECOVERY on this launch too.
+      #
+      # What that costs is written in the launch's own comment about why
+      # recovery_node was added: "a car off the raceline was handed the
+      # raceline itself, cutting back to it from wherever it was". That is
+      # exactly what an aborted overtake produces - the car is mid-swerve, off
+      # the line, and ObstacleTransition's last two branches both hand it
+      # RACELINE. Measured on map_yes, the car started 23 overtakes in two
+      # minutes, abandoned all 23 after about half a second each, and the
+      # resulting oscillation walked it into a wall; the trailing-only control
+      # run drove six clean laps.
+      #
+      # time_trials loads state_machine_params.yaml without this overlay, so
+      # its recovery planner stays disabled and its behaviour is unchanged.
+      enabled: false

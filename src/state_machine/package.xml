@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>state_machine</name>
+  <version>0.0.0</version>
+  <description>UNITA racing state machine: selects the driving mode (global tracking, trailing, overtaking, recovery, start, follow-the-gap) for the F1TENTH stack.</description>
+  <maintainer email="unita@todo.todo">unita</maintainer>
+  <license>MIT</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>visualization_msgs</depend>
+  <depend>f110_msgs</depend>
+  <!-- NOT stack_master. It launches this node, so depending back on it is a
+       cycle colcon cannot order. The paths this node used it for arrive as the
+       config_dir and map_dir parameters instead. -->
+  <depend>vel_planner</depend>
+  <depend>parameter_event_handler</depend>
+
+  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-transforms3d</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

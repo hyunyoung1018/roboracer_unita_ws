@@ -1,0 +1,129 @@
+# robot_localization EKF for RACING, fusing the particle filter with wheel odometry.
+#
+# This is the node that produces /car_state/odom, which the controller and the
+# planners all consume. It also owns the map -> ego_racecar/base_link transform
+# while racing, the way cartographer owns it while mapping. Never run both.
+#
+# The split is the point:
+#   /pf/pose/odom   absolute position and heading, accurate but low rate and
+#                   it jumps when the filter resamples
+#   /vesc/odom      forward speed and yaw rate, high rate and smooth, but it
+#                   drifts without bound
+# Taking pose from one and velocity from the other gives a 100 Hz pose that is
+# both smooth and absolute. Neither source is used for what it is bad at, which
+# is why the config vectors below are so sparse.
+#
+# The TF chain is the standard REP-105 one, and it has to be: robot_localization
+# on Humble refuses to start if map_frame, odom_frame and base_link_frame are not
+# all distinct ("Invalid frame configuration!"). Collapsing odom_frame onto
+# base_link, which their distro tolerates and ours does not.
+#
+#   map  -> odom          this node, the correction
+#   odom -> base_link     vesc_to_odom, dead reckoning between corrections
+#
+# So vesc_to_odom's publish_tf has to be TRUE while localising. It stays false
+# while mapping, where cartographer owns map -> base_link outright; that is what
+# hardware.launch.xml's odom_tf argument switches.
+
+ekf_localization:
+  ros__parameters:
+    # Match the fastest input, do not exceed it. /vesc/odom arrives at 50 Hz
+    # (vesc_driver's 20 ms state timer) and /pf/pose/odom at about 41; at 100
+    # half the iterations predicted forward with nothing new to correct
+    # against, and this node was already missing its deadline.
+    frequency: 50.0
+    sensor_timeout: 0.1
+    two_d_mode: true
+
+    # This node owns map -> ego_racecar/base_link. The particle filter's own
+    # publish_tf must stay false (see pf.yaml).
+    publish_tf: true
+
+    map_frame:       map
+    odom_frame:      odom
+    base_link_frame: ego_racecar/base_link
+    world_frame:     map
+
+    # Apply the particle filter's pose at the time it BELONGS to, not at the
+    # time it arrives.
+    #
+    # /pf/pose/odom is stamped with the scan it was computed from, and it
+    # reaches this node one full MCL update later. That delay is exactly what
+    # the filter prints as `possible` - the number is one over the wall time
+    # of a single MCL step, so possible 100 is 10 ms late and possible 45 is
+    # 22 ms late, on top of the 25 ms the scan itself took to sweep.
+    #
+    # Without these two, robot_localization has no state history to rewind
+    # into, so it corrects the CURRENT state with a pose the car held 40 ms
+    # ago. At 5 m/s that is 22 cm behind. The velocity prediction pushes
+    # forward, the stale correction pulls back, and base_link oscillates on
+    # the map while the particle cloud itself sits tight and correct on the
+    # car - which is exactly what was seen, and why the wobble tracked
+    # `possible` so closely. The amplitude is latency times speed.
+    #
+    # history_length only has to cover the worst latency. 0.2 s is eight
+    # times the scan period and still only ten filter steps to replay.
+    smooth_lagged_data: true
+    history_length: 0.2
+
+    # --- wheel odometry: velocities only ---
+    #             x      y      z
+    #             roll   pitch  yaw
+    #             vx     vy     vz
+    #             vroll  vpitch vyaw
+    #             ax     ay     az
+    odom0: /vesc/odom
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  false, false,
+                   false, false, true,
+                   false, false, false]
+    odom0_differential: false
+    odom0_queue_size: 5
+    odom0_nodelay: true
+
+    # --- particle filter: absolute pose only ---
+    odom1: /pf/pose/odom
+    odom1_config: [true,  true,  false,
+                   false, false, true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]
+    odom1_differential: false
+    odom1_queue_size: 5
+    odom1_nodelay: true
+
+    # --- the gyro: yaw rate only ---
+    #
+    # /vesc/odom's yaw rate is not measured. vesc_to_odom takes the servo
+    # COMMAND, puts it through a bicycle model, and reports the result - so it
+    # says how fast the car would be turning if the tyres never slipped. They
+    # do, and the error is systematic rather than noise, so it accumulates in
+    # one direction and drags odom away from map exactly the way it was seen
+    # to in RViz.
+    #
+    # The car has a real gyro and until now nothing in localisation used it.
+    # Mapping does: cartographer runs on it (tracking_frame is the imu link,
+    # use_imu_data is true) and deliberately ignores wheel odometry
+    # altogether. Racing was leaning on the source mapping had rejected.
+    #
+    # Yaw rate ONLY. The orientation quaternion is the VESC's own AHRS and
+    # nothing has ever consumed it; the accelerations are noisy at this scale
+    # and the EKF has no use for them with two_d_mode on. Sparse, like the
+    # other two.
+    #
+    # The frame is ego_racecar/imu (vesc.yaml's imu_frame_id) and the URDF
+    # describes its mounting, so robot_localization rotates it through TF -
+    # do not pre-rotate anything here.
+    imu0: /vesc/sensors/imu/raw
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_differential: false
+    imu0_queue_size: 10
+    imu0_nodelay: true
+    imu0_remove_gravitational_acceleration: false
+
+    use_control: false

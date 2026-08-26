@@ -1,0 +1,137 @@
+<?xml version="1.0"?>
+<!--
+  straight_test.launch.xml - autonomous driving with no map.
+
+  The whole drive chain except the parts that need a track: hardware, one
+  autonomous source that only ever says "straight ahead", and the mux that
+  arbitrates it against the joystick.
+
+      ros2 launch stack_master straight_test.launch.xml
+      ros2 launch stack_master straight_test.launch.xml speed:=1.5
+
+  No cartographer, no particle filter, no raceline, no state machine, no
+  controller - so no map argument and nothing to localise against. Point the
+  car down an open space and go.
+
+      straight_drive  -> /vesc/high_level/ackermann_cmd   (constant, steering 0)
+      simple_mux      that vs /joy -> /vesc/ackermann_cmd
+
+  THE BUTTONS ARE THE ONES THE REST OF THE STACK USES, unchanged, because they
+  are simple_mux's and this file starts the same mux with the same parameters
+  as time_trials:
+
+      RB (5)  autodrive  - straight_drive's constant speed reaches the VESC
+      LB (4)  humandrive - your stick drives the car
+      B  (1)  stop       - publish zero and stay there
+
+  They are TOGGLES on the rising edge, not deadmen: press RB once and the car
+  goes, press it again (or B) and it stops. Nothing moves until one is pressed
+  - the mux publishes nothing at all before the first mode is selected. LB and
+  RB together is read as ambiguous and stops the car, and so does a source that
+  goes stale: a dead straight_drive or a joystick dropout both end in a
+  commanded zero rather than the last speed repeating.
+
+  Speed steps from 0 to `speed` the instant RB is pressed - straight_drive has
+  no idea what mode the mux is in, so there is nothing to ramp. That is the
+  reason the default is walking pace. Turn it up on the running node once the
+  chain is proven, no relaunch:
+
+      ros2 param set /straight_drive speed 1.5
+
+  joy_teleop is NOT started (teleop:=false). The mux reads /joy itself, and
+  running both would put two publishers on the drive topic. The joystick DRIVER
+  stays on - without it nothing publishes /joy and no button is ever seen.
+
+  Bench first, wheels off the ground:
+
+      ros2 launch stack_master straight_test.launch.xml lidar:=false estop:=false
+
+  Watch /vesc/ackermann_cmd while pressing the buttons; the mux logs every mode
+  change it makes.
+-->
+<launch>
+  <arg name="speed" default="4.0"
+       description="[m/s] what RB commands. Three times the VESC's openloop
+                    floor and still walking pace. Live: ros2 param set
+                    /straight_drive speed &lt;v&gt;"/>
+  <arg name="max_speed" default="2.0"
+       description="[m/s] ceiling on the live `speed` parameter above."/>
+  <arg name="steering_trim" default="0.0"
+       description="[rad] added to the straight command. Only for a car that
+                    pulls to one side - the shared servo calibration lives in
+                    config/car/vesc.yaml, not here."/>
+
+  <arg name="lidar" default="true"
+       description="Nothing here needs a scan except the estop. false for a
+                    wheels-up bench run."/>
+  <!-- On by default, unlike hardware.launch.xml: B is the brake, and B is a
+       thumb. A commanded stop that current-brakes instead of coasting is the
+       whole point of pressing it. -->
+  <arg name="braking" default="true"
+       description="VESC current braking in the ackermann bridge. See vesc.yaml."/>
+
+  <!-- The only automatic protection in this launch. There is no planner and no
+       map, so a car driving straight drives straight into whatever is there;
+       this clamps the command to zero when the front beams say the gap closes
+       within estop_ttc_threshold seconds. It can only ever slow the car down.
+       Off for a bench run, where /scan is off anyway and it does nothing. -->
+  <arg name="estop" default="true"
+       description="Time-to-collision stop inside the mux. Needs lidar:=true."/>
+  <arg name="estop_ttc_threshold" default="0.35"
+       description="[s] stop if any front beam will be reached sooner than this."/>
+
+  <arg name="joy_max_speed" default="5.0"
+       description="[m/s] full stick under LB. Same as time_trials."/>
+
+  <let name="config_dir" value="$(find-pkg-share stack_master)/config/car"/>
+
+  <!-- ===== the car ===== -->
+  <include file="$(find-pkg-share stack_master)/launch/hardware.launch.xml">
+    <arg name="lidar" value="$(var lidar)"/>
+    <!-- The driver stays on and joy_teleop goes off; see the header. -->
+    <arg name="joy" value="true"/>
+    <arg name="teleop" value="false"/>
+    <arg name="braking" value="$(var braking)"/>
+    <!-- Nothing here claims map -> odom, so wheel odometry is free to close
+         odom -> ego_racecar/base_link and give RViz a complete tree to draw
+         the car in. Localisation is what makes this a contested edge; there
+         is none in this launch. -->
+    <arg name="odom_tf" value="true"/>
+  </include>
+
+  <!-- ===== the autonomous source ===== -->
+  <!-- Publishes continuously and ignores the joystick entirely. The mux is
+       what decides whether any of it reaches the VESC. -->
+  <node pkg="stack_master" exec="straight_drive_node.py" name="straight_drive" output="screen">
+    <param name="out_topic" value="/vesc/high_level/ackermann_cmd"/>
+    <param name="speed" value="$(var speed)"/>
+    <param name="max_speed" value="$(var max_speed)"/>
+    <param name="steering_angle" value="$(var steering_trim)"/>
+    <param name="rate_hz" value="50.0"/>
+  </node>
+
+  <!-- ===== command arbitration ===== -->
+  <!-- The only thing that reaches the VESC. Same node and the same numbers as
+       time_trials.launch.xml, so the buttons behave identically in both. -->
+  <node pkg="stack_master" exec="simple_mux_node.py" name="simple_mux" output="screen">
+    <param name="in_topic"  value="/vesc/high_level/ackermann_cmd"/>
+    <param name="out_topic" value="/vesc/ackermann_cmd"/>
+    <param name="joy_max_speed" value="$(var joy_max_speed)"/>
+    <!-- [rad] the car's measured steering limit. The mux default is 0.4,
+         which asks for more than the car has. -->
+    <param name="joy_max_steer" value="0.2954"/>
+    <!-- The mux carries its own copy of the servo calibration for its steering
+         clip. Point it at the real numbers so the two cannot drift apart;
+         config/car/vesc.yaml is where they are kept. -->
+    <param name="steering_angle_to_servo_gain"   value="-1.1"/>
+    <param name="steering_angle_to_servo_offset" value="0.445"/>
+    <param name="servo_min" value="0.12"/>
+    <param name="servo_max" value="0.77"/>
+    <param name="use_estop" value="$(var estop)"/>
+    <param name="estop_ttc_threshold" value="$(var estop_ttc_threshold)"/>
+    <!-- The estop reads these two directly; both exist without localisation. -->
+    <param name="scan_topic" value="/scan"/>
+    <param name="odom_topic" value="/vesc/odom"/>
+    <param name="sim" value="false"/>
+  </node>
+</launch>

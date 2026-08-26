@@ -1,0 +1,90 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://ros.org/wiki/xacro">
+
+  <link name="${car_name}/imu">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.05 0.05 0.05"/>
+      </geometry>
+      <material name="Red"/>
+    </visual>
+  </link>
+
+  <!-- VESC 6 MkVI onboard IMU. Yaw -90 deg; no roll.
+
+       The board is mounted turned 90 deg CLOCKWISE from the car's forward
+       direction, so the imu frame is -90 about z from base_link. Sign follows
+       from that directly: rpy rotates child vectors into the parent.
+
+       The chip is mounted upside down on the board, but the FIRMWARE already
+       corrects for that, so the data reaching us is Z up. Measured, level and
+       still, on /vesc/sensors/imu/raw:
+
+           linear_acceleration:  x 0.139   y 0.082   z 9.910
+
+       An accelerometer at rest reads the reaction to gravity, so +9.9 on z is
+       z pointing up; a flipped frame would read -9.9. That topic comes
+       straight from the driver and never passes through this file, which is
+       what makes it a clean measurement of the sensor frame rather than of
+       what we claim about it. Adding roll=pi here describes the chip instead
+       of the data and applies the flip a second time.
+
+       So: up = +imu.z, and the yaw rate is +angular_velocity.z. Confirmed on
+       the same topic by turning the car slowly counter-clockwise - z rose to
+       +0.24 rad/s and held there for the whole turn, then came back to zero.
+
+       VESC TOOL DISAGREES AND IS NOT WRONG. Its display shows a positive yaw
+       for a RIGHT turn, because it uses the aviation convention where yaw runs
+       like a compass heading; ROS (REP-103) has positive yaw counter-clockwise.
+       Reading that + as "the board is upside down" is what put roll=pi in here
+       once. Judge this from the topic, never from the tool.
+
+       With no roll and yaw -90 the axes are
+
+           forward = +imu.y    left = -imu.x    up = +imu.z
+
+       Confirm by pushing the car forwards: imu.y should go POSITIVE. (This
+       spent a while at +1.5708, from believing Z faced the floor. It is worth
+       knowing that Rz(+90)Rx(180) and Rz(-90) give the same forward axis, so
+       that combination was self-consistent right up until the accelerometer
+       showed Z was up.)
+
+       The yaw does not reach cartographer: it tracks in this frame and
+       publishes base_link, so a constant rotation between imu and laser is
+       applied and then taken back off, and 2D uses only gyro z, which a yaw
+       rotation leaves alone. Maps made before this was corrected are fine.
+       controller_manager is different - it reads the longitudinal component
+       out, so there the yaw matters.
+
+       VESC Tool's own Imu Rotation (roll 7.4 / pitch -4.7 / yaw 0) is mounting
+       tilt only. Leave the 90 out of it; this joint is where it belongs.
+
+       This joint is the single description of the mounting. controller_manager
+       reads it back through TF to rotate the IMU into the car's axes, and
+       cartographer tracks in this frame, so an error here rotates the
+       controller's yaw rate and tilts the map with no other symptom. -->
+  <joint name="imu_joint" type="fixed">
+    <parent link="${car_name}/base_link"/>
+    <child link="${car_name}/imu"/>
+    <origin xyz="0.07 0.0 ${wheel_radius+0.04}" rpy="0 0 -1.5708"/>
+  </joint>
+
+  <link name="${car_name}/laser">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <mesh filename="package://albomb_description/meshes/UST-10LXB.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="Blue"/>
+    </visual>
+  </link>
+
+  <joint name="laser_joint" type="fixed">
+    <parent link="${car_name}/base_link"/>
+    <child link="${car_name}/laser"/>
+    <origin xyz="0.259 0.0 ${wheel_radius+0.0768}" rpy="0 0 0"/>
+  </joint>
+
+  
+</robot>

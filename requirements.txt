@@ -1,0 +1,90 @@
+# roboracer_unita_ws - Python deps that rosdep cannot install.
+#
+# Target: Ubuntu 22.04 / ROS 2 Humble. See README.md for the full setup order.
+#
+#     pip install --no-deps -r requirements.txt
+#
+# --no-deps is REQUIRED, not a shortcut. trajectory_planning_helpers declares
+# `quadprog==0.1.7` and `matplotlib>=3.3.1`; resolving those would
+#   - downgrade quadprog to 0.1.7, whose aarch64 build is broken
+#     (ImportError: undefined symbol: _Z7qpgen2_...), and
+#   - install a pip matplotlib that silently breaks mpl_toolkits (see below).
+# Anything this file needs beyond that is already present from apt or from the
+# vendored f1tenth_gym install.
+#
+# scikit-image, yaml and matplotlib come from apt via rosdep, declared in each
+# package.xml:
+#
+#     rosdep install --from-paths src --ignore-src -y
+#
+# numpy and scipy arrive with the editable f1tenth_gym install (see README).
+#
+# NEVER `pip install matplotlib`. apt's python3-matplotlib ships mpl_toolkits
+# as a REGULAR package (it has an __init__.py), and Python's import rules let a
+# regular package beat a namespace portion found earlier on sys.path. So a pip
+# matplotlib wins for `matplotlib` while apt still wins for `mpl_toolkits`, and
+# you get a new matplotlib paired with an old mpl_toolkits. That combination
+# fails at `from mpl_toolkits.mplot3d import Axes3D` with
+# `cannot import name 'docstring'`, which takes down the whole raceline import
+# chain. Same applies to `pip install --user`.
+#
+# Pin a line only after a version actually breaks, and say why here.
+#
+# Do NOT install the vendored subtree's own requirements file
+# (src/planner/raceline/raceline/global_racetrajectory_optimization/requirements.txt).
+# It pins numpy==1.18.1 / matplotlib==3.3.1 from 2020 and will fight the system
+# packages. Its real content is reproduced below at working versions.
+
+# NEVER let numpy 2 into this venv. scikit-image and opencv come from apt,
+# built against numpy 1.x; a pip numpy 2 shadows apt's copy and breaks both at
+# import. README step 4 pins numpy<2 for this reason.
+
+# --- Global raceline optimization (raceline package) ---
+# The solvers behind mincurv_iqp and shortest_path.
+#
+# Pinned (see the "deliberately unpinned" note above - this is the exception it
+# describes). 0.79, the current PyPI release, added spline_len/psi/kappa/dkappa
+# as required arguments to iqp_handler(). The vendored ForzaETH optimizer calls
+# the old signature, so mincurv_iqp dies with a TypeError on anything newer.
+# 0.76 is what the vendored subtree's own requirements.txt targets.
+trajectory_planning_helpers==0.76
+
+# Progress bars in sector_tuner's ot_interpolator and sector_slicer. Small, but
+# imported at module scope, so without it ot_interpolator does not start - and
+# the state machine waits forever on the topic it would have published.
+tqdm>=4.60
+
+# QP backend used by opt_min_curv / iqp_handler. Must be listed explicitly:
+# --no-deps means tph's own quadprog dependency is not resolved.
+#
+# The lower bound is load-bearing, and it is not about features. The venv is
+# created with --system-site-packages, so pip counts anything in ~/.local or
+# /usr/lib/python3/dist-packages as already installed and skips it. Unpinned,
+# `quadprog` is satisfied by whatever is already on the system - including
+# tph's own 0.1.7, whose aarch64 wheel fails at import with
+#   ImportError: undefined symbol: _Z7qpgen2_...
+# pip then installs nothing, the venv gets no quadprog of its own, and the
+# raceline node dies on import. RViz still comes up, so it looks like clicks
+# are being ignored rather than like a crash.
+#
+# 0.1.13 is verified working on aarch64. Keep a lower bound on anything added
+# here that a stale user-site install could shadow.
+quadprog>=0.1.13
+
+# --- Localisation ---
+# apt's python3-transforms3d on 22.04 still calls np.float and
+# np.maximum_sctype, both removed in numpy 1.24, so it raises
+# "module 'numpy' has no attribute 'float'" the moment anything imports it -
+# which on this stack is tf_transformations, and through it the particle filter
+# and the frenet republisher.
+#
+# The fix is a newer transforms3d in the venv, not an older numpy: scipy >= 1.13
+# (required by the gym) wants numpy >= 1.22.4, so there is no numpy version that
+# satisfies both it and apt's transforms3d.
+transforms3d>=0.4.2
+
+# --- Optional ---
+# casadi is only needed for the 'mintime' optimization, which the raceline
+# package never runs (see raceline/optimizer notes and the vendored
+# LOCAL_CHANGES.md). Uncomment if you wire mintime up.
+# casadi

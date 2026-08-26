@@ -1,0 +1,81 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>stack_master</name>
+  <version>0.0.0</version>
+  <description>Master package for managing launch files and config files</description>
+  <maintainer email="imsunghy@gmail.com">young</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>ackermann_msgs</depend>
+  <depend>joy</depend>
+  <depend>cartographer_ros_msgs</depend>
+  <depend>robot_localization</depend>
+  <depend>std_srvs</depend>
+
+  <!-- Every exec_depend below must name a package that exists. One that does
+       not makes `rosdep install` fail for the whole workspace, not just this
+       package, so add the dependency in the same commit as the package. -->
+
+  <!-- hardware.launch.xml -->
+  <exec_depend>vesc_driver</exec_depend>
+  <exec_depend>vesc_ackermann</exec_depend>
+  <exec_depend>urg_node</exec_depend>
+  <exec_depend>joy_teleop</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <!-- Read-only Hokuyo network preflight/watchdog commands. -->
+  <exec_depend>iproute2</exec_depend>
+  <exec_depend>iputils-ping</exec_depend>
+
+  <!-- mapping.launch.xml -->
+  <exec_depend>cartographer_ros</exec_depend>
+  <exec_depend>mapping</exec_depend>
+
+  <!-- mapping + raceline_generator: map_saver_server / map_server are lifecycle
+       nodes and stay unconfigured without the manager. -->
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+
+  <!-- localization.launch.xml -->
+  <exec_depend>particle_filter</exec_depend>
+  <exec_depend>frenet_odom_republisher</exec_depend>
+
+  <!-- time_trials.launch.xml -->
+  <!-- ackermann_msgs is NOT repeated here: the <depend> above already implies
+       exec, and catkin_pkg rejects the package outright for the redundancy. -->
+  <exec_depend>controller</exec_depend>
+  <exec_depend>state_machine</exec_depend>
+  <!-- time_trials.launch.xml obstacles:=true -->
+  <exec_depend>perception</exec_depend>
+  <exec_depend>spline</exec_depend>
+
+  <!-- head_to_head.launch.xml only -->
+  <exec_depend>spline_planner</exec_depend>
+  <exec_depend>lane_change_planner</exec_depend>
+  <exec_depend>gp_traj_predictor</exec_depend>
+
+  <!-- base_system.launch.xml -->
+  <exec_depend>raceline</exec_depend>
+  <exec_depend>sector_tuner</exec_depend>
+  <exec_depend>lap_analyser</exec_depend>
+
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>foxglove_bridge</exec_depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

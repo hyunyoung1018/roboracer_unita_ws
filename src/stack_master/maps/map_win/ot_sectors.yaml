@@ -1,0 +1,48 @@
+# ot_interpolator:
+#   ros__parameters:
+#     n_sectors: 6
+#     yeet_factor: 1.5
+#     spline_len: 30
+#     Overtaking_sector0:
+#       start: 0
+#       end: 59
+#       ot_flag: true
+#       preferred_side: right
+#     Overtaking_sector1:
+#       start: 60
+#       end: 112
+#       ot_flag: true
+#       preferred_side: left
+#     Overtaking_sector2:
+#       start: 113
+#       end: 135
+#       ot_flag: true
+#       preferred_side: right
+#     Overtaking_sector3:
+#       start: 136
+#       end: 205
+#       ot_flag: true
+#       preferred_side: left
+#     Overtaking_sector4:
+#       start: 206
+#       end: 277
+#       ot_flag: true
+#       preferred_side: right
+#     Overtaking_sector5:
+#       start: 278
+#       end: 421
+#       ot_flag: true
+#       preferred_side: left
+
+# ============================
+
+ot_interpolator:
+  ros__parameters:
+    n_sectors: 1
+    yeet_factor: 1.5
+    spline_len: 30
+    Overtaking_sector0:
+      start: 0
+      end: 421
+      ot_flag: true
+      preferred_side: auto

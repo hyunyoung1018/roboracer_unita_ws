@@ -1,0 +1,401 @@
+detect:
+  # ros__parameters, two underscores. With one, the node matches nothing in
+  # this file and silently falls back to its code defaults - no error, no
+  # warning, and editing anything here does nothing.
+  ros__parameters:
+    # [Hz] Detection frequency.
+    #
+    # 20 because the python detector could not hold 40: it did L-shape
+    # rectangle fitting in python on every tick, the jetson saturated, and /tf
+    # reached the detector a full second late, which put every obstacle a metre
+    # or two behind where it really was.
+    #
+    # The detector is C++ now and that constraint is probably gone, but it has
+    # not been measured. 20 Hz is 50 ms between updates on obstacles that do
+    # not move, approached at under 3 m/s - 15 cm of travel - so there is no
+    # symptom pushing this up. Before raising it, measure:
+    #
+    #   ros2 param set /detect measure true
+    #   ros2 topic echo /detect/latency
+    #
+    # That is now seconds per tick, not a rate. Anything near the tick period
+    # means the timer cannot keep up. Watch for the "placing obstacles with a
+    # X s old transform" warning at the same time - that is the symptom that
+    # made this 20 in the first place.
+    rate_detect: 20.0
+
+    # Which question is asked of every lidar return.
+    #
+    #   grid   - look it up in the eroded map image. One array lookup, no
+    #            waypoint, no coordinate transform. Removes a whole class of
+    #            failure: the alternative has to assign the return to a
+    #            waypoint first, and where the track doubles back it can pick
+    #            the wrong branch. It also stops the track boundary being a
+    #            proxy - an obstacle against a wall is in free space and
+    #            reads as such.
+    #   frenet - the lateral-offset test. Kept to compare the two on the
+    #            same track, and used automatically if the map fails to load.
+    #
+    # boundaries_inflation and max_detect_d_m below apply to `frenet` only.
+    on_track_mode: grid
+
+    # [px] Erosion applied to the map before the lookup, at 0.05 m/px. Walls
+    # grow by this much, so a return landing just inside one is rejected.
+    # 2 px = 10 cm, matching what boundaries_inflation was doing. Raise it if
+    # walls still become obstacles; lower it if an obstacle parked against a
+    # wall disappears.
+    #
+    # Tunable live - it re-erodes the map on the spot:
+    #   ros2 param set /detect filter_kernel_size 3
+    #
+    # This is the grid's ONLY parameter. Everything else it needs - resolution,
+    # origin, and what counts as free - is read from the map's own yaml, so a
+    # grid that behaves oddly is a map problem, not a tuning one.
+    filter_kernel_size: 10
+
+    # Minimum number of LiDAR points in a cluster.
+    #
+    # 4 -> 8. This is the main defence against a wall becoming an obstacle:
+    # four returns leaking through the boundary band were enough to publish
+    # one, which is why boxes appeared along the walls while driving past.
+    #
+    # The real obstacle cannot be that small. A 0.50 m cube subtends, at this
+    # lidar's 0.25 deg resolution:
+    #
+    #   1 m -> 112 beams    3 m -> 38    5 m -> 22    9 m -> 12
+    #
+    # so 8 keeps it out to the 9 m viewing limit with room for grazing angles
+    # and dark faces, while rejecting the short fragments a wall leaks.
+    min_size_n: 8
+
+    # [m] Floor and ceiling on the MEASURED extent of a cluster, per axis.
+    # min_size_m is a floor, not the modelled size: the obstacle's real
+    # footprint is settled over time by the tracker (extent_max_m below),
+    # because a single frame only ever sees the near faces.
+    min_size_m: 0.20
+    max_size_m: 0.60
+
+    # Adaptive breakpoint clustering
+    lambda_deg: 10.0
+    sigma: 0.03
+    min_2_points_dist: 0.01
+
+    # Broken-cluster reconnection
+    new_cluster_threshold_m: 0.40
+
+    # Maximum detection distance
+    max_viewing_distance: 9.0
+
+    # [m] How far inside the track boundary a lidar return must be to count.
+    #
+    # 0.10 -> 0.15. The track measures 1.05 to 1.85 m wide here, and at 0.10
+    # a return within 10 cm of the wall was still accepted - which is inside
+    # the combined localisation and lidar error at range, so wall returns
+    # leaked in continuously. They cluster into short fragments, and a short
+    # fragment is exactly what now becomes a 0.50 m cube.
+    #
+    # Do not push this much further: the narrowest half-width on this track
+    # is 0.33 m, so 0.15 already discards the outer 45% of that side, and a
+    # real obstacle parked against the wall has to stay detectable.
+    boundaries_inflation: 0.15
+
+    # [m] Hard cap on |d| for a lidar return to be clustered at all.
+    #
+    # The track boundary is not a good proxy for "close enough to matter".
+    # map_no's right boundary reaches 1.47 m around s=17.5, so the wall there
+    # is inside the mapped track and boundaries_inflation cannot reject it -
+    # the detector was reporting obstacles at d = -1.4 all along it. The
+    # planner ignores those anyway (trajectory_threshold 0.6 on the centre),
+    # so they were pure cost: an L-shape fit each, and boxes drawn on every
+    # wall the car drove past.
+    #
+    # 0.6 + half of max_size_m, so an obstacle the planner would still
+    # consider keeps all of its points.
+    max_detect_d_m: 0.90
+
+    # UNITA-specific detection FOV
+    # Full Hokuyo scan remains available for localization.
+    detect_fov_deg: 220.0
+
+    # Profiling
+    measure: false
+
+
+
+tracking:
+  ros__parameters:
+    # [m] Ceiling on an obstacle's footprint. This is where the rule's
+    # 50 x 50 cm maximum belongs - as a cap on what may be believed, not as
+    # the assumed size of every obstacle.
+    extent_max_m: 0.50
+
+    # [m/s] How fast a held extent leaks back down. The tracker keeps the
+    # largest extent an obstacle has ever shown, since every frame
+    # under-estimates; this stops one bad frame or a mis-associated detection
+    # from inflating it permanently. 0.05 sheds 5 cm per second, so a genuine
+    # obstacle re-measured at 20 Hz never shrinks, and a phantom fades in a
+    # few seconds.
+    extent_decay_mps: 0.05
+
+    # How many recent measurements the median position of a STATIC obstacle
+    # is taken over. A static obstacle is not moving, but the L-shape fit
+    # lands centimetres apart each frame as the viewing angle changes, and
+    # the avoidance apex sits on the obstacle's edge - so that jitter went
+    # straight into the local path. 10 samples is half a second at 20 Hz.
+    static_position_samples: 10
+
+    association_distance: 0.8
+    # [frames] How long a track survives without being seen, at the detect
+    # rate (20 Hz), so 40 is two seconds.
+    #
+    # 8 was 0.4 s, meant to cover a dropped lidar frame, and it is far too
+    # short for the thing that actually hides an obstacle: another obstacle.
+    # Three cones in a row and the middle one shadows the last one for the
+    # whole approach - measured, the third was reported at 7.7 m
+    # ("blocked by obs 11 spanning d=-0.24..+0.04") and had been deleted by
+    # the time it was 2 m away, so the planner had nothing to plan for and
+    # the car drove into it. A cone does not stop existing because something
+    # is in front of it.
+    #
+    # The cost is that a spurious detection also lingers for two seconds. On
+    # a track of stationary obstacles that is the right trade. Turn it back
+    # down for head-to-head, where a track that is really gone matters more.
+    max_missed_frames: 40
+    velocity_smoothing: 0.65
+    static_speed_threshold: 0.15
+    static_min_samples: 6
+    publish_static: true
+    measure: false
+
+spline_node:
+  ros__parameters:
+    # [Hz] Was 20, hardcoded. A static obstacle does not need replanning
+    # every 5 cm, and this node shares a jetson with the detector, the
+    # tracker and a particle filter that is already scan-limited.
+    rate_hz: 20.0 # day1 10.0
+
+    # [s] How long a good path survives a frame the planner could not solve.
+    # See the comment in spline_node._loop - the state machine's
+    # latest_threshold still decides usability, this only stops a dropout
+    # from being published as "there is nothing here".
+    #
+    # Capped at the state machine's latest_threshold (0.25). Holding longer
+    # only republishes paths it will reject as stale - "path is 0.321 s old,
+    # threshold 0.25" in the logs was exactly that.
+    # [s] How long spline_node keeps republishing its last good path when a
+    # frame produces nothing.
+    #
+    # It has to cover the gap between good frames, and measured on the car
+    # that gap is far larger than 0.25 s. Over one approach: a path at
+    # t=283.6, another at 284.0, then a bail, then a path 1.50 s later, then
+    # two more bails. The bails are not the planner failing - they are the
+    # side veto flickering on measurement noise, on frames where nothing
+    # physically changed - but each one leaves the state machine with no path,
+    # and 2.3 s between good frames against a 0.25 s hold meant it had
+    # something to drive about a tenth of the time.
+    #
+    # The held path keeps its ORIGINAL stamp, so this is not a way of faking
+    # freshness: the state machine's own latest_threshold still decides, and
+    # _check_on_spline still drops it once the car is not near it.
+    #
+    # Head-to-head does not want this lower. This node reads
+    # /tracking/static_obstacles in both modes - h2h_spline_node is remapped to
+    # it, and the opponent reaches it only through /tracking/dynamic_obstacles,
+    # which it uses to pick a side and never to plan around. So a held path
+    # here always describes stationary obstacles, which is exactly the case
+    # where holding it is sound. Moving obstacles are a different chain
+    # entirely: prediction -> lane change -> otwpnts -> dynamic_avoidance_
+    # planner, with its own freshness threshold.
+    path_hold_s: 1.0
+
+    # [m] How much wider the other side must be before the planner switches
+    # sides. Left and right room are often within a couple of centimetres of
+    # each other and the obstacle's measured edges move by about that much
+    # between frames, so a bare comparison flipped sides several times a
+    # second - and every flip is a completely different path, which the state
+    # machine then rejects because the car is not on it.
+    side_hysteresis_m: 0.1
+
+    # [m] How far from the raceline an obstacle's near edge has to be before
+    # this planner says the line already clears it and publishes nothing.
+    #
+    # MUST match what the state machine calls a blocked raceline, which is
+    # gb_ego_width_m/2 + global_tracking's lateral_width_m. Set to
+    # evasion_distance, and that set to 0.10, so the state machine agrees: the raceline
+    # counts as blocked exactly when this planner would start moving off it.
+    #
+    # Getting this wrong in either direction has now been seen on the car.
+    # Too low and the planner says "nothing to avoid" while the state machine
+    # asks for a path, and the car trails an obstacle forever. Too high and
+    # the planner is asked for a path in situations where the raceline is
+    # already clear, and the apex it computes lands on the raceline itself -
+    # which the state machine then measures against the same obstacle and
+    # refuses. Both look identical from outside the car.
+    #
+    # Three numbers, one threshold:
+    #   raceline_clearance_m == evasion_distance
+    #                        == gb_ego_width_m/2 + lateral_width_m
+    #
+    # 0.24 -> 0.30. Measured on the car: a box with its near edge at 0.27 m
+    # was waved through by all three checks at once and hit - 3 cm of margin
+    # on an edge the detector moves by +/-10 cm between frames. 0.30 makes
+    # the pass-or-avoid call at 16 cm of true side clearance instead of 10.
+    # global_tracking.yaml moves to 0.16 with this; head-to-head stays at its
+    # own 0.24 pairing via h2h_perception.yaml and
+    # h2h_state_machine_params.yaml.
+    raceline_clearance_m: 0.30
+
+    lookahead: 10.0
+
+    # [m] How far past the FIRST obstacle the corridor may reach to pick up
+    # further ones. Obstacles inside it share one held offset instead of being
+    # planned one at a time; beyond it the path is planned for what it can hold
+    # and the next replan takes the rest.
+    corridor_max_len_m: 8.0
+
+    # [m] How far past the PREVIOUS member the next obstacle may sit and still
+    # join, scaled by speed like the return leg. It is a reachability limit
+    # before it is a tuning one: shifting 0.5 m sideways at 3 m/s needs about
+    # 6.8 m/s2 of lateral grip over 2 m and 1.7 over 4, so obstacles closer
+    # than roughly 3 m cannot be passed at different offsets anyway.
+    corridor_link_gap_m: 8.0
+
+    # [m] How far the next obstacle's d may differ FROM THE LEADER'S and still
+    # join. Signed, so opposite sides fall out by themselves.
+    corridor_link_d_tol_m: 0.30
+
+    # [m] Spacing of the control points holding the offset between the first
+    # and last obstacle. Floored at 0.2 in code: the control-point loop
+    # advances by exactly this, so 0 would never terminate.
+    corridor_point_spacing_m: 1.0
+
+    # How the avoidance path ENDS when the next obstacle is not in the corridor.
+    #
+    # The return leg used to always run its full 3 m back to the raceline, even
+    # when that crossed an obstacle the corridor had just refused to cover. The
+    # state machine checks the published path against every obstacle and would
+    # not drive it, so the car stopped with a perfectly good path on screen.
+    # Now the path ends short of that obstacle, which puts it past the end
+    # where the state machine ignores it, and the next replan leads with it.
+    #
+    # retreat_clearance_m  how far before that obstacle the path stops.
+    # retreat_floor_m      shortest return leg allowed. Below this the return
+    #                      is too sharp to drive at speed, so the full leg is
+    #                      kept and the side check refuses honestly instead.
+    retreat_clearance_m: 0.5
+    retreat_floor_m: 1.0
+
+    # [-] Stretches the return leg after a static obstacle, and only that leg.
+    # 1.0 is exactly the behaviour that has always been there.
+    #
+    # A steep return raises the path's curvature right where the car is already
+    # committed, and the controller cuts speed for curvature - so snapping back
+    # costs speed on the way out. Stretching the same shape over more track
+    # lowers that curvature. The cost is that a longer path has to clear the
+    # boundary over more of its length and pulls more static obstacles into
+    # _statics_in_span, so too long turns a plannable avoidance into "no room
+    # either side". The approach leg is deliberately not scaled: the room to
+    # pull out matters before the obstacle, not after it.
+    #
+    #   ros2 param set /spline_node retreat_scale 1.4
+    retreat_scale: 1.4 # day1 1.0 day2 -> 1.4
+
+    # [m] Hard floor on how close the published path may pass an obstacle,
+    # measured from the path's CENTRELINE to the obstacle's edge. Nothing
+    # overrides it - not even "the raceline would be worse".
+    #
+    # The car is 0.28 m wide, so its half width is 0.14, and the state machine
+    # then wants lateral_width_m (0.05) on top before it will drive the path.
+    # 0.20 is those two with a little rounding, which is what makes the two
+    # nodes agree about whether a path is drivable. Below this the planner
+    # refuses the side rather than publishing something that gets thrown back.
+    min_path_clearance_m: 0.20
+    # [m] Shortest approach the path may be pulled in to, when the wide one
+    # does not fit.
+    #
+    # The approach normally reaches 4 m behind the leader and NOTHING shortens
+    # it unless the boundary check rejects a sample before the apex - every
+    # obstacle that fits keeps the wide, gentle entry it has always had. This
+    # is only for the case where the track narrows between the car and the
+    # obstacle, which is exactly where an obstacle is worth avoiding: the
+    # inside of a corner.
+    #
+    # Later means tighter, and the controller answers curvature by slowing
+    # down. Computed for this offset at a 5 m/s^2 lateral limit, which is about
+    # what speed_scaling 0.6 implies: a 4.0 m approach carries 4.00 m/s, 1.5 m
+    # carries 2.45, 1.2 m carries 2.19, 1.0 m carries 2.00. So this is paid for
+    # in lap time and must not be paid on obstacles that never needed it.
+    #
+    # Braking is not the constraint - reaching 2.19 m/s from 2.5 needs 0.14 m
+    # and the approach is 1.2. Grip is: 1.2 m needs 6.5 m/s^2 of the twelve
+    # ggv.csv claims, and ggv is a flat placeholder rather than a measured
+    # limit. Below this the path is planned against grip nobody has verified,
+    # so refusing is the honest answer instead.
+    approach_floor_m: 1.2
+
+    # [m] How far the path passes the obstacle's edge. Squeezed from both
+    # sides, and on test_213 the window is only 0.03 m wide.
+    #
+    # Upper bound, the planner: evasion + boundary_margin has to fit between
+    # the obstacle and the track edge. Worked back from the refusals - "right
+    # 0.13 m, need 0.20, evasion_distance 0.40" - the tightest obstacle allows
+    # 0.33. This track's half-widths measure 0.38 to 0.54 m, so the corridor is
+    # barely a metre across and the geometry really is that tight.
+    #
+    # Lower bound, the state machine: it judges the path free only if
+    # evasion - gb_ego_width_m/2 clears lateral_width_m. At 0.4 and 0.1 that
+    # needs 0.30, which left no window at all; static_avoidance_planner.yaml
+    # drops lateral_width_m to 0.05 so 0.25 suffices.
+    #
+    # 0.30 sits inside both. Real clearance to the obstacle is 0.30 minus the
+    # car's own half-width of 0.14, so 16 cm.
+    # 0.30 -> 0.27. With the transform lag fixed the refusals are trustworthy,
+    # and they are short by 1 to 4 cm: "left 0.19 m, need 0.20" and "needs
+    # d=0.31 m, bound 0.47 less 0.20 margin". 0.27 buys 3 cm on both tests and
+    # still clears the state machine's floor, which is
+    # gb_ego_width_m/2 + lateral_width_m = 0.20 + 0.05 = 0.25.
+    #
+    # 0.27 -> 0.24. The obstacle's reported width is honest now - it comes
+    # from projecting the fitted box rather than squaring off its longest
+    # dimension - so the margin that used to be absorbing that error is free
+    # to spend. static_avoidance_planner.yaml drops lateral_width_m to 0.02
+    # at the same time, which moves the state machine's floor from 0.25 to
+    # 0.22 and leaves 2 cm of slack under this value.
+    #
+    # Real clearance to the obstacle is this less the car's half width of
+    # 0.14, so 10 cm. Do not go under 0.22 without lowering that floor again,
+    # and do not lower it to zero: the free check would then have no margin
+    # for the centimetre or two of noise in the obstacle's measured edge.
+    #
+    # 0.24 -> 0.30, back up with the pass-or-avoid threshold (see
+    # raceline_clearance_m above - the trio moves together). At 0.24 the
+    # member check ran with 1 cm of slack on the car ("free +0.013, needs
+    # 0.050") and a box at 0.27 was driven through; both are inside the edge
+    # noise. The ceiling measured above is 0.33, so the tightest obstacle on
+    # this track now has 3 cm to give - if "no room either side" or "path
+    # leaves the track" bails reappear there, step the trio down together
+    # (0.27 / 0.27 / 0.13) rather than lowering this value alone.
+    evasion_distance: 0.30
+
+    trajectory_threshold: 0.6
+
+    # [m] How close the path's centreline may come to the track edge. NOT
+    # reducible below the car's half width of 0.14 - at 0.19 the car passes
+    # 5 cm from the wall, and 0.15 would put it 1 cm away. That 5 cm is where
+    # localisation error lives, so this is the wrong parameter to spend.
+    boundary_margin: 0.19
+
+    # [m] Spacing of the published avoidance path.
+    #
+    # 0.05 -> 0.10. At 0.05 the path is 255 points, and the state machine
+    # walks every point of it - _check_on_spline takes a norm over all of
+    # them, _check_free_frenet an argmin per obstacle - at its own 80 Hz,
+    # every tick. htop had state_machine at 96% of a core and top of the
+    # whole machine by accumulated cpu time, ahead of the particle filter.
+    # Halving the points halves that.
+    #
+    # Nothing needs 5 cm. The controller interpolates, the state machine
+    # measures distances, and the car covers 5 cm in 25 ms at the speed this
+    # branch arms at.
+    spline_resolution: 0.10
+    measure: false

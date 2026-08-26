@@ -1,0 +1,142 @@
+<?xml version="1.0"?>
+<!--
+  hardware.launch.xml - real car, low level bringup.
+
+  Sensors, actuators, teleop and the robot description. Nothing above that: no
+  SLAM, no localisation, no planner. mapping.launch.xml and base_system.launch.xml
+  both start from here.
+
+      ros2 launch stack_master hardware.launch.xml
+
+  What comes up:
+
+      urg_node          -> /scan                      (Hokuyo UST-10LX, Ethernet)
+      vesc_driver       -> /vesc/sensors/core, /vesc/sensors/imu/raw
+      ackermann_to_vesc -> /vesc/commands/{motor/speed, servo/position}
+      vesc_to_odom      -> /vesc/odom
+      joy + joy_teleop  -> /vesc/ackermann_cmd        (hold LB on the F710)
+      robot_state_publisher -> TF for ego_racecar/*
+
+  ForzaETH calls the equivalent file teleop_launch.xml, which is a misnomer:
+  it brings up the whole car, and their mapping launch includes it for exactly
+  that reason. Named for what it does here.
+
+  WITH NO MUX IN FRONT, joy_teleop publishes straight to /vesc/ackermann_cmd, so
+  the joystick is the only thing that can drive. Once a controller exists there
+  will be two publishers on that topic and they will fight; that is when an
+  ackermann_mux goes in front, with teleop at the higher priority.
+
+  Before the first run:
+    - the four VESC calibration gains in config/car/vesc.yaml are still
+      ForzaETH's, not the racecar's
+    - the Jetson needs an interface on 192.168.0.0/24 to reach the LiDAR
+    - the IMU yaw sign in the racecar URDF is unverified; see README section 4
+-->
+<launch>
+  <arg name="lidar"  default="true"  description="Start the Hokuyo driver"/>
+  <arg name="vesc"   default="true"  description="Start the VESC driver and converters"/>
+  <arg name="joy" default="true"
+       description="Joystick driver. Needed by joy_teleop AND by simple_mux,
+                    which reads /joy itself - do not switch it off with teleop"/>
+  <arg name="teleop" default="true"  description="Start joy_teleop"/>
+  <arg name="description" default="true"
+       description="Publish the racecar URDF. Turn off if something else already does."/>
+  <!-- Default matches vesc.yaml, which points at a udev symlink. That rule has
+       to be written before it exists, so a first bringup overrides it:
+       vesc_port:=/dev/ttyACM0 -->
+  <!-- <arg name="vesc_port" default="/dev/sensors/vesc" description="VESC serial port"/> -->
+  <arg name="vesc_port" default="/dev/ttyACM0" description="VESC serial port"/>
+  <!-- Whether vesc_to_odom publishes odom -> ego_racecar/base_link.
+       false while mapping: cartographer owns map -> base_link outright and a
+       second parent for base_link breaks the tree.
+       true while localising: the EKF publishes map -> odom and this closes the
+       chain to the car. localization.launch.xml passes true. -->
+  <arg name="odom_tf" default="false" description="Publish odom -> base_link from wheel odometry"/>
+  <!-- Opt-in: off keeps today's speed-mode-only behaviour exactly. Also live
+       on the running node: ros2 param set /vesc/ackermann_to_vesc_node
+       brake_control_enabled true|false -->
+  <arg name="braking" default="false"
+       description="VESC current braking in the ackermann bridge. See vesc.yaml."/>
+
+  <let name="config_dir" value="$(find-pkg-share stack_master)/config/car"/>
+
+  <!-- ===== robot description ===== -->
+  <!-- Supplies every ego_racecar/* transform, including base_link -> laser.
+       Cartographer and the particle filter both need it to place scans. -->
+  <group if="$(var description)">
+    <node pkg="robot_state_publisher" exec="robot_state_publisher"
+          name="robot_state_publisher">
+      <!-- type="str" is required, not decoration. Without it launch runs the
+           parameter value through a YAML parse, and the URDF is full of things
+           YAML claims for itself - any "key: value" shape inside a comment, for
+           one - so robot_state_publisher fails to start with a yaml error
+           pointing at a line of XML. -->
+      <param name="robot_description" type="str"
+             value="$(command 'xacro $(find-pkg-share albomb_description)/urdf/albomb.urdf.xacro')"/>
+    </node>
+  </group>
+
+  <!-- ===== LiDAR ===== -->
+  <group if="$(var lidar)">
+    <!-- This wrapper performs a read-only preflight, then replaces itself with
+         urg_node only when the interface, address, and LiDAR are ready. The
+         watchdog reports runtime state. Neither process changes NetworkManager,
+         an interface, or any route. -->
+    <node pkg="stack_master" exec="hokuyo_network_check.sh" name="urg_node"
+          args="--urg-node" output="screen" respawn="true" respawn_delay="5.0">
+      <param from="$(var config_dir)/sensors.yaml"/>
+    </node>
+    <node pkg="stack_master" exec="hokuyo_network_check.sh"
+          name="hokuyo_network_watchdog" args="--watchdog" output="screen"/>
+  </group>
+
+  <!-- ===== VESC ===== -->
+  <!-- Namespaced so the topics land where the rest of the stack expects them:
+       mapping reads /vesc/sensors/imu/raw, and /vesc/odom is there for whatever
+       ends up owning localisation while racing.
+       namespace is set per node rather than with a push action: the XML tag for
+       that action is spelled differently across distros, and this is
+       unambiguous everywhere. vesc.yaml keys everything under /** so it still
+       applies inside the namespace. -->
+  <group if="$(var vesc)">
+    <node pkg="vesc_driver" exec="vesc_driver_node" name="vesc_driver_node"
+          namespace="vesc" output="screen">
+      <param from="$(var config_dir)/vesc.yaml"/>
+      <!-- After the file, so the argument wins. -->
+      <param name="port" value="$(var vesc_port)"/>
+    </node>
+
+    <node pkg="vesc_ackermann" exec="ackermann_to_vesc_node"
+          name="ackermann_to_vesc_node" namespace="vesc" output="screen">
+      <param from="$(var config_dir)/vesc.yaml"/>
+      <!-- After the file, so the argument wins. -->
+      <param name="brake_control_enabled" value="$(var braking)"/>
+    </node>
+
+    <node pkg="vesc_ackermann" exec="vesc_to_odom_node"
+          name="vesc_to_odom_node" namespace="vesc" output="screen">
+      <param from="$(var config_dir)/vesc.yaml"/>
+      <!-- After the file, so the argument wins. -->
+      <param name="publish_tf" value="$(var odom_tf)"/>
+    </node>
+  </group>
+
+  <!-- ===== teleop ===== -->
+  <!-- Two arguments, not one. The driver publishes /joy, which simple_mux
+       reads directly; joy_teleop is only the path that turns /joy into a drive
+       command by itself. time_trials wants the first without the second, and
+       gating both on `teleop` left the mux with no buttons to read and the car
+       impossible to move. -->
+  <node pkg="joy" exec="joy_node" name="joy" output="screen" if="$(var joy)">
+    <param from="$(var config_dir)/joy_teleop.yaml"/>
+  </node>
+
+  <!-- joy_teleop publishes on `teleop`; remapped onto the topic
+       ackermann_to_vesc actually subscribes to. When a mux owns the drive
+       topic this node is off and the mux does the remapping instead. -->
+  <node pkg="joy_teleop" exec="joy_teleop" name="joy_teleop" output="screen"
+        if="$(var teleop)">
+    <param from="$(var config_dir)/joy_teleop.yaml"/>
+    <remap from="teleop" to="/vesc/ackermann_cmd"/>
+  </node>
+</launch>

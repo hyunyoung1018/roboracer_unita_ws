@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Console entry point, replacing the setup.py console_scripts of the same
+name. ament_python_install_package installs the module but generates no
+scripts, so this file is what `ros2 run perception tracking_node` finds."""
+
+from perception.tracking_node import main
+
+if __name__ == '__main__':
+    main()
