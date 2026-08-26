@@ -8,8 +8,8 @@ controller_manager:
   ros__parameters:
     # About 1.0 m centre-to-centre target at 2 m/s. This applies only to the
     # moving opponent; time-trials keeps controller.yaml's static-stop values.
-    trailing_gap: 2.0
-    trailing_vel_gain: 0.10
+    trailing_gap: 2.0 # day2 1.5
+    trailing_vel_gain: 0.10 # default 0.15
     trailing_p_gain: 1.15
     trailing_i_gain: 0.0
     trailing_d_gain: 0.25
