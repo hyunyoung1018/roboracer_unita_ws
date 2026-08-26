@@ -1,0 +1,10 @@
+ot_interpolator:
+  ros__parameters:
+    n_sectors: 1
+    yeet_factor: 1.5
+    spline_len: 30
+    Overtaking_sector0:
+      start: 0
+      end: 430
+      ot_flag: true
+      preferred_side: auto
